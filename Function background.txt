@@ -1,0 +1,164 @@
+个人求职 Agent
+
+这是一个面向软件开发实习 / 求职申请的个人 Agent。它会读取你的个人背景、项目经历和简历内容，然后根据岗位描述自动分析匹配度、改写简历、生成申请材料，并帮助你管理申请流程。
+
+核心功能
+1. 读取你的个人背景
+
+Agent 可以从 memory.json 里读取你的长期信息，例如：
+
+姓名
+专业
+年级
+技能栈
+项目经历
+求职方向
+
+例如它知道你是计算机学生，熟悉 Python、Java、C/C++、SQL、Git、Android、Unity，并且有 TWCA Game、WeCook、数据库项目等经历。
+
+2. 读取你的简历
+
+Agent 可以读取 resume.txt，然后基于你已有的简历进行修改，而不是凭空生成。
+
+它可以做：
+
+检查 professional summary
+优化 project bullet points
+调整技能描述
+根据岗位要求重排简历重点
+3. 分析岗位描述
+
+你把 job description 粘贴进去后，Agent 可以自动提取：
+
+岗位名称
+公司名称
+核心技术要求
+软技能要求
+岗位职责
+关键词
+隐藏要求
+
+例如它可以识别岗位里提到的：
+
+Python
+Java
+C++
+SQL
+React
+Azure
+testing
+debugging
+team collaboration
+web application
+backend API
+4. 计算岗位匹配度
+
+Agent 可以根据你的背景和岗位要求，给出一个大致匹配评分：
+
+Match Score: 75 / 100
+
+并解释：
+
+你已经匹配的部分
+你比较弱的部分
+简历里应该重点强调什么
+哪些内容不应该夸大
+5. 推荐最适合放进简历的项目
+
+Agent 会根据不同岗位自动选择项目重点。
+
+比如：
+
+如果岗位偏 Web / Backend：
+
+数据库项目
+WeCook Android app
+API / SQL / Java 相关经历
+
+如果岗位偏 Game / Unity：
+
+TWCA Unity game
+Ink dialogue system
+UI interaction system
+Git collaboration
+
+如果岗位偏 Construction tech / Internal tools：
+
+WeCook
+数据库项目
+前后端协作经验
+用户界面优化经验
+6. 改写 resume bullet points
+
+Agent 可以把你的项目经历改成更像简历的表达，例如：
+
+Developed an Ink-driven dialogue system in Unity to support branching narrative interactions and phone-style chat UI.
+
+或者中文版：
+
+开发基于 Ink 的 Unity 对话系统，支持分支剧情交互、手机聊天式 UI 和玩家输入控制。
+
+它的重点是帮你把“我做了什么”改成：
+
+我用了什么技术
+解决了什么问题
+实现了什么功能
+带来了什么结果
+7. 生成 Professional Summary
+
+它可以根据岗位自动生成不同版本的 summary。
+
+例如软件开发实习版本：
+
+Detail-oriented Computer Science undergraduate with hands-on experience in Java, Python, C/C++, SQL, Android development, and Unity. Experienced in building interactive applications, debugging software issues, and collaborating through Git-based team workflows. Interested in software development internships focused on reliable, user-centered applications.
+
+中文版：
+
+计算机科学本科学生，具备 Java、Python、C/C++、SQL、Android 开发和 Unity 项目经验。熟悉软件调试、团队协作、Git 工作流和用户交互功能开发，正在寻求软件开发实习机会。
+8. 生成 Cover Letter
+
+Agent 可以根据岗位和你的经历生成 cover letter 草稿，包括：
+
+开头
+为什么适合这个岗位
+匹配的项目经历
+结尾
+
+但它不会过度夸大你的经验，会尽量保持真实。
+
+9. 管理申请记录
+
+后续如果加 SQLite 数据库，它可以记录：
+
+公司
+岗位名称
+岗位链接
+申请状态
+投递日期
+简历版本
+cover letter 版本
+备注
+
+然后你可以问它：
+
+我最近申请了哪些岗位？
+哪些岗位还没写 cover letter？
+帮我整理所有状态是 Applied 的公司。
+这个岗位和我之前申请的 PCL 有什么不同？
+10. 面试准备
+
+它还可以基于岗位描述生成：
+
+技术面试题
+行为面试题
+STAR 回答
+项目介绍稿
+英文自我介绍
+中文自我介绍
+
+比如针对 Unity 项目，它可以帮你准备：
+
+Tell me about a project you worked on.
+What technical challenges did you face?
+How did you collaborate with your team?
+How did you debug UI issues?
