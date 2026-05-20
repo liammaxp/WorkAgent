@@ -14,8 +14,6 @@ import urllib.request
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-client = OpenAI()
-
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
 MEMORY_PATH = BASE_DIR / "memory.json"
@@ -29,7 +27,7 @@ COVER_LETTER_PATH = BASE_DIR / "cover_letter.txt"
 INTERVIEW_PREP_PATH = BASE_DIR / "interview_prep.txt"
 APPLICATION_DB_PATH = BASE_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 JOB_AGENT_PROMPT = """
 Analyze the job description and produce:
 
@@ -56,6 +54,382 @@ MAX_README_CHARS = 6000
 MAX_COMMITS_PER_ACCOUNT = 20
 MAX_COMMIT_DETAILS = 8
 MAX_FALLBACK_COMMITS = 100
+
+
+class ModelAdapter:
+    provider_name = "base"
+
+    def default_model(self):
+        raise NotImplementedError
+
+    def create_response(self, model, instructions, tools, input_items):
+        raise NotImplementedError
+
+    def get_function_calls(self, response):
+        raise NotImplementedError
+
+    def append_response_output(self, input_items, response):
+        raise NotImplementedError
+
+    def make_tool_output(self, call_id, output):
+        raise NotImplementedError
+
+    def output_text(self, response):
+        raise NotImplementedError
+
+
+class SimpleToolCall:
+    def __init__(self, name, call_id, arguments="{}"):
+        self.name = name
+        self.call_id = call_id
+        self.arguments = arguments or "{}"
+
+
+class OpenAIResponsesAdapter(ModelAdapter):
+    provider_name = "openai"
+
+    def __init__(
+        self,
+        api_key_env="OPENAI_API_KEY",
+        base_url_env="OPENAI_BASE_URL",
+        model_env="OPENAI_MODEL",
+        fallback_model="gpt-5.5",
+    ):
+        self.api_key_env = api_key_env
+        self.base_url_env = base_url_env
+        self.model_env = model_env
+        self.fallback_model = fallback_model
+
+        client_options = {}
+        api_key = os.getenv(api_key_env)
+        base_url = os.getenv(base_url_env)
+        if api_key:
+            client_options["api_key"] = api_key
+        if base_url:
+            client_options["base_url"] = base_url
+
+        self.client = OpenAI(**client_options)
+
+    def default_model(self):
+        return os.getenv(self.model_env, self.fallback_model)
+
+    def create_response(self, model, instructions, tools, input_items):
+        return self.client.responses.create(
+            model=model,
+            instructions=instructions,
+            tools=tools,
+            input=input_items,
+        )
+
+    def get_function_calls(self, response):
+        return [
+            item
+            for item in response.output
+            if getattr(item, "type", None) == "function_call"
+        ]
+
+    def append_response_output(self, input_items, response):
+        input_items += response.output
+
+    def make_tool_output(self, call_id, output):
+        return {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": output,
+        }
+
+    def output_text(self, response):
+        return response.output_text
+
+
+class OpenAIChatCompletionsAdapter(ModelAdapter):
+    provider_name = "openai-chat"
+
+    def __init__(self, api_key_env, base_url_env, model_env, fallback_model):
+        self.model_env = model_env
+        self.fallback_model = fallback_model
+        client_options = {}
+        api_key = os.getenv(api_key_env)
+        base_url = os.getenv(base_url_env)
+        if api_key:
+            client_options["api_key"] = api_key
+        if base_url:
+            client_options["base_url"] = base_url
+        self.client = OpenAI(**client_options)
+        self.messages = []
+
+    def default_model(self):
+        return os.getenv(self.model_env, self.fallback_model)
+
+    def convert_tools(self, tools):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {}),
+                },
+            }
+            for tool in tools
+        ]
+
+    def create_response(self, model, instructions, tools, input_items):
+        if not self.messages:
+            self.messages = [{"role": "system", "content": instructions}]
+            self.messages.extend(input_items)
+        return self.client.chat.completions.create(
+            model=model,
+            messages=self.messages,
+            tools=self.convert_tools(tools),
+        )
+
+    def get_function_calls(self, response):
+        message = response.choices[0].message
+        return [
+            SimpleToolCall(
+                name=tool_call.function.name,
+                call_id=tool_call.id,
+                arguments=tool_call.function.arguments,
+            )
+            for tool_call in (message.tool_calls or [])
+        ]
+
+    def append_response_output(self, input_items, response):
+        self.messages.append(response.choices[0].message)
+
+    def make_tool_output(self, call_id, output):
+        message = {"role": "tool", "tool_call_id": call_id, "content": output}
+        self.messages.append(message)
+        return message
+
+    def output_text(self, response):
+        return response.choices[0].message.content or ""
+
+
+class OpenAICompatibleResponsesAdapter(OpenAIResponsesAdapter):
+    provider_name = "openai-compatible"
+
+    def __init__(self):
+        super().__init__(
+            api_key_env="OPENAI_COMPATIBLE_API_KEY",
+            base_url_env="OPENAI_COMPATIBLE_BASE_URL",
+            model_env="OPENAI_COMPATIBLE_MODEL",
+            fallback_model=os.getenv("OPENAI_MODEL", "gpt-5.5"),
+        )
+
+
+class DeepSeekAdapter(OpenAIChatCompletionsAdapter):
+    provider_name = "deepseek"
+
+    def __init__(self):
+        super().__init__(
+            api_key_env="DEEPSEEK_API_KEY",
+            base_url_env="DEEPSEEK_BASE_URL",
+            model_env="DEEPSEEK_MODEL",
+            fallback_model="deepseek-chat",
+        )
+        if not os.getenv("DEEPSEEK_BASE_URL"):
+            self.client.base_url = "https://api.deepseek.com"
+
+
+class ClaudeMessagesAdapter(ModelAdapter):
+    provider_name = "claude"
+
+    def __init__(self):
+        self.api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        self.base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        self.messages = []
+
+    def default_model(self):
+        return os.getenv("ANTHROPIC_MODEL", os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"))
+
+    def convert_tools(self, tools):
+        return [
+            {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "input_schema": tool.get("parameters", {}),
+            }
+            for tool in tools
+        ]
+
+    def post_json(self, path, body):
+        if not self.api_key:
+            raise ValueError("Missing ANTHROPIC_API_KEY or CLAUDE_API_KEY in .env.")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": os.getenv("ANTHROPIC_VERSION", "2023-06-01"),
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def create_response(self, model, instructions, tools, input_items):
+        if not self.messages:
+            self.messages.extend(input_items)
+        return self.post_json(
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
+                "system": instructions,
+                "messages": self.messages,
+                "tools": self.convert_tools(tools),
+            },
+        )
+
+    def get_function_calls(self, response):
+        calls = []
+        for block in response.get("content", []):
+            if block.get("type") == "tool_use":
+                calls.append(
+                    SimpleToolCall(
+                        name=block.get("name"),
+                        call_id=block.get("id"),
+                        arguments=json.dumps(block.get("input", {})),
+                    )
+                )
+        return calls
+
+    def append_response_output(self, input_items, response):
+        self.messages.append({"role": "assistant", "content": response.get("content", [])})
+
+    def make_tool_output(self, call_id, output):
+        message = {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": call_id, "content": output}],
+        }
+        self.messages.append(message)
+        return message
+
+    def output_text(self, response):
+        return "\n".join(
+            block.get("text", "")
+            for block in response.get("content", [])
+            if block.get("type") == "text"
+        ).strip()
+
+
+class GeminiAdapter(ModelAdapter):
+    provider_name = "gemini"
+
+    def __init__(self):
+        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.base_url = os.getenv(
+            "GEMINI_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
+        self.contents = []
+
+    def default_model(self):
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+    def convert_tools(self, tools):
+        return [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("parameters", {}),
+                    }
+                    for tool in tools
+                ]
+            }
+        ]
+
+    def post_json(self, model, body):
+        if not self.api_key:
+            raise ValueError("Missing GEMINI_API_KEY or GOOGLE_API_KEY in .env.")
+        url = (
+            f"{self.base_url}/models/{urllib.parse.quote(model, safe='')}:"
+            f"generateContent?key={urllib.parse.quote(self.api_key, safe='')}"
+        )
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def create_response(self, model, instructions, tools, input_items):
+        if not self.contents:
+            for item in input_items:
+                self.contents.append(
+                    {"role": "user", "parts": [{"text": item.get("content", "")}]}
+                )
+        return self.post_json(
+            model,
+            {
+                "systemInstruction": {"parts": [{"text": instructions}]},
+                "contents": self.contents,
+                "tools": self.convert_tools(tools),
+            },
+        )
+
+    def get_function_calls(self, response):
+        calls = []
+        candidate = (response.get("candidates") or [{}])[0]
+        for part in candidate.get("content", {}).get("parts", []):
+            function_call = part.get("functionCall")
+            if function_call:
+                name = function_call.get("name")
+                calls.append(
+                    SimpleToolCall(
+                        name=name,
+                        call_id=name,
+                        arguments=json.dumps(function_call.get("args", {})),
+                    )
+                )
+        return calls
+
+    def append_response_output(self, input_items, response):
+        candidate = (response.get("candidates") or [{}])[0]
+        content = candidate.get("content")
+        if content:
+            self.contents.append(content)
+
+    def make_tool_output(self, call_id, output):
+        message = {
+            "role": "user",
+            "parts": [{"functionResponse": {"name": call_id, "response": {"result": output}}}],
+        }
+        self.contents.append(message)
+        return message
+
+    def output_text(self, response):
+        candidate = (response.get("candidates") or [{}])[0]
+        return "\n".join(
+            part.get("text", "")
+            for part in candidate.get("content", {}).get("parts", [])
+            if "text" in part
+        ).strip()
+
+
+def create_model_adapter(provider_name):
+    normalized = provider_name.lower().strip()
+    if normalized == "openai":
+        return OpenAIResponsesAdapter()
+    if normalized in ["openai-compatible", "compatible"]:
+        return OpenAICompatibleResponsesAdapter()
+    if normalized == "deepseek":
+        return DeepSeekAdapter()
+    if normalized in ["claude", "anthropic"]:
+        return ClaudeMessagesAdapter()
+    if normalized in ["gemini", "google"]:
+        return GeminiAdapter()
+
+    raise ValueError(
+        f"Unsupported provider '{provider_name}'. Supported providers: openai, openai-compatible, deepseek, claude, gemini."
+    )
 
 
 def read_text_file(path):
@@ -1082,7 +1456,7 @@ TOOL_FUNCTIONS = {
 }
 
 
-def execute_tool_call(tool_call):
+def execute_tool_call(tool_call, adapter):
     tool_name = getattr(tool_call, "name", None)
     call_id = getattr(tool_call, "call_id", None)
     raw_arguments = getattr(tool_call, "arguments", "{}") or "{}"
@@ -1097,22 +1471,10 @@ def execute_tool_call(tool_call):
         except Exception as error:
             output = json.dumps({"error": str(error)})
 
-    return {
-        "type": "function_call_output",
-        "call_id": call_id,
-        "output": output,
-    }
+    return adapter.make_tool_output(call_id, output)
 
 
-def get_function_calls(response):
-    return [
-        item
-        for item in response.output
-        if getattr(item, "type", None) == "function_call"
-    ]
-
-
-def ask_agent(user_input, model=DEFAULT_MODEL):
+def ask_agent(user_input, adapter, model):
     input_items = [
         {
             "role": "user",
@@ -1130,20 +1492,20 @@ Keep job analysis, match scores, recommendations, and explanations separate from
     ]
 
     for _ in range(6):
-        response = client.responses.create(
+        response = adapter.create_response(
             model=model,
             instructions=SYSTEM_PROMPT,
             tools=TOOLS,
-            input=input_items,
+            input_items=input_items,
         )
 
-        function_calls = get_function_calls(response)
+        function_calls = adapter.get_function_calls(response)
         if not function_calls:
-            return response.output_text
+            return adapter.output_text(response)
 
-        input_items += response.output
+        adapter.append_response_output(input_items, response)
         for tool_call in function_calls:
-            input_items.append(execute_tool_call(tool_call))
+            input_items.append(execute_tool_call(tool_call, adapter))
 
     raise RuntimeError("Tool calling loop exceeded the maximum number of steps.")
 
@@ -1152,8 +1514,18 @@ def looks_like_latex_resume(content):
     return bool(extract_latex_document(content))
 
 
-current_model = DEFAULT_MODEL
+current_provider = DEFAULT_PROVIDER
+try:
+    current_adapter = create_model_adapter(current_provider)
+except ValueError as error:
+    print(f"Agent: {error}")
+    current_provider = "openai"
+    current_adapter = create_model_adapter(current_provider)
+
+current_model = current_adapter.default_model()
+print(f"Agent: Current provider is {current_provider}")
 print(f"Agent: Current model is {current_model}")
+print("Agent: Type 'provider PROVIDER_NAME' to switch providers.")
 print("Agent: Type 'model MODEL_NAME' to switch models, for example: model gpt-5.4-mini")
 
 while True:
@@ -1166,6 +1538,11 @@ while True:
         print(f"\nAgent: Current model is {current_model}\n")
         continue
 
+    if user_input.lower() == "provider":
+        print(f"\nAgent: Current provider is {current_provider}\n")
+        print("Agent: Supported providers: openai, openai-compatible, deepseek, claude, gemini\n")
+        continue
+
     if user_input.lower().startswith("model "):
         requested_model = user_input.split(maxsplit=1)[1].strip()
         if not requested_model:
@@ -1176,6 +1553,21 @@ while True:
         print(f"\nAgent: Model switched to {current_model}\n")
         continue
 
+    if user_input.lower().startswith("provider "):
+        requested_provider = user_input.split(maxsplit=1)[1].strip().lower()
+        try:
+            requested_adapter = create_model_adapter(requested_provider)
+        except ValueError as error:
+            print(f"\nAgent: {error}\n")
+            continue
+
+        current_provider = requested_provider
+        current_adapter = requested_adapter
+        current_model = current_adapter.default_model()
+        print(f"\nAgent: Provider switched to {current_provider}\n")
+        print(f"Agent: Current model is {current_model}\n")
+        continue
+
     try:
         prepared_request, preparation_message, is_new_job_description = prepare_user_request(user_input)
         if preparation_message:
@@ -1183,6 +1575,7 @@ while True:
 
         answer = ask_agent(
             prepared_request,
+            adapter=current_adapter,
             model=current_model,
         )
     except (FileNotFoundError, ValueError) as error:
@@ -1206,6 +1599,7 @@ while True:
             try:
                 resume_answer = ask_agent(
                     "Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
+                    adapter=current_adapter,
                     model=current_model,
                 )
             except (FileNotFoundError, ValueError) as error:
