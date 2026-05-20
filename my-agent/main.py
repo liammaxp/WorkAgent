@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import os
 import re
+import sqlite3
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,10 +17,14 @@ client = OpenAI()
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
+MEMORY_PATH = BASE_DIR / "memory.json"
 RESUME_PATH = BASE_DIR / "resume.txt"
 JOB_DESCRIPTION_PATH = BASE_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = BASE_DIR / "github_accounts.txt"
 OUTPUT_RESUME_PATH = BASE_DIR / "tailored_resume.txt"
+COVER_LETTER_PATH = BASE_DIR / "cover_letter.txt"
+INTERVIEW_PREP_PATH = BASE_DIR / "interview_prep.txt"
+APPLICATION_DB_PATH = BASE_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 GITHUB_REPO_PATTERN = re.compile(
@@ -49,12 +54,204 @@ def write_text_file(path, content):
     path.write_text(content.strip() + "\n", encoding="utf-8")
 
 
+def read_memory():
+    if not MEMORY_PATH.exists():
+        return json.dumps(
+            {
+                "note": "memory.json does not exist yet.",
+                "expected_fields": [
+                    "name",
+                    "major",
+                    "year",
+                    "skills",
+                    "projects",
+                    "target_roles",
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    content = MEMORY_PATH.read_text(encoding="utf-8").strip()
+    if not content or content.startswith(PLACEHOLDER_TEXT):
+        return json.dumps({"note": "memory.json is empty or still placeholder content."})
+
+    try:
+        return json.dumps(json.loads(content), ensure_ascii=False, indent=2)
+    except json.JSONDecodeError:
+        return content
+
+
 def read_resume():
     return read_text_file(RESUME_PATH)
 
 
 def read_job_description():
     return read_text_file(JOB_DESCRIPTION_PATH)
+
+
+def save_tailored_resume(content):
+    write_text_file(OUTPUT_RESUME_PATH, content)
+    return f"Saved tailored resume to {OUTPUT_RESUME_PATH}"
+
+
+def save_cover_letter(content):
+    write_text_file(COVER_LETTER_PATH, content)
+    return f"Saved cover letter to {COVER_LETTER_PATH}"
+
+
+def save_interview_prep(content):
+    write_text_file(INTERVIEW_PREP_PATH, content)
+    return f"Saved interview preparation notes to {INTERVIEW_PREP_PATH}"
+
+
+def initialize_application_db():
+    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company TEXT NOT NULL,
+                role TEXT NOT NULL,
+                link TEXT,
+                status TEXT,
+                applied_date TEXT,
+                resume_version TEXT,
+                cover_letter_version TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def add_application_record(
+    company,
+    role,
+    link="",
+    status="Interested",
+    applied_date="",
+    resume_version="",
+    cover_letter_version="",
+    notes="",
+):
+    initialize_application_db()
+    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO applications (
+                company,
+                role,
+                link,
+                status,
+                applied_date,
+                resume_version,
+                cover_letter_version,
+                notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                company,
+                role,
+                link,
+                status,
+                applied_date,
+                resume_version,
+                cover_letter_version,
+                notes,
+            ),
+        )
+
+    return json.dumps(
+        {
+            "saved": True,
+            "id": cursor.lastrowid,
+            "database": str(APPLICATION_DB_PATH),
+        },
+        ensure_ascii=False,
+    )
+
+
+def list_application_records(status="", limit=20):
+    initialize_application_db()
+    query = """
+        SELECT
+            id,
+            company,
+            role,
+            link,
+            status,
+            applied_date,
+            resume_version,
+            cover_letter_version,
+            notes,
+            created_at,
+            updated_at
+        FROM applications
+    """
+    params = []
+    if status:
+        query += " WHERE lower(status) = lower(?)"
+        params.append(status)
+
+    query += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+
+    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(query, params).fetchall()
+
+    return json.dumps([dict(row) for row in rows], ensure_ascii=False, indent=2)
+
+
+def update_application_record(
+    record_id,
+    company=None,
+    role=None,
+    link=None,
+    status=None,
+    applied_date=None,
+    resume_version=None,
+    cover_letter_version=None,
+    notes=None,
+):
+    initialize_application_db()
+    updates = {
+        "company": company,
+        "role": role,
+        "link": link,
+        "status": status,
+        "applied_date": applied_date,
+        "resume_version": resume_version,
+        "cover_letter_version": cover_letter_version,
+        "notes": notes,
+    }
+    fields = [(key, value) for key, value in updates.items() if value is not None]
+    if not fields:
+        return json.dumps({"updated": False, "reason": "No fields provided."})
+
+    assignments = ", ".join([f"{key} = ?" for key, _ in fields])
+    values = [value for _, value in fields]
+    values.append(record_id)
+
+    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+        cursor = connection.execute(
+            f"""
+            UPDATE applications
+            SET {assignments}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            values,
+        )
+
+    return json.dumps(
+        {
+            "updated": cursor.rowcount > 0,
+            "id": record_id,
+        },
+        ensure_ascii=False,
+    )
 
 
 def read_github_identities():
@@ -590,6 +787,17 @@ def build_github_context(resume):
 TOOLS = [
     {
         "type": "function",
+        "name": "read_memory",
+        "description": "Read the user's long-term profile from memory.json.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_resume",
         "description": "Read the user's current resume LaTeX code from resume.txt.",
         "parameters": {
@@ -624,6 +832,115 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "save_tailored_resume",
+        "description": "Save complete modified resume LaTeX code to tailored_resume.txt.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Complete LaTeX resume code to save.",
+                }
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "save_cover_letter",
+        "description": "Save a generated cover letter draft to cover_letter.txt.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Cover letter content to save.",
+                }
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "save_interview_prep",
+        "description": "Save generated interview preparation notes to interview_prep.txt.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Interview preparation notes to save.",
+                }
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "add_application_record",
+        "description": "Add a job application record to the local SQLite database.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string"},
+                "role": {"type": "string"},
+                "link": {"type": "string"},
+                "status": {"type": "string"},
+                "applied_date": {"type": "string"},
+                "resume_version": {"type": "string"},
+                "cover_letter_version": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["company", "role"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "list_application_records",
+        "description": "List job application records, optionally filtered by status.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter such as Applied or Interested.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of records to return.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "update_application_record",
+        "description": "Update fields on a job application record by id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {"type": "integer"},
+                "company": {"type": "string"},
+                "role": {"type": "string"},
+                "link": {"type": "string"},
+                "status": {"type": "string"},
+                "applied_date": {"type": "string"},
+                "resume_version": {"type": "string"},
+                "cover_letter_version": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["record_id"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -637,9 +954,16 @@ def read_github_context():
 
 
 TOOL_FUNCTIONS = {
+    "read_memory": read_memory,
     "read_resume": read_resume,
     "read_job_description": read_job_description,
     "read_github_context": read_github_context,
+    "save_tailored_resume": save_tailored_resume,
+    "save_cover_letter": save_cover_letter,
+    "save_interview_prep": save_interview_prep,
+    "add_application_record": add_application_record,
+    "list_application_records": list_application_records,
+    "update_application_record": update_application_record,
 }
 
 
@@ -652,8 +976,8 @@ def execute_tool_call(tool_call):
         output = json.dumps({"error": f"Unknown tool: {tool_name}"})
     else:
         try:
-            json.loads(raw_arguments)
-            result = TOOL_FUNCTIONS[tool_name]()
+            arguments = json.loads(raw_arguments)
+            result = TOOL_FUNCTIONS[tool_name](**arguments)
             output = result if isinstance(result, str) else json.dumps(result)
         except Exception as error:
             output = json.dumps({"error": str(error)})
@@ -681,10 +1005,10 @@ def ask_agent(user_input, model=DEFAULT_MODEL):
 User request:
 {user_input}
 
-You have tools for reading resume.txt, job_description.txt, and approved GitHub project context.
-For resume tailoring requests, call the tools you need instead of assuming file contents.
-When you have enough information, generate the modified resume as complete LaTeX code.
-Return only the final LaTeX code, with no Markdown fences and no extra explanation.
+You have tools for reading memory.json, resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
+When saving an artifact is useful, call the matching save tool.
+If the user asks for a modified resume, generate complete LaTeX code with no Markdown fences.
 """,
         }
     ]
@@ -706,6 +1030,16 @@ Return only the final LaTeX code, with no Markdown fences and no extra explanati
             input_items.append(execute_tool_call(tool_call))
 
     raise RuntimeError("Tool calling loop exceeded the maximum number of steps.")
+
+
+def looks_like_latex_resume(content):
+    latex_markers = [
+        "\\documentclass",
+        "\\begin{document}",
+        "\\section",
+        "\\resumeSubheading",
+    ]
+    return any(marker in content for marker in latex_markers)
 
 
 current_model = DEFAULT_MODEL
@@ -741,5 +1075,8 @@ while True:
         print(f"\nAgent: {error}\n")
         continue
 
-    write_text_file(OUTPUT_RESUME_PATH, answer)
-    print(f"\nAgent: Updated resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+    if looks_like_latex_resume(answer):
+        write_text_file(OUTPUT_RESUME_PATH, answer)
+        print(f"\nAgent: Updated resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+    else:
+        print(f"\nAgent: {answer}\n")

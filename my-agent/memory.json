@@ -1,0 +1,30 @@
+{
+  "name": "Liam",
+  "major": "Computer Science",
+  "year": "Entering third year",
+  "skills": [
+    "Python",
+    "Java",
+    "C/C++",
+    "C#",
+    "SQL",
+    "HTML/CSS",
+    "JavaScript",
+    "React",
+    "Git",
+    "Android",
+    "Unity"
+  ],
+  "projects": [
+    "TWCA Unity game",
+    "WeCook Android app",
+    "Database coursework"
+  ],
+  "target_roles": [
+    "Software developer internship",
+    "Software engineering internship",
+    "Web/backend internship",
+    "Android internship",
+    "Game/Unity internship"
+  ]
+}
