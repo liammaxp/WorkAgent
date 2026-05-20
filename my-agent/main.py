@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+from datetime import datetime
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,12 +22,30 @@ MEMORY_PATH = BASE_DIR / "memory.json"
 RESUME_PATH = BASE_DIR / "resume.txt"
 JOB_DESCRIPTION_PATH = BASE_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = BASE_DIR / "github_accounts.txt"
+OUTPUT_DIR = BASE_DIR / "outputs"
+ANALYSIS_OUTPUT_DIR = OUTPUT_DIR / "analysis"
 OUTPUT_RESUME_PATH = BASE_DIR / "tailored_resume.txt"
 COVER_LETTER_PATH = BASE_DIR / "cover_letter.txt"
 INTERVIEW_PREP_PATH = BASE_DIR / "interview_prep.txt"
 APPLICATION_DB_PATH = BASE_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+JOB_AGENT_PROMPT = """
+Analyze the job description and produce:
+
+1. Job title and company if available
+2. Required technical skills
+3. Required soft skills
+4. Match score from 0 to 100
+5. Best matching user projects
+6. Resume summary rewrite
+7. 3-5 resume bullet points
+8. Cover letter draft
+
+Use the available tools to read memory.json, resume.txt, and job_description.txt.
+Use GitHub context only if needed and approved by the user.
+Be specific and do not exaggerate the user's experience.
+"""
 GITHUB_REPO_PATTERN = re.compile(
     r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
 )
@@ -51,7 +70,99 @@ def read_text_file(path):
 
 
 def write_text_file(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.strip() + "\n", encoding="utf-8")
+
+
+def timestamp_slug():
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def save_analysis_output(content, prefix="job_analysis"):
+    path = ANALYSIS_OUTPUT_DIR / f"{prefix}_{timestamp_slug()}.txt"
+    write_text_file(path, content)
+    return path
+
+
+def extract_latex_document(content):
+    documentclass_index = content.find("\\documentclass")
+    begin_index = content.find("\\begin{document}")
+
+    if documentclass_index != -1:
+        start_index = documentclass_index
+    elif begin_index != -1:
+        start_index = begin_index
+    else:
+        return ""
+
+    latex = content[start_index:].strip()
+    end_marker = "\\end{document}"
+    end_index = latex.find(end_marker)
+    if end_index != -1:
+        latex = latex[: end_index + len(end_marker)]
+
+    return latex.strip()
+
+
+def is_likely_resume_edit_request(text):
+    lowered = text.lower()
+    resume_keywords = [
+        "改简历",
+        "修改简历",
+        "生成简历",
+        "tailor resume",
+        "rewrite resume",
+        "modify resume",
+        "latex",
+        "resume code",
+    ]
+    return any(keyword in lowered for keyword in resume_keywords)
+
+
+def is_likely_job_description(text):
+    lowered = text.lower()
+    jd_keywords = [
+        "responsibilities",
+        "requirements",
+        "qualifications",
+        "job description",
+        "about the role",
+        "what you'll do",
+        "what you will do",
+        "required skills",
+        "preferred qualifications",
+        "software developer",
+        "software engineer",
+        "internship",
+        "co-op",
+        "岗位职责",
+        "任职要求",
+        "职位描述",
+        "岗位要求",
+        "资格要求",
+        "实习",
+        "软件开发",
+    ]
+    keyword_hits = sum(1 for keyword in jd_keywords if keyword in lowered)
+    line_count = len([line for line in text.splitlines() if line.strip()])
+    word_count = len(text.split())
+
+    return not is_likely_resume_edit_request(text) and (
+        keyword_hits >= 2 or line_count >= 8 or word_count >= 120
+    )
+
+
+def prepare_user_request(user_input):
+    if not is_likely_job_description(user_input):
+        return user_input, None, False
+
+    write_text_file(JOB_DESCRIPTION_PATH, user_input)
+    workflow_request = f"""
+The user pasted a new job description. It has already been saved to job_description.txt.
+
+{JOB_AGENT_PROMPT}
+"""
+    return workflow_request, f"Saved pasted job description to {JOB_DESCRIPTION_PATH}", True
 
 
 def read_memory():
@@ -90,7 +201,11 @@ def read_job_description():
 
 
 def save_tailored_resume(content):
-    write_text_file(OUTPUT_RESUME_PATH, content)
+    latex = extract_latex_document(content)
+    if not latex:
+        raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
+
+    write_text_file(OUTPUT_RESUME_PATH, latex)
     return f"Saved tailored resume to {OUTPUT_RESUME_PATH}"
 
 
@@ -835,7 +950,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "save_tailored_resume",
-        "description": "Save complete modified resume LaTeX code to tailored_resume.txt.",
+        "description": "Save only complete modified resume LaTeX code to tailored_resume.txt. Do not include analysis or explanation text.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1008,7 +1123,8 @@ User request:
 You have tools for reading memory.json, resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
 When saving an artifact is useful, call the matching save tool.
-If the user asks for a modified resume, generate complete LaTeX code with no Markdown fences.
+If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
+Keep job analysis, match scores, recommendations, and explanations separate from resume LaTeX code.
 """,
         }
     ]
@@ -1033,13 +1149,7 @@ If the user asks for a modified resume, generate complete LaTeX code with no Mar
 
 
 def looks_like_latex_resume(content):
-    latex_markers = [
-        "\\documentclass",
-        "\\begin{document}",
-        "\\section",
-        "\\resumeSubheading",
-    ]
-    return any(marker in content for marker in latex_markers)
+    return bool(extract_latex_document(content))
 
 
 current_model = DEFAULT_MODEL
@@ -1067,8 +1177,12 @@ while True:
         continue
 
     try:
+        prepared_request, preparation_message, is_new_job_description = prepare_user_request(user_input)
+        if preparation_message:
+            print(f"\nAgent: {preparation_message}\n")
+
         answer = ask_agent(
-            user_input,
+            prepared_request,
             model=current_model,
         )
     except (FileNotFoundError, ValueError) as error:
@@ -1076,7 +1190,27 @@ while True:
         continue
 
     if looks_like_latex_resume(answer):
-        write_text_file(OUTPUT_RESUME_PATH, answer)
+        save_tailored_resume(answer)
         print(f"\nAgent: Updated resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
     else:
-        print(f"\nAgent: {answer}\n")
+        analysis_path = save_analysis_output(answer)
+        print(f"\nAgent: Analysis saved to {analysis_path}\n")
+        print(f"Agent: {answer}\n")
+
+    if is_new_job_description:
+        permission = input(
+            "Agent: Do you want me to generate the modified full LaTeX resume code now? "
+            "Type yes to generate, or anything else to skip: "
+        )
+        if permission.strip().lower() in ["y", "yes"]:
+            try:
+                resume_answer = ask_agent(
+                    "Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
+                    model=current_model,
+                )
+            except (FileNotFoundError, ValueError) as error:
+                print(f"\nAgent: {error}\n")
+                continue
+
+            save_tailored_resume(resume_answer)
+            print(f"\nAgent: Modified resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
