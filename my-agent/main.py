@@ -9,11 +9,11 @@ import urllib.parse
 import urllib.request
 
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 client = OpenAI()
 
-BASE_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
 RESUME_PATH = BASE_DIR / "resume.txt"
@@ -21,6 +21,7 @@ JOB_DESCRIPTION_PATH = BASE_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = BASE_DIR / "github_accounts.txt"
 OUTPUT_RESUME_PATH = BASE_DIR / "tailored_resume.txt"
 PLACEHOLDER_TEXT = "Paste "
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 GITHUB_REPO_PATTERN = re.compile(
     r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
 )
@@ -202,6 +203,55 @@ def github_api_get(url, accept="application/vnd.github+json"):
         return response.read().decode("utf-8", errors="replace")
 
 
+def github_token_is_configured():
+    return bool(os.getenv("GITHUB_TOKEN"))
+
+
+def print_github_token_status():
+    if not github_token_is_configured():
+        print("Agent: No GITHUB_TOKEN was loaded from my-agent/.env.")
+        return
+
+    try:
+        user_data = json.loads(github_api_get("https://api.github.com/user"))
+        print(f"Agent: GitHub token loaded. Authenticated as {user_data.get('login')}.")
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            print(f"Agent: GitHub token check failed: {describe_http_error(error)}")
+        else:
+            print(f"Agent: GitHub token check failed: {error}")
+
+
+def describe_http_error(error):
+    status = getattr(error, "code", None)
+    reason = getattr(error, "reason", "")
+
+    if status == 403:
+        return (
+            "HTTP Error 403: Forbidden. This usually means the GitHub token is "
+            "missing, expired, lacks repository access, was not granted access to "
+            "this organization/classroom repository, or the API rate limit was hit."
+        )
+
+    if status == 404:
+        return (
+            "HTTP Error 404: Not Found. The repository may be private, renamed, "
+            "deleted, misspelled, or hidden from the current GitHub token. For "
+            "private organization/classroom repositories, GitHub often returns 404 "
+            "when the token cannot see the repo."
+        )
+
+    if status:
+        return f"HTTP Error {status}: {reason}"
+
+    return str(error)
+
+
 def extract_github_repos(text):
     repos = []
     seen = set()
@@ -242,7 +292,11 @@ def fetch_commit_files(base_url, commit_context):
         TimeoutError,
         json.JSONDecodeError,
     ) as error:
-        commit_context["files_error"] = str(error)
+        commit_context["files_error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
 
     return commit_context
 
@@ -264,7 +318,11 @@ def fetch_fallback_commits_for_repo(base_url, github_identities):
         TimeoutError,
         json.JSONDecodeError,
     ) as error:
-        fallback_context["error"] = str(error)
+        fallback_context["error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
         return fallback_context
 
     if not isinstance(commits, list):
@@ -315,7 +373,11 @@ def fetch_user_commits_for_repo(repo_info, github_identities):
             TimeoutError,
             json.JSONDecodeError,
         ) as error:
-            account_context["error"] = str(error)
+            account_context["error"] = (
+                describe_http_error(error)
+                if isinstance(error, urllib.error.HTTPError)
+                else str(error)
+            )
             contributions.append(account_context)
             continue
 
@@ -365,7 +427,11 @@ def fetch_github_repo_context(repo_info):
         TimeoutError,
         json.JSONDecodeError,
     ) as error:
-        context["error"] = f"Could not fetch repository metadata: {error}"
+        context["error"] = (
+            f"Could not fetch repository metadata: {describe_http_error(error)}"
+            if isinstance(error, urllib.error.HTTPError)
+            else f"Could not fetch repository metadata: {error}"
+        )
         return context
 
     try:
@@ -377,7 +443,11 @@ def fetch_github_repo_context(repo_info):
         TimeoutError,
         json.JSONDecodeError,
     ) as error:
-        context["languages_error"] = str(error)
+        context["languages_error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
 
     try:
         root_files = json.loads(github_api_get(f"{base_url}/contents"))
@@ -392,13 +462,21 @@ def fetch_github_repo_context(repo_info):
         TimeoutError,
         json.JSONDecodeError,
     ) as error:
-        context["root_files_error"] = str(error)
+        context["root_files_error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
 
     try:
         readme = github_api_get(f"{base_url}/readme", accept="application/vnd.github.raw")
         context["readme"] = readme[:MAX_README_CHARS]
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
-        context["readme_error"] = str(error)
+        context["readme_error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
 
     return context
 
@@ -438,6 +516,10 @@ def print_github_context_summary(repo_contexts):
                     print(f"      - {commit.get('message')} | {files}")
 
 
+def has_usable_repo_context(repo_contexts):
+    return any(not context.get("error") for context in repo_contexts)
+
+
 def build_github_context(resume):
     repos = extract_github_repos(resume)
     if not repos:
@@ -473,6 +555,7 @@ def build_github_context(resume):
         return ""
 
     print("\nAgent: Fetching public GitHub repository context...\n")
+    print_github_token_status()
     repo_contexts = []
     for repo in repos:
         repo_context = fetch_github_repo_context(repo)
@@ -482,6 +565,16 @@ def build_github_context(resume):
         )
         repo_contexts.append(repo_context)
     print_github_context_summary(repo_contexts)
+
+    if not has_usable_repo_context(repo_contexts):
+        print(
+            "\nAgent: No GitHub repositories were readable, so GitHub context will be skipped."
+        )
+        print(
+            "Agent: If these are private/classroom repositories, add a valid GITHUB_TOKEN "
+            "with access to them in my-agent/.env.\n"
+        )
+        return ""
 
     permission = input(
         "\nUse this GitHub context to modify the resume for this request? "
@@ -494,44 +587,130 @@ def build_github_context(resume):
     return json.dumps(repo_contexts, ensure_ascii=False, indent=2)
 
 
-def ask_agent(user_input, resume, job_description, github_context=""):
-    github_section = ""
-    if github_context:
-        github_section = f"""
-Here is additional public GitHub repository context.
-The user explicitly approved fetching this information:
+TOOLS = [
+    {
+        "type": "function",
+        "name": "read_resume",
+        "description": "Read the user's current resume LaTeX code from resume.txt.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_job_description",
+        "description": "Read the target job description from job_description.txt.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_github_context",
+        "description": (
+            "Find GitHub repository links in resume.txt, ask the user for permission, "
+            "then read public/authorized repository and commit evidence when available."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+]
 
-{github_context}
-"""
 
-    response = client.responses.create(
-        model="gpt-5.5",
-        input=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"""
-Here is my current resume LaTeX code from resume.txt:
+def read_github_context():
+    resume = read_resume()
+    github_context = build_github_context(resume)
+    if not github_context:
+        return "No usable GitHub context was provided or approved."
 
-{resume}
+    return github_context
 
-Here is the job description from job_description.txt:
 
-{job_description}
+TOOL_FUNCTIONS = {
+    "read_resume": read_resume,
+    "read_job_description": read_job_description,
+    "read_github_context": read_github_context,
+}
 
-{github_section}
 
+def execute_tool_call(tool_call):
+    tool_name = getattr(tool_call, "name", None)
+    call_id = getattr(tool_call, "call_id", None)
+    raw_arguments = getattr(tool_call, "arguments", "{}") or "{}"
+
+    if tool_name not in TOOL_FUNCTIONS:
+        output = json.dumps({"error": f"Unknown tool: {tool_name}"})
+    else:
+        try:
+            json.loads(raw_arguments)
+            result = TOOL_FUNCTIONS[tool_name]()
+            output = result if isinstance(result, str) else json.dumps(result)
+        except Exception as error:
+            output = json.dumps({"error": str(error)})
+
+    return {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": output,
+    }
+
+
+def get_function_calls(response):
+    return [
+        item
+        for item in response.output
+        if getattr(item, "type", None) == "function_call"
+    ]
+
+
+def ask_agent(user_input, model=DEFAULT_MODEL):
+    input_items = [
+        {
+            "role": "user",
+            "content": f"""
 User request:
 {user_input}
 
-Please generate the modified resume as complete LaTeX code.
+You have tools for reading resume.txt, job_description.txt, and approved GitHub project context.
+For resume tailoring requests, call the tools you need instead of assuming file contents.
+When you have enough information, generate the modified resume as complete LaTeX code.
 Return only the final LaTeX code, with no Markdown fences and no extra explanation.
 """,
-            },
-        ],
-    )
-    return response.output_text
+        }
+    ]
 
+    for _ in range(6):
+        response = client.responses.create(
+            model=model,
+            instructions=SYSTEM_PROMPT,
+            tools=TOOLS,
+            input=input_items,
+        )
+
+        function_calls = get_function_calls(response)
+        if not function_calls:
+            return response.output_text
+
+        input_items += response.output
+        for tool_call in function_calls:
+            input_items.append(execute_tool_call(tool_call))
+
+    raise RuntimeError("Tool calling loop exceeded the maximum number of steps.")
+
+
+current_model = DEFAULT_MODEL
+print(f"Agent: Current model is {current_model}")
+print("Agent: Type 'model MODEL_NAME' to switch models, for example: model gpt-5.4-mini")
 
 while True:
     user_input = input("You: ")
@@ -539,11 +718,25 @@ while True:
     if user_input.lower() in ["exit", "quit"]:
         break
 
+    if user_input.lower() == "model":
+        print(f"\nAgent: Current model is {current_model}\n")
+        continue
+
+    if user_input.lower().startswith("model "):
+        requested_model = user_input.split(maxsplit=1)[1].strip()
+        if not requested_model:
+            print(f"\nAgent: Current model is {current_model}\n")
+            continue
+
+        current_model = requested_model
+        print(f"\nAgent: Model switched to {current_model}\n")
+        continue
+
     try:
-        resume = read_resume()
-        job_description = read_job_description()
-        github_context = build_github_context(resume)
-        answer = ask_agent(user_input, resume, job_description, github_context)
+        answer = ask_agent(
+            user_input,
+            model=current_model,
+        )
     except (FileNotFoundError, ValueError) as error:
         print(f"\nAgent: {error}\n")
         continue
