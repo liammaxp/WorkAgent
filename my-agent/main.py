@@ -55,7 +55,6 @@ MAX_COMMITS_PER_ACCOUNT = 20
 MAX_COMMIT_DETAILS = 8
 MAX_FALLBACK_COMMITS = 100
 
-
 class ModelAdapter:
     provider_name = "base"
 
@@ -77,17 +76,14 @@ class ModelAdapter:
     def output_text(self, response):
         raise NotImplementedError
 
-
 class SimpleToolCall:
     def __init__(self, name, call_id, arguments="{}"):
         self.name = name
         self.call_id = call_id
         self.arguments = arguments or "{}"
 
-
 class OpenAIResponsesAdapter(ModelAdapter):
     provider_name = "openai"
-
     def __init__(
         self,
         api_key_env="OPENAI_API_KEY",
@@ -99,7 +95,6 @@ class OpenAIResponsesAdapter(ModelAdapter):
         self.base_url_env = base_url_env
         self.model_env = model_env
         self.fallback_model = fallback_model
-
         client_options = {}
         api_key = os.getenv(api_key_env)
         base_url = os.getenv(base_url_env)
@@ -107,7 +102,6 @@ class OpenAIResponsesAdapter(ModelAdapter):
             client_options["api_key"] = api_key
         if base_url:
             client_options["base_url"] = base_url
-
         self.client = OpenAI(**client_options)
 
     def default_model(self):
