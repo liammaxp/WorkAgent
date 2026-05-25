@@ -19,7 +19,7 @@ Write-Host "Starting WorkAgent backend..."
 Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-Command",
-    "Set-Location '$backendDir'; python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8000"
+    "Set-Location '$backendDir'; python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8001"
 )
 
 Write-Host "Starting WorkAgent frontend..."
