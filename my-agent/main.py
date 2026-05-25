@@ -1,10 +1,14 @@
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
+import http.client
 import json
 import os
 import re
+import requests
+import socket
 import sqlite3
+import time
 from datetime import datetime
 import urllib.error
 import urllib.parse
@@ -22,6 +26,7 @@ JOB_DESCRIPTION_PATH = BASE_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = BASE_DIR / "github_accounts.txt"
 OUTPUT_DIR = BASE_DIR / "outputs"
 ANALYSIS_OUTPUT_DIR = OUTPUT_DIR / "analysis"
+GITHUB_CONTEXT_OUTPUT_DIR = OUTPUT_DIR / "github_context"
 OUTPUT_RESUME_PATH = BASE_DIR / "tailored_resume.txt"
 COVER_LETTER_PATH = BASE_DIR / "cover_letter.txt"
 INTERVIEW_PREP_PATH = BASE_DIR / "interview_prep.txt"
@@ -54,6 +59,56 @@ MAX_README_CHARS = 6000
 MAX_COMMITS_PER_ACCOUNT = 20
 MAX_COMMIT_DETAILS = 8
 MAX_FALLBACK_COMMITS = 100
+MAX_COMMIT_FILES = 20
+MAX_PATCH_CHARS_PER_FILE = 2500
+MAX_TOTAL_PATCH_CHARS_PER_COMMIT = 12000
+MAX_PATCH_SIGNAL_ITEMS = 12
+GITHUB_REQUEST_TIMEOUT = 30
+GITHUB_REQUEST_RETRIES = 5
+GITHUB_RETRY_BACKOFF_SECONDS = 1.5
+MODEL_REQUEST_TIMEOUT = 60
+MODEL_REQUEST_RETRIES = 3
+TRANSIENT_HTTP_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
+
+
+def transient_network_errors():
+    return (
+        urllib.error.URLError,
+        TimeoutError,
+        socket.timeout,
+        ConnectionResetError,
+        http.client.RemoteDisconnected,
+        http.client.IncompleteRead,
+        http.client.BadStatusLine,
+    )
+
+
+def read_url_response_text(
+    request,
+    timeout,
+    attempts,
+    operation="HTTP request",
+    backoff_seconds=GITHUB_RETRY_BACKOFF_SECONDS,
+):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as error:
+            if error.code in TRANSIENT_HTTP_STATUS_CODES and attempt < attempts:
+                last_error = error
+            else:
+                raise
+        except transient_network_errors() as error:
+            last_error = error
+
+        if attempt < attempts:
+            time.sleep(backoff_seconds * attempt)
+
+    raise urllib.error.URLError(
+        f"{operation} failed after {attempts} attempts: {last_error}"
+    )
 
 class ModelAdapter:
     provider_name = "base"
@@ -261,8 +316,14 @@ class ClaudeMessagesAdapter(ModelAdapter):
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return json.loads(
+            read_url_response_text(
+                request,
+                timeout=MODEL_REQUEST_TIMEOUT,
+                attempts=MODEL_REQUEST_RETRIES,
+                operation="Anthropic request",
+            )
+        )
 
     def create_response(self, model, instructions, tools, input_items):
         if not self.messages:
@@ -351,8 +412,14 @@ class GeminiAdapter(ModelAdapter):
             headers={"content-type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return json.loads(
+            read_url_response_text(
+                request,
+                timeout=MODEL_REQUEST_TIMEOUT,
+                attempts=MODEL_REQUEST_RETRIES,
+                operation="Gemini request",
+            )
+        )
 
     def create_response(self, model, instructions, tools, input_items):
         if not self.contents:
@@ -449,6 +516,12 @@ def timestamp_slug():
 def save_analysis_output(content, prefix="job_analysis"):
     path = ANALYSIS_OUTPUT_DIR / f"{prefix}_{timestamp_slug()}.txt"
     write_text_file(path, content)
+    return path
+
+
+def save_github_context_output(repo_contexts):
+    path = GITHUB_CONTEXT_OUTPUT_DIR / f"github_context_{timestamp_slug()}.json"
+    write_text_file(path, json.dumps(repo_contexts, ensure_ascii=False, indent=2))
     return path
 
 
@@ -865,22 +938,222 @@ def summarize_commit(commit):
     }
 
 
+def classify_changed_file(filename):
+    lowered = filename.lower()
+    if any(part in lowered for part in ["/test", "\\test", "test_", "_test", ".spec.", ".test."]):
+        return "test"
+    if any(lowered.endswith(extension) for extension in [".md", ".rst", ".txt"]):
+        return "documentation"
+    if any(
+        name in lowered
+        for name in [
+            "requirements",
+            "package.json",
+            "pyproject",
+            "dockerfile",
+            "docker-compose",
+            ".env",
+            ".yml",
+            ".yaml",
+            ".toml",
+            ".ini",
+        ]
+    ):
+        return "configuration"
+    if any(part in lowered for part in ["migration", "schema", "model", "entity"]):
+        return "data-model"
+    if any(part in lowered for part in ["route", "controller", "api", "endpoint", "handler"]):
+        return "api"
+    if any(part in lowered for part in ["component", "page", "view", "screen", "ui"]):
+        return "ui"
+    return "source"
+
+
+def trim_patch(patch, remaining_chars):
+    if not patch or remaining_chars <= 0:
+        return ""
+
+    trimmed = patch[: min(len(patch), MAX_PATCH_CHARS_PER_FILE, remaining_chars)]
+    if len(trimmed) < len(patch):
+        trimmed = trimmed.rstrip() + "\n... [patch truncated]"
+    return trimmed
+
+
+def extract_patch_signals(patch):
+    signals = []
+    if not patch:
+        return signals
+
+    added_lines = [
+        line[1:].strip()
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    removed_lines = [
+        line[1:].strip()
+        for line in patch.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+
+    patterns = [
+        ("added function", r"^(?:async\s+)?def\s+([A-Za-z_][\w]*)\s*\("),
+        ("added function", r"^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][\w]*)\s*\("),
+        ("added class", r"^class\s+([A-Za-z_][\w]*)\b"),
+        ("added route", r"@(app|router|bp)\.(get|post|put|patch|delete)\("),
+        ("added test", r"^(?:def|async\s+def|it|test)\s+([A-Za-z_][\w\s-]*)"),
+    ]
+
+    for label, pattern in patterns:
+        for line in added_lines:
+            match = re.search(pattern, line)
+            if match:
+                signals.append(f"{label}: {match.group(0)[:120]}")
+                if len(signals) >= MAX_PATCH_SIGNAL_ITEMS:
+                    return signals
+
+    keyword_checks = [
+        ("added error handling", ["except ", "try:", "catch ", "raise ", "throw "]),
+        ("added persistence/database logic", ["select ", "insert ", "update ", "delete ", "sqlite", "database", "migration"]),
+        ("added authentication/authorization logic", ["auth", "token", "permission", "login", "oauth"]),
+        ("added validation", ["validate", "schema", "required", "invalid", "sanitize"]),
+        ("added external api integration", ["requests.", "urlopen", "fetch(", "axios", "httpx", "aiohttp"]),
+        ("added configuration/dependency changes", ["requirements", "package.json", "env", "config", "docker"]),
+    ]
+    added_text = "\n".join(added_lines).lower()
+    for label, keywords in keyword_checks:
+        if any(keyword in added_text for keyword in keywords):
+            signals.append(label)
+        if len(signals) >= MAX_PATCH_SIGNAL_ITEMS:
+            return signals
+
+    if len(added_lines) > len(removed_lines) * 2 and added_lines:
+        signals.append("primarily added new implementation")
+    elif len(removed_lines) > len(added_lines) * 2 and removed_lines:
+        signals.append("primarily removed or simplified implementation")
+    elif added_lines or removed_lines:
+        signals.append("modified existing implementation")
+
+    return signals[:MAX_PATCH_SIGNAL_ITEMS]
+
+
+def summarize_file_change(file_info, remaining_patch_chars):
+    filename = file_info.get("filename", "")
+    raw_patch = file_info.get("patch", "")
+    patch = trim_patch(raw_patch, remaining_patch_chars)
+    return {
+        "filename": filename,
+        "status": file_info.get("status"),
+        "change_type": classify_changed_file(filename),
+        "additions": file_info.get("additions", 0),
+        "deletions": file_info.get("deletions", 0),
+        "changes": file_info.get("changes", 0),
+        "patch_available": bool(raw_patch),
+        "patch_truncated": bool(raw_patch) and len(patch) < len(raw_patch),
+        "patch": patch,
+        "patch_signals": extract_patch_signals(patch),
+    }
+
+
+def summarize_commit_diff(file_changes):
+    if not file_changes:
+        return {
+            "changed_file_count": 0,
+            "change_types": [],
+            "total_additions": 0,
+            "total_deletions": 0,
+            "files_with_patch": 0,
+            "signals": [],
+            "resume_guidance": "No diff was available, so do not infer implementation details beyond commit message and file names.",
+        }
+
+    signals = []
+    seen_signals = set()
+    for change in file_changes:
+        for signal in change.get("patch_signals", []):
+            if signal in seen_signals:
+                continue
+            seen_signals.add(signal)
+            signals.append(signal)
+            if len(signals) >= MAX_PATCH_SIGNAL_ITEMS:
+                break
+
+    return {
+        "changed_file_count": len(file_changes),
+        "change_types": sorted({change["change_type"] for change in file_changes}),
+        "total_additions": sum(change.get("additions", 0) or 0 for change in file_changes),
+        "total_deletions": sum(change.get("deletions", 0) or 0 for change in file_changes),
+        "files_with_patch": sum(1 for change in file_changes if change.get("patch_available")),
+        "signals": signals,
+        "resume_guidance": (
+            "Use commit messages, changed file roles, and patch_signals as evidence. "
+            "Only write resume bullets for capabilities directly supported by these diffs; "
+            "avoid claiming product impact or ownership that the diff does not show."
+        ),
+    }
+
+
 def github_api_get(url, accept="application/vnd.github+json"):
     headers = {
         "Accept": accept,
+        "Accept-Encoding": "identity",
+        "Connection": "close",
         "User-Agent": "liam-job-application-agent",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
     github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
-    request = urllib.request.Request(
-        url,
-        headers=headers,
-    )
+    if os.getenv("GITHUB_USE_URLLIB", "").lower() not in ["1", "true", "yes"]:
+        last_error = None
+        for attempt in range(1, GITHUB_REQUEST_RETRIES + 1):
+            try:
+                response = requests.get(
+                    url,
+                    headers=headers,
+                    timeout=GITHUB_REQUEST_TIMEOUT,
+                )
+                if response.status_code in [429, 500, 502, 503, 504]:
+                    last_error = requests.HTTPError(
+                        f"HTTP {response.status_code}: {response.text[:300]}"
+                    )
+                    if attempt < GITHUB_REQUEST_RETRIES:
+                        time.sleep(GITHUB_RETRY_BACKOFF_SECONDS * attempt)
+                        continue
 
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8", errors="replace")
+                response.raise_for_status()
+                return response.text
+            except requests.HTTPError as error:
+                status_code = getattr(error.response, "status_code", None)
+                if status_code in [429, 500, 502, 503, 504] and attempt < GITHUB_REQUEST_RETRIES:
+                    last_error = error
+                    time.sleep(GITHUB_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+
+                raise urllib.error.HTTPError(
+                    url,
+                    status_code or 0,
+                    str(error),
+                    hdrs=None,
+                    fp=None,
+                )
+            except requests.RequestException as error:
+                last_error = error
+                if attempt < GITHUB_REQUEST_RETRIES:
+                    time.sleep(GITHUB_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+
+        raise urllib.error.URLError(
+            f"GitHub request failed after {GITHUB_REQUEST_RETRIES} requests attempts: {last_error}"
+        )
+
+    request = urllib.request.Request(url, headers=headers)
+    return read_url_response_text(
+        request,
+        timeout=GITHUB_REQUEST_TIMEOUT,
+        attempts=GITHUB_REQUEST_RETRIES,
+        operation="GitHub request",
+    )
 
 
 def github_token_is_configured():
@@ -961,11 +1234,23 @@ def fetch_commit_files(base_url, commit_context):
 
     try:
         details = json.loads(github_api_get(f"{base_url}/commits/{sha}"))
-        commit_context["files"] = [
-            file_info.get("filename")
+        files = [
+            file_info
             for file_info in details.get("files", [])
-            if file_info.get("filename")
-        ][:20]
+            if isinstance(file_info, dict) and file_info.get("filename")
+        ][:MAX_COMMIT_FILES]
+        commit_context["files"] = [file_info.get("filename") for file_info in files]
+        commit_context["stats"] = details.get("stats", {})
+
+        remaining_patch_chars = MAX_TOTAL_PATCH_CHARS_PER_COMMIT
+        file_changes = []
+        for file_info in files:
+            file_change = summarize_file_change(file_info, remaining_patch_chars)
+            remaining_patch_chars -= len(file_change.get("patch", ""))
+            file_changes.append(file_change)
+
+        commit_context["file_changes"] = file_changes
+        commit_context["diff_analysis"] = summarize_commit_diff(file_changes)
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
@@ -1194,6 +1479,18 @@ def print_github_context_summary(repo_contexts):
                 for commit in commits[:3]:
                     files = ", ".join(commit.get("files", [])[:3]) or "No files listed."
                     print(f"      - {commit.get('message')} | {files}")
+                    diff_analysis = commit.get("diff_analysis", {})
+                    if diff_analysis:
+                        print(
+                            "        Diff: "
+                            f"{diff_analysis.get('files_with_patch', 0)}/"
+                            f"{diff_analysis.get('changed_file_count', 0)} files with patch, "
+                            f"+{diff_analysis.get('total_additions', 0)} "
+                            f"-{diff_analysis.get('total_deletions', 0)}"
+                        )
+                    signals = ", ".join(diff_analysis.get("signals", [])[:3])
+                    if signals:
+                        print(f"        Signals: {signals}")
 
 
 def has_usable_repo_context(repo_contexts):
@@ -1240,11 +1537,16 @@ def build_github_context(resume):
     for repo in repos:
         repo_context = fetch_github_repo_context(repo)
         repo_context["verified_github_identities"] = github_identities
-        repo_context["contribution_evidence"] = fetch_user_commits_for_repo(
-            repo, github_identities
-        )
+        if repo_context.get("error"):
+            repo_context["contribution_evidence"] = []
+        else:
+            repo_context["contribution_evidence"] = fetch_user_commits_for_repo(
+                repo, github_identities
+            )
         repo_contexts.append(repo_context)
     print_github_context_summary(repo_contexts)
+    github_context_path = save_github_context_output(repo_contexts)
+    print(f"\nAgent: GitHub context with commit diffs saved to {github_context_path}\n")
 
     if not has_usable_repo_context(repo_contexts):
         print(
@@ -1306,7 +1608,8 @@ TOOLS = [
         "name": "read_github_context",
         "description": (
             "Find GitHub repository links in resume.txt, ask the user for permission, "
-            "then read public/authorized repository and commit evidence when available."
+            "then read public/authorized repository context, matched commits, and commit diff "
+            "evidence when available. Use diff evidence conservatively when writing resume bullets."
         ),
         "parameters": {
             "type": "object",
@@ -1478,6 +1781,7 @@ User request:
 
 You have tools for reading memory.json, resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
+When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
 Keep job analysis, match scores, recommendations, and explanations separate from resume LaTeX code.
@@ -1521,6 +1825,7 @@ print(f"Agent: Current provider is {current_provider}")
 print(f"Agent: Current model is {current_model}")
 print("Agent: Type 'provider PROVIDER_NAME' to switch providers.")
 print("Agent: Type 'model MODEL_NAME' to switch models, for example: model gpt-5.4-mini")
+print("Agent: Type 'github diff' to fetch commit diffs from resume repositories.")
 
 while True:
     user_input = input("You: ")
@@ -1535,6 +1840,19 @@ while True:
     if user_input.lower() == "provider":
         print(f"\nAgent: Current provider is {current_provider}\n")
         print("Agent: Supported providers: openai, openai-compatible, deepseek, claude, gemini\n")
+        continue
+
+    if user_input.lower() in ["github diff", "github diffs", "github context"]:
+        try:
+            github_context = read_github_context()
+        except (FileNotFoundError, ValueError) as error:
+            print(f"\nAgent: {error}\n")
+            continue
+        except transient_network_errors() as error:
+            print(f"\nAgent: Network request failed after retries: {error}\n")
+            continue
+
+        print("\nAgent: GitHub diff context is ready for resume evidence.\n")
         continue
 
     if user_input.lower().startswith("model "):
@@ -1575,6 +1893,9 @@ while True:
     except (FileNotFoundError, ValueError) as error:
         print(f"\nAgent: {error}\n")
         continue
+    except transient_network_errors() as error:
+        print(f"\nAgent: Network request failed after retries: {error}\n")
+        continue
 
     if looks_like_latex_resume(answer):
         save_tailored_resume(answer)
@@ -1599,6 +1920,10 @@ while True:
             except (FileNotFoundError, ValueError) as error:
                 print(f"\nAgent: {error}\n")
                 continue
+            except transient_network_errors() as error:
+                print(f"\nAgent: Network request failed after retries: {error}\n")
+                continue
 
             save_tailored_resume(resume_answer)
             print(f"\nAgent: Modified resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+

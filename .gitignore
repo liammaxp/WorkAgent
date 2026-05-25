@@ -11,3 +11,11 @@ prompt.txt
 
 __pycache__/
 *.pyc
+*.pyo
+*.pyde/
+.ruff_cach
+.pytest_cache/
+.mypy_cache/
+.cache/
+
+my-agent/outputs/
