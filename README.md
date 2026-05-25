@@ -107,6 +107,24 @@ Do not commit API keys, resumes, job descriptions, GitHub identities, generated 
 
 ## Setup
 
+### One-Click Start
+
+On Windows, double-click:
+
+```text
+start_workagent.bat
+```
+
+This starts the backend API, starts the frontend dev server, and opens:
+
+```text
+http://localhost:5173
+```
+
+If the browser opens before Vite finishes starting, refresh the page after a few seconds.
+
+### Manual Start
+
 ### Backend
 
 From `my-agent/`:
@@ -285,6 +303,24 @@ WorkAgent 有意使用本地文件作为单用户工作状态。以下文件可�
 不要提交 API key、简历、职位描述、GitHub 身份、生成的求职信、申请记录或个人背景材料。
 
 ## 启动方式
+
+### 一键启动
+
+在 Windows 上，直接双击项目根目录中的：
+
+```text
+start_workagent.bat
+```
+
+它会自动启动后端 API、启动前端开发服务器，并打开：
+
+```text
+http://localhost:5173
+```
+
+如果浏览器打开时 Vite 还没完全启动，等几秒后刷新页面即可。
+
+### 手动启动
 
 ### 后端
 
