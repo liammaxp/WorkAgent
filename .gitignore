@@ -5,9 +5,21 @@ my-agent/github_accounts.txt
 my-agent/job_description.txt
 my-agent/resume.txt
 my-agent/tailored_resume.txt
-my-agent\memory.json
+my-agent/cover_letter.txt
+my-agent/interview_prep.txt
+my-agent/memory.json
+my-agent/applications.sqlite3
+my-agent/*.sqlite3
+my-agent/*.db
 
 prompt.txt
+Function background.txt
+
+# Logs and generated project status notes
+*.log
+*_features_and_log.txt
+backend_logic_and_api_for_frontend.txt
+project_background_and_purpose.txt
 
 __pycache__/
 *.pyc
@@ -19,3 +31,6 @@ __pycache__/
 .cache/
 
 my-agent/outputs/
+
+frontend/node_modules/
+frontend/dist/

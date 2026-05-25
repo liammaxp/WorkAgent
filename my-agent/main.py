@@ -58,6 +58,19 @@ Use the available tools to read memory.json, resume.txt, and job_description.txt
 Use GitHub context only if needed and approved by the user.
 Be specific and do not exaggerate the user's experience.
 """
+COVER_LETTER_AGENT_PROMPT = """
+Write a tailored cover letter for the saved job description.
+
+Requirements:
+- Base the letter primarily on tailored_resume.txt, because it contains the resume version already modified for this job.
+- If tailored_resume.txt is not available, use resume.txt as a fallback and say that the tailored resume was not found.
+- Read job_description.txt and memory.json before drafting.
+- Use GitHub context only if it is needed to support a specific project claim and the user approves it.
+- Keep claims grounded in the resume, memory, job description, and approved GitHub evidence.
+- Do not exaggerate experience, ownership, seniority, or technologies.
+- Write a polished, concise cover letter with a clear opening, 1-2 evidence-focused body paragraphs, and a confident closing.
+- Save the final draft with save_cover_letter.
+"""
 GITHUB_REPO_PATTERN = re.compile(
     r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
 )
@@ -569,6 +582,21 @@ def is_likely_resume_edit_request(text):
     return any(keyword in lowered for keyword in resume_keywords)
 
 
+def is_likely_cover_letter_request(text):
+    lowered = text.lower()
+    cover_letter_keywords = [
+        "cover letter",
+        "coverletter",
+        "covering letter",
+        "motivation letter",
+        "application letter",
+        "求职信",
+        "自荐信",
+        "申请信",
+    ]
+    return any(keyword in lowered for keyword in cover_letter_keywords)
+
+
 def is_likely_job_description(text):
     lowered = text.lower()
     jd_keywords = [
@@ -603,6 +631,17 @@ def is_likely_job_description(text):
 
 
 def prepare_user_request(user_input):
+    if is_likely_cover_letter_request(user_input):
+        workflow_request = f"""
+The user wants a cover letter.
+
+{COVER_LETTER_AGENT_PROMPT}
+
+Additional user request:
+{user_input}
+"""
+        return workflow_request, None, False
+
     if not is_likely_job_description(user_input):
         return user_input, None, False
 
@@ -644,6 +683,10 @@ def read_memory():
 
 def read_resume():
     return read_text_file(RESUME_PATH)
+
+
+def read_tailored_resume():
+    return read_text_file(OUTPUT_RESUME_PATH)
 
 
 def read_job_description():
@@ -1603,6 +1646,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "read_tailored_resume",
+        "description": "Read the modified resume LaTeX code from tailored_resume.txt. Prefer this when writing cover letters for the current job.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_job_description",
         "description": "Read the target job description from job_description.txt.",
         "parameters": {
@@ -1751,6 +1805,7 @@ def read_github_context():
 TOOL_FUNCTIONS = {
     "read_memory": read_memory,
     "read_resume": read_resume,
+    "read_tailored_resume": read_tailored_resume,
     "read_job_description": read_job_description,
     "read_github_context": read_github_context,
     "save_tailored_resume": save_tailored_resume,
@@ -1788,8 +1843,9 @@ def ask_agent(user_input, adapter, model):
 User request:
 {user_input}
 
-You have tools for reading memory.json, resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+You have tools for reading memory.json, resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
+For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
@@ -1830,102 +1886,42 @@ except ValueError as error:
     current_adapter = create_model_adapter(current_provider)
 
 current_model = current_adapter.default_model()
-print(f"Agent: Current provider is {current_provider}")
-print(f"Agent: Current model is {current_model}")
-print("Agent: Type 'provider PROVIDER_NAME' to switch providers.")
-print("Agent: Type 'model MODEL_NAME' to switch models, for example: model gpt-5.4-mini")
-print("Agent: Type 'github diff' to fetch commit diffs from resume repositories.")
 
-while True:
-    user_input = input("You: ")
 
-    if user_input.lower() in ["exit", "quit"]:
-        break
+def file_is_ready(path):
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8").strip()
+    return bool(content) and not content.startswith(PLACEHOLDER_TEXT)
 
-    if user_input.lower() == "model":
-        print(f"\nAgent: Current model is {current_model}\n")
-        continue
 
-    if user_input.lower() == "provider":
-        print(f"\nAgent: Current provider is {current_provider}\n")
-        print("Agent: Supported providers: openai, openai-compatible, deepseek, claude, gemini\n")
-        continue
+def run_cli():
+    global current_provider, current_adapter, current_model
 
-    if user_input.lower() in ["github diff", "github diffs", "github context"]:
-        try:
-            github_context = read_github_context()
-        except (FileNotFoundError, ValueError) as error:
-            print(f"\nAgent: {error}\n")
-            continue
-        except transient_network_errors() as error:
-            print(f"\nAgent: Network request failed after retries: {error}\n")
-            continue
+    print(f"Agent: Current provider is {current_provider}")
+    print(f"Agent: Current model is {current_model}")
+    print("Agent: Type 'provider PROVIDER_NAME' to switch providers.")
+    print("Agent: Type 'model MODEL_NAME' to switch models, for example: model gpt-5.4-mini")
+    print("Agent: Type 'github diff' to fetch commit diffs from resume repositories.")
 
-        print("\nAgent: GitHub diff context is ready for resume evidence.\n")
-        continue
+    while True:
+        user_input = input("You: ")
 
-    if user_input.lower().startswith("model "):
-        requested_model = user_input.split(maxsplit=1)[1].strip()
-        if not requested_model:
+        if user_input.lower() in ["exit", "quit"]:
+            break
+
+        if user_input.lower() == "model":
             print(f"\nAgent: Current model is {current_model}\n")
             continue
 
-        current_model = requested_model
-        print(f"\nAgent: Model switched to {current_model}\n")
-        continue
-
-    if user_input.lower().startswith("provider "):
-        requested_provider = user_input.split(maxsplit=1)[1].strip().lower()
-        try:
-            requested_adapter = create_model_adapter(requested_provider)
-        except ValueError as error:
-            print(f"\nAgent: {error}\n")
+        if user_input.lower() == "provider":
+            print(f"\nAgent: Current provider is {current_provider}\n")
+            print("Agent: Supported providers: openai, openai-compatible, deepseek, claude, gemini\n")
             continue
 
-        current_provider = requested_provider
-        current_adapter = requested_adapter
-        current_model = current_adapter.default_model()
-        print(f"\nAgent: Provider switched to {current_provider}\n")
-        print(f"Agent: Current model is {current_model}\n")
-        continue
-
-    try:
-        prepared_request, preparation_message, is_new_job_description = prepare_user_request(user_input)
-        if preparation_message:
-            print(f"\nAgent: {preparation_message}\n")
-
-        answer = ask_agent(
-            prepared_request,
-            adapter=current_adapter,
-            model=current_model,
-        )
-    except (FileNotFoundError, ValueError) as error:
-        print(f"\nAgent: {error}\n")
-        continue
-    except transient_network_errors() as error:
-        print(f"\nAgent: Network request failed after retries: {error}\n")
-        continue
-
-    if looks_like_latex_resume(answer):
-        save_tailored_resume(answer)
-        print(f"\nAgent: Updated resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
-    else:
-        analysis_path = save_analysis_output(answer)
-        print(f"\nAgent: Analysis saved to {analysis_path}\n")
-        print(f"Agent: {answer}\n")
-
-    if is_new_job_description:
-        permission = input(
-            "Agent: Do you want me to generate the modified full LaTeX resume code now? "
-            "Type yes to generate, or anything else to skip: "
-        )
-        if permission.strip().lower() in ["y", "yes"]:
+        if user_input.lower() in ["github diff", "github diffs", "github context"]:
             try:
-                resume_answer = ask_agent(
-                    "Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
-                    adapter=current_adapter,
-                    model=current_model,
-                )
+                github_context = read_github_context()
             except (FileNotFoundError, ValueError) as error:
                 print(f"\nAgent: {error}\n")
                 continue
@@ -1933,6 +1929,131 @@ while True:
                 print(f"\nAgent: Network request failed after retries: {error}\n")
                 continue
 
-            save_tailored_resume(resume_answer)
-            print(f"\nAgent: Modified resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+            print("\nAgent: GitHub diff context is ready for resume evidence.\n")
+            continue
+
+        if user_input.lower().startswith("model "):
+            requested_model = user_input.split(maxsplit=1)[1].strip()
+            if not requested_model:
+                print(f"\nAgent: Current model is {current_model}\n")
+                continue
+
+            current_model = requested_model
+            print(f"\nAgent: Model switched to {current_model}\n")
+            continue
+
+        if user_input.lower().startswith("provider "):
+            requested_provider = user_input.split(maxsplit=1)[1].strip().lower()
+            try:
+                requested_adapter = create_model_adapter(requested_provider)
+            except ValueError as error:
+                print(f"\nAgent: {error}\n")
+                continue
+
+            current_provider = requested_provider
+            current_adapter = requested_adapter
+            current_model = current_adapter.default_model()
+            print(f"\nAgent: Provider switched to {current_provider}\n")
+            print(f"Agent: Current model is {current_model}\n")
+            continue
+
+        try:
+            prepared_request, preparation_message, is_new_job_description = prepare_user_request(user_input)
+            if preparation_message:
+                print(f"\nAgent: {preparation_message}\n")
+
+            is_cover_letter_request = is_likely_cover_letter_request(user_input)
+            cover_letter_mtime = (
+                COVER_LETTER_PATH.stat().st_mtime_ns
+                if is_cover_letter_request and COVER_LETTER_PATH.exists()
+                else None
+            )
+            answer = ask_agent(
+                prepared_request,
+                adapter=current_adapter,
+                model=current_model,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            print(f"\nAgent: {error}\n")
+            continue
+        except transient_network_errors() as error:
+            print(f"\nAgent: Network request failed after retries: {error}\n")
+            continue
+
+        if is_cover_letter_request:
+            cover_letter_was_saved = (
+                COVER_LETTER_PATH.exists()
+                and COVER_LETTER_PATH.stat().st_mtime_ns != cover_letter_mtime
+            )
+            if answer.strip() and not cover_letter_was_saved:
+                save_cover_letter(answer)
+
+            print(f"\nAgent: Cover letter saved to {COVER_LETTER_PATH}\n")
+            continue
+
+        if looks_like_latex_resume(answer):
+            save_tailored_resume(answer)
+            print(f"\nAgent: Updated resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+        else:
+            analysis_path = save_analysis_output(answer)
+            print(f"\nAgent: Analysis saved to {analysis_path}\n")
+            print(f"Agent: {answer}\n")
+
+        if is_new_job_description:
+            permission = input(
+                "Agent: Do you want me to generate the modified full LaTeX resume code now? "
+                "Type yes to generate, or anything else to skip: "
+            )
+            if permission.strip().lower() in ["y", "yes"]:
+                try:
+                    resume_answer = ask_agent(
+                        "Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
+                        adapter=current_adapter,
+                        model=current_model,
+                    )
+                except (FileNotFoundError, ValueError) as error:
+                    print(f"\nAgent: {error}\n")
+                    continue
+                except transient_network_errors() as error:
+                    print(f"\nAgent: Network request failed after retries: {error}\n")
+                    continue
+
+                save_tailored_resume(resume_answer)
+                print(f"\nAgent: Modified resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
+
+                cover_permission = input(
+                    "Agent: Do you want me to generate a cover letter from the modified resume and job description now? "
+                    "Type yes to generate, or anything else to skip: "
+                )
+                if cover_permission.strip().lower() in ["y", "yes"]:
+                    try:
+                        cover_letter_mtime = (
+                            COVER_LETTER_PATH.stat().st_mtime_ns
+                            if COVER_LETTER_PATH.exists()
+                            else None
+                        )
+                        cover_letter_answer = ask_agent(
+                            COVER_LETTER_AGENT_PROMPT,
+                            adapter=current_adapter,
+                            model=current_model,
+                        )
+                    except (FileNotFoundError, ValueError) as error:
+                        print(f"\nAgent: {error}\n")
+                        continue
+                    except transient_network_errors() as error:
+                        print(f"\nAgent: Network request failed after retries: {error}\n")
+                        continue
+
+                    cover_letter_was_saved = (
+                        COVER_LETTER_PATH.exists()
+                        and COVER_LETTER_PATH.stat().st_mtime_ns != cover_letter_mtime
+                    )
+                    if cover_letter_answer.strip() and not cover_letter_was_saved:
+                        save_cover_letter(cover_letter_answer)
+
+                    print(f"\nAgent: Cover letter saved to {COVER_LETTER_PATH}\n")
+
+
+if __name__ == "__main__":
+    run_cli()
 
