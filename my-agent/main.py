@@ -39,11 +39,20 @@ Analyze the job description and produce:
 1. Job title and company if available
 2. Required technical skills
 3. Required soft skills
-4. Match score from 0 to 100
+4. Match score from 0 to 100 using the rubric below
 5. Best matching user projects
 6. Resume summary rewrite
 7. 3-5 resume bullet points
 8. Cover letter draft
+
+Match score rubric:
+- Required technical skills and keyword overlap with the job description: 40 points
+- Direct project/experience fit for the job responsibilities: 25 points
+- Preferred qualifications, tools, domain, or workflow overlap: 15 points
+- Soft skills, collaboration, communication, and work style fit: 10 points
+- Student/internship fit, availability, and role level fit: 10 points
+
+Score higher when the user's resume, memory, and approved GitHub evidence closely match the exact job description. Penalize missing required skills, weak evidence, unrelated projects, and unsupported claims. Explain the score by category.
 
 Use the available tools to read memory.json, resume.txt, and job_description.txt.
 Use GitHub context only if needed and approved by the user.
