@@ -17,6 +17,7 @@ Function background.txt
 
 # Logs and generated project status notes
 *.log
+log/
 *_features_and_log.txt
 backend_logic_and_api_for_frontend.txt
 project_background_and_purpose.txt
