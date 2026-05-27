@@ -8,6 +8,8 @@ import {
   useAsyncAction,
 } from "../components/ui.jsx";
 
+let cachedAnalysis = null;
+
 export default function JobDescription() {
   const [content, setContent] = useState("");
   const [analysis, setAnalysis] = useState("");
@@ -15,14 +17,23 @@ export default function JobDescription() {
 
   useEffect(() => {
     run(async () => {
-      const data = await api.getFile("job_description");
-      setContent(data.content || "");
+      const jobData = await api.getFile("job_description");
+      setContent(jobData.content || "");
+      if (cachedAnalysis?.jobDescription === jobData.content) {
+        setAnalysis(cachedAnalysis.content);
+      } else if (!cachedAnalysis) {
+        setAnalysis("");
+      }
     });
-  }, []);
+  }, [run]);
 
   const save = () =>
     run(async () => {
       await api.saveJobDescription(content);
+      if (cachedAnalysis?.jobDescription !== content) {
+        cachedAnalysis = null;
+        setAnalysis("");
+      }
     }, "职位描述已保存");
 
   const analyze = () =>
@@ -30,6 +41,10 @@ export default function JobDescription() {
       if (content.trim()) await api.saveJobDescription(content);
       const data = await api.analyzeJob(false);
       setAnalysis(data.analysis || "");
+      cachedAnalysis = {
+        content: data.analysis || "",
+        jobDescription: content,
+      };
       return data;
     }, "职位分析完成");
 
