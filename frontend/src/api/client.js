@@ -36,11 +36,23 @@ export const api = {
   getStatus: () => request("/status"),
   setProvider: (provider) =>
     request("/provider", { method: "POST", body: JSON.stringify({ provider }) }),
+  getProviderConfigs: () => request("/provider-configs"),
+  saveProviderConfig: (payload) =>
+    request("/provider-configs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   setModel: (model) =>
     request("/model", { method: "POST", body: JSON.stringify({ model }) }),
   getFile: (name) => request(`/files/${name}`),
   saveFile: (name, content) =>
     request(`/files/${name}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
+  getPrompt: () => request("/prompt"),
+  savePrompt: (content) =>
+    request("/prompt", {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
@@ -80,6 +92,12 @@ export const api = {
     request("/github/scan", {
       method: "POST",
       body: JSON.stringify({ resume_source }),
+    }),
+  getGithubConfig: () => request("/github/config"),
+  saveGithubConfig: (payload) =>
+    request("/github/config", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   fetchGithubContext: (approved = true, resume_source = "resume") =>
     request("/github/context", {

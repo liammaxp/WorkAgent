@@ -5,51 +5,56 @@
 
 ## English
 
-WorkAgent is a local, single-user AI workspace for job applications. It helps turn a resume, a job description, project evidence, and application notes into a connected workflow for job analysis, tailored resumes, cover letters, interview preparation, and application tracking.
+WorkAgent is a local, single-user AI workspace for job applications. It connects a resume, job description, personal background, GitHub evidence, generated documents, and application records into one workflow.
 
-The project is currently focused on Liam's internship search workflow, with an emphasis on truthful, conservative resume and application writing. It is designed to organize real experience more clearly, not to invent credentials, metrics, company experience, awards, or project ownership.
+The project is designed for truthful, conservative job-search writing. It helps organize and tailor real experience; it should not invent credentials, metrics, company experience, awards, ownership, APIs, deployment details, or unsupported technologies.
 
 ## What It Does
 
-- Analyzes a saved job description and summarizes role requirements, skills, responsibilities, hidden expectations, and fit.
-- Reads a base LaTeX resume and generates a tailored LaTeX resume for the current role.
-- Generates a cover letter based primarily on the tailored resume, with fallback to the base resume.
-- Extracts GitHub repository context from resume links, including README content, languages, commits, file changes, and diff signals.
-- Uses GitHub evidence conservatively to support project descriptions without overstating contribution.
-- Generates interview preparation notes from the job description, resume, background, and optional GitHub context.
-- Tracks applications in a local SQLite database.
-- Provides both a CLI workflow and a local Web UI.
+- Analyze a saved job description and summarize requirements, skills, responsibilities, expectations, and fit.
+- Edit a base resume and generate a tailored LaTeX resume for the current role.
+- Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
+- Configure model providers and API keys directly in the Web UI.
+- Configure GitHub usernames, commit author names, commit emails, and GitHub token directly in the Web UI.
+- Start from an example system prompt and customize the agent prompt directly in the Web UI.
+- Scan GitHub repository links from the resume and fetch README, languages, commits, file changes, and diff signals after confirmation.
+- Use GitHub evidence conservatively to support project descriptions without overstating contribution.
+- Generate and edit interview preparation notes.
+- Track applications in a local SQLite database.
+- Provide both a local Web UI and the original CLI workflow.
 
-## Current Architecture
+## Architecture
 
 ```text
 .
-├── backend/
-│   ├── main.py              # Core CLI agent and tool logic
-│   ├── api_server.py        # FastAPI HTTP layer for the frontend
-│   ├── requirements.txt     # Python dependencies
-├── frontend/
-│   ├── src/                 # React app source
-│   ├── package.json         # Frontend scripts and dependencies
-│   └── vite.config.js       # Vite dev server and /api proxy
-├── information/             # Local private working files and database
-├── background/              # Prompts and project background notes
-├── logs/                    # Project and feature logs
-├── outputs/
-│   ├── backend/             # Generated analysis, cover letters, and GitHub context files
-│   └── frontend/            # Frontend production build output
-└── README.md
+|-- backend/
+|   |-- main.py              # Core CLI agent, model adapters, tools, GitHub logic
+|   |-- api_server.py        # FastAPI HTTP layer for the frontend
+|   `-- requirements.txt     # Python dependencies
+|-- frontend/
+|   |-- src/                 # React app source
+|   |-- package.json         # Frontend scripts and dependencies
+|   `-- vite.config.js       # Vite dev server and /api proxy
+|-- information/             # Local private working files and database
+|-- background/              # Prompts and background notes
+|-- logs/                    # Project logs
+|-- outputs/
+|   |-- backend/             # Generated analysis, letters, resumes, GitHub context
+|   `-- frontend/            # Frontend production build output
+|-- start_workagent.bat      # Windows one-click launcher
+|-- start_workagent.ps1      # Windows launcher script
+`-- README.md
 ```
 
 The system has three main layers:
 
-1. `backend/main.py`: the core local agent, model adapters, file tools, GitHub context logic, and SQLite application tracking.
-2. `backend/api_server.py`: a FastAPI service that wraps the agent into REST endpoints for the frontend.
-3. `frontend/`: a React + Vite web workspace with pages for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, and chat.
+1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
+2. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
+3. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, and chat pages.
 
-## Backend Features
+## Model Providers
 
-The backend supports multiple model providers through adapter classes:
+Supported providers:
 
 - OpenAI
 - OpenAI-compatible APIs
@@ -57,43 +62,106 @@ The backend supports multiple model providers through adapter classes:
 - Claude / Anthropic
 - Gemini / Google
 
-The FastAPI service exposes endpoints for:
+You can configure providers from the Dashboard:
+
+1. Select the API provider.
+2. Paste the API key.
+3. Add or adjust Base URL when needed.
+4. Click `Save and enable`.
+
+The backend writes the correct environment variables into `information/.env`, such as:
+
+- `OPENAI_API_KEY`
+- `OPENAI_COMPATIBLE_API_KEY`
+- `OPENAI_COMPATIBLE_BASE_URL`
+- `DEEPSEEK_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `MODEL_PROVIDER`
+
+The active model is edited separately in the Dashboard model settings.
+
+## GitHub Evidence Setup
+
+The GitHub Evidence page lets you configure:
+
+- GitHub username
+- Commit author name
+- Commit author email
+- GitHub token, optional but recommended for private repositories and higher rate limits
+
+The backend writes:
+
+- GitHub identities to `information/github_accounts.txt`
+- GitHub token to `information/.env` as `GITHUB_TOKEN`
+
+After saving GitHub settings, scan the resume source, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep.
+
+## Prompt Customization
+
+WorkAgent reads its system prompt from:
+
+```text
+background/prompt.txt
+```
+
+A reusable starter prompt is included at:
+
+```text
+background/prompt.example.txt
+```
+
+Use the Prompt Settings page to:
+
+1. Edit the current system prompt.
+2. Load the example prompt as a starting point.
+3. Save changes without restarting the backend.
+
+The example prompt includes placeholders for name, background, target roles, skills, projects, constraints, truthfulness rules, resume rules, scoring rules, and response style.
+
+## Web UI Pages
+
+- Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
+- Job Description: edit, save, and analyze the current job description.
+- Resume: edit the base resume, edit the tailored resume, and generate a tailored LaTeX resume.
+- Cover Letter: choose a writing style, generate a cover letter, and edit the saved draft.
+- Applications: add records, filter by status, update records, and delete records.
+- Interview Prep: generate and edit interview preparation notes.
+- GitHub Evidence: configure GitHub identity/token, scan repositories, and fetch approved context.
+- Prompt Settings: edit the system prompt and load the reusable example prompt.
+- Agent Chat: free-form chat interface for the same agent workflow.
+
+## API Endpoints
+
+Main FastAPI endpoints:
 
 - `GET /api/status`
 - `POST /api/provider`
+- `GET /api/provider-configs`
+- `POST /api/provider-configs`
 - `POST /api/model`
 - `GET /api/files/{name}`
 - `PUT /api/files/{name}`
+- `GET /api/prompt`
+- `PUT /api/prompt`
 - `POST /api/agent/ask`
 - `POST /api/job-description`
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
 - `POST /api/cover-letter/generate`
 - `POST /api/interview-prep/generate`
+- `GET /api/github/config`
+- `POST /api/github/config`
 - `POST /api/github/scan`
 - `POST /api/github/context`
 - `GET /api/applications`
 - `POST /api/applications`
 - `PATCH /api/applications/{id}`
+- `DELETE /api/applications/{id}`
 
-## Frontend Features
+## Local Files And Privacy
 
-The frontend is a local web workspace built with React 19, React Router 7, Vite 6, and plain CSS.
-
-Implemented pages:
-
-- Dashboard: provider/model status, file readiness, recent outputs, and quick-start flow.
-- Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, edit the tailored resume, and generate a tailored LaTeX resume.
-- Cover Letter: choose a writing style, generate a cover letter, and edit the saved draft.
-- Applications: add records, filter by status, and update application state.
-- Interview Prep: generate and edit interview preparation notes.
-- GitHub Evidence: scan resume links and fetch repository context after confirmation.
-- Agent Chat: free-form web chat interface for the same agent workflow.
-
-## Local Files
-
-WorkAgent intentionally uses local files as the working state for a single user. These files can contain private information and are ignored by git:
+WorkAgent intentionally uses local files as working state. These files can contain private information and should not be committed:
 
 - `information/.env`
 - `information/resume.txt`
@@ -105,46 +173,43 @@ WorkAgent intentionally uses local files as the working state for a single user.
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
+- `background/prompt.example.txt`
 - `outputs/`
 
-Do not commit API keys, resumes, job descriptions, GitHub identities, generated letters, application records, or personal background notes.
+Do not commit API keys, resumes, job descriptions, GitHub identities, generated documents, application records, or personal background notes.
 
 ## Setup
 
-### One-Click Start
+### One-Click Start On Windows
 
-On Windows, double-click:
+Double-click:
 
 ```text
 start_workagent.bat
 ```
 
-This starts the backend API, starts the frontend dev server, and opens:
+It starts the backend API, starts the frontend dev server, waits for both to become ready, and opens:
 
 ```text
 http://localhost:5173
 ```
 
-If the browser opens before Vite finishes starting, refresh the page after a few seconds.
-
-### Manual Start
-
-### Backend
+### Manual Backend Start
 
 From `backend/`:
 
 ```powershell
 pip install -r requirements.txt
-uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
+python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
 ```
 
-The API will run at:
+The API runs at:
 
 ```text
 http://127.0.0.1:8001
 ```
 
-### Frontend
+### Manual Frontend Start
 
 From `frontend/`:
 
@@ -153,7 +218,7 @@ npm install
 npm run dev
 ```
 
-The web app will run at:
+The Web UI runs at:
 
 ```text
 http://localhost:5173
@@ -179,78 +244,62 @@ Useful CLI commands:
 - `github diff`: fetch GitHub repository context.
 - `exit` or `quit`: close the CLI.
 
-## Design Principles
+## Development Checks
 
-- Keep the system local-first and single-user unless the backend is redesigned for multi-user isolation.
-- Keep user claims grounded in the resume, memory file, job description, and approved GitHub evidence.
-- Prefer conservative language for team projects, such as "contributed to", "supported", or "implemented parts of".
-- Avoid inventing metrics, production impact, leadership, awards, company experience, APIs, deployment details, or technologies not supported by the source material.
-- Keep model API keys and private working files on the backend/local machine only.
+Backend syntax check:
+
+```powershell
+python -m py_compile backend\api_server.py backend\main.py
+```
+
+Frontend production build:
+
+```powershell
+cd frontend
+npm run build
+```
+
+Production frontend output is written to `outputs/frontend/`.
 
 ## Current Limitations
 
-- Generation tasks are synchronous and can take time; there is no streaming output or cancellation yet.
-- GitHub evidence is displayed mostly as JSON rather than a structured visual report.
-- Application records do not yet support deletion, detail pages, pagination, or complex search.
-- Resume and cover letter editing is plain text only; there is no built-in PDF/DOCX preview or export.
-- The project has no login, multi-user isolation, or cloud deployment model.
+- Generation tasks are synchronous; there is no streaming output or cancellation yet.
+- GitHub evidence is still displayed mostly as JSON rather than a polished visual report.
+- Resume and cover letter editing is plain text; there is no built-in PDF/DOCX preview or export.
+- The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
 ## Roadmap
 
-- Add a one-click application package workflow: analysis, tailored resume, cover letter, interview prep, and application record.
+- Add a one-click application package flow: analysis, tailored resume, cover letter, interview prep, and application record.
 - Add task queues, progress updates, cancellation, and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
 - Add application dashboards, statistics, batch actions, and richer search.
 - Add PDF/DOCX preview and export.
-- Add dark mode and mobile interaction improvements.
+- Improve mobile layout and add dark mode.
 
 ## 中文
 
-WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把简历、职位描述、项目证据和申请记录串成一个连续流程，用来完成职位分析、定制简历、求职信、面试准备和申请进度管理。
+WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把简历、职位描述、个人背景、GitHub 证据、生成文档和申请记录串成一个完整流程。
 
-当前项目主要服务 Liam 的实习求职流程，重点是生成真实、保守、可验证的求职材料。它的目标不是编造更漂亮的经历，而是把已有经历组织得更清楚、更有针对性、更符合目标岗位。
+这个项目的目标是生成真实、保守、可验证的求职材料。它帮助你更清楚地组织和定制已有经历，不应该编造学历、指标、公司经历、奖项、项目所有权、API、部署细节或来源材料中没有的技术。
 
 ## 功能概览
 
-- 分析已保存的职位描述，提取岗位要求、技能、职责、隐藏期望和匹配度。
-- 读取基础 LaTeX 简历，并根据当前岗位生成定制版 LaTeX 简历。
-- 基于定制简历优先生成 cover letter，在定制简历不可用时回退到基础简历。
-- 从简历中的 GitHub 链接提取仓库上下文，包括 README、语言、提交、文件变更和 diff 信号。
-- 保守使用 GitHub 证据支撑项目描述，避免夸大个人贡献。
-- 根据职位描述、简历、背景信息和可选 GitHub 证据生成面试准备笔记。
-- 使用本地 SQLite 数据库追踪求职申请记录。
-- 同时提供 CLI 工作流和本地 Web UI。
+- 分析已保存的职位描述，提取岗位要求、技能、职责、隐含期待和匹配度。
+- 编辑基础简历，并为当前岗位生成定制版 LaTeX 简历。
+- 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
+- 直接在前端配置模型供应商和 API Key。
+- 直接在前端配置 GitHub 用户名、提交作者名称、提交邮箱和 GitHub Token。
+- 提供可直接试用的示例系统 Prompt，并支持在前端编辑个性化 Prompt。
+- 从简历链接中扫描 GitHub 仓库，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
+- 保守使用 GitHub 证据支持项目描述，避免夸大个人贡献。
+- 生成和编辑面试准备笔记。
+- 使用本地 SQLite 数据库追踪求职申请。
+- 同时提供本地 Web UI 和原始 CLI 流程。
 
-## 当前架构
+## 模型配置
 
-```text
-.
-├── backend/
-│   ├── main.py              # 核心 CLI Agent 与工具逻辑
-│   ├── api_server.py        # 面向前端的 FastAPI HTTP 服务层
-│   ├── requirements.txt     # Python 依赖
-├── frontend/
-│   ├── src/                 # React 应用源码
-│   ├── package.json         # 前端脚本与依赖
-│   └── vite.config.js       # Vite 开发服务器与 /api 代理
-├── information/             # 本地私有工作文件与数据库
-├── background/              # 提示词与项目背景材料
-├── logs/                    # 项目与功能日志
-├── outputs/
-│   ├── backend/             # 生成的职位分析、求职信与 GitHub 上下文
-│   └── frontend/            # 前端生产构建产物
-└── README.md
-```
-
-系统主要分为三层：
-
-1. `backend/main.py`：核心本地 Agent，包含模型适配、本地文件工具、GitHub 上下文逻辑和 SQLite 申请记录管理。
-2. `backend/api_server.py`：FastAPI 服务，将 Agent 能力封装为 REST 接口供前端调用。
-3. `frontend/`：React + Vite Web 工作台，包含概览、职位描述、简历、求职信、申请记录、面试准备、GitHub 证据和 Agent 对话页面。
-
-## 后端功能
-
-后端通过适配器支持多个模型供应商：
+支持的供应商：
 
 - OpenAI
 - OpenAI-compatible APIs
@@ -258,43 +307,105 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - Claude / Anthropic
 - Gemini / Google
 
-FastAPI 服务提供的主要接口：
+在 Dashboard 中可以直接配置：
 
-- `GET /api/status`
-- `POST /api/provider`
-- `POST /api/model`
-- `GET /api/files/{name}`
-- `PUT /api/files/{name}`
-- `POST /api/agent/ask`
-- `POST /api/job-description`
-- `POST /api/job-description/analyze`
-- `POST /api/resume/tailor`
-- `POST /api/cover-letter/generate`
-- `POST /api/interview-prep/generate`
-- `POST /api/github/scan`
-- `POST /api/github/context`
-- `GET /api/applications`
-- `POST /api/applications`
-- `PATCH /api/applications/{id}`
+1. 选择 API 厂商。
+2. 粘贴 API Key。
+3. 必要时填写或修改 Base URL。
+4. 点击“保存并启用”。
 
-## 前端功能
+后端会自动把正确变量写入 `information/.env`，例如 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`GEMINI_API_KEY` 和 `MODEL_PROVIDER`。当前模型在 Dashboard 的“模型设置”中单独修改。
 
-前端是一个本地 Web 工作台，使用 React 19、React Router 7、Vite 6 和原生 CSS 实现。
+## GitHub 配置
 
-已实现页面：
+GitHub Evidence 页面可以直接配置：
 
-- 概览：查看 provider/model、文件就绪状态、最近输出和快速开始流程。
-- 职位描述：编辑、保存并分析当前 JD。
-- 简历：编辑基础简历和定制简历，并生成 tailored resume。
-- 求职信：选择写作风格，生成 cover letter，并编辑保存草稿。
-- 申请记录：新增记录、按状态筛选、更新申请状态。
-- 面试准备：生成并编辑面试准备笔记。
-- GitHub 证据：扫描简历链接，并在用户确认后抓取仓库上下文。
-- Agent 对话：提供与核心 Agent 交互的自由对话入口。
+- GitHub 用户名
+- 提交作者名称
+- 提交邮箱
+- GitHub Token，可选，但建议用于私有仓库和更高 API 限额
+
+后端会把 GitHub 身份写入 `information/github_accounts.txt`，把 Token 写入 `information/.env` 的 `GITHUB_TOKEN`。
+
+保存后，选择简历来源并扫描仓库，确认授权后即可读取仓库上下文，用于简历定制、求职信和面试准备。
+
+## Prompt 个性化
+
+WorkAgent 的系统 Prompt 来自：
+
+```text
+background/prompt.txt
+```
+
+仓库内提供了一个可复用示例：
+
+```text
+background/prompt.example.txt
+```
+
+在 Prompt Settings 页面可以：
+
+1. 编辑当前系统 Prompt。
+2. 一键载入示例 Prompt 作为起点。
+3. 保存后立即生效，不需要重启后端。
+
+示例 Prompt 包含姓名、背景、目标岗位、技能、项目、限制条件、真实性规则、简历规则、评分规则和回复风格等占位内容。
+
+## 页面
+
+- Dashboard：查看 provider/model 状态、配置 API Key、查看文件状态、最近输出和快速入口。
+- Job Description：编辑、保存并分析当前职位描述。
+- Resume：编辑基础简历和定制简历，生成定制版 LaTeX 简历。
+- Cover Letter：选择写作风格，生成求职信，并编辑保存草稿。
+- Applications：新增、筛选、更新和删除申请记录。
+- Interview Prep：生成并编辑面试准备笔记。
+- GitHub Evidence：配置 GitHub 身份/Token，扫描仓库并获取已确认的上下文。
+- Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
+- Agent Chat：与核心 Agent 自由对话。
+
+## 启动方式
+
+### Windows 一键启动
+
+双击：
+
+```text
+start_workagent.bat
+```
+
+脚本会启动后端、启动前端、等待服务就绪，并打开：
+
+```text
+http://localhost:5173
+```
+
+### 手动启动后端
+
+```powershell
+cd backend
+pip install -r requirements.txt
+python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
+```
+
+### 手动启动前端
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+前端地址：
+
+```text
+http://localhost:5173
+```
+
+开发模式下，Vite 会把 `/api` 请求代理到 `http://127.0.0.1:8001`。
 
 ## 本地文件与隐私
 
-WorkAgent 有意使用本地文件作为单用户工作状态。以下文件可能包含个人信息，已被 git 忽略：
+以下文件可能包含个人信息或密钥，不要提交到 git：
 
 - `information/.env`
 - `information/resume.txt`
@@ -306,101 +417,12 @@ WorkAgent 有意使用本地文件作为单用户工作状态。以下文件可�
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
+- `background/prompt.example.txt`
 - `outputs/`
-
-不要提交 API key、简历、职位描述、GitHub 身份、生成的求职信、申请记录或个人背景材料。
-
-## 启动方式
-
-### 一键启动
-
-在 Windows 上，直接双击项目根目录中的：
-
-```text
-start_workagent.bat
-```
-
-它会自动启动后端 API、启动前端开发服务器，并打开：
-
-```text
-http://localhost:5173
-```
-
-如果浏览器打开时 Vite 还没完全启动，等几秒后刷新页面即可。
-
-### 手动启动
-
-### 后端
-
-在 `backend/` 目录下运行：
-
-```powershell
-pip install -r requirements.txt
-uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
-```
-
-API 地址：
-
-```text
-http://127.0.0.1:8001
-```
-
-### 前端
-
-在 `frontend/` 目录下运行：
-
-```powershell
-npm install
-npm run dev
-```
-
-Web 应用地址：
-
-```text
-http://localhost:5173
-```
-
-开发模式下，Vite 会将 `/api` 请求代理到 `http://127.0.0.1:8001`。
-
-## CLI 使用
-
-原始 CLI 工作流仍然可用：
-
-```powershell
-cd backend
-python main.py
-```
-
-常用命令：
-
-- `provider`：查看当前模型供应商。
-- `provider PROVIDER_NAME`：切换模型供应商。
-- `model`：查看当前模型。
-- `model MODEL_NAME`：切换模型。
-- `github diff`：读取 GitHub 仓库上下文。
-- `exit` 或 `quit`：退出 CLI。
-
-## 设计原则
-
-- 默认保持本地优先、单用户使用，除非后端专门改造为多用户隔离。
-- 所有求职材料都应基于简历、记忆文件、职位描述和用户批准的 GitHub 证据。
-- 团队项目优先使用保守措辞，例如 `contributed to`、`supported` 或 `implemented parts of`。
-- 不虚构指标、生产影响、领导经历、奖项、公司经验、API、部署细节或来源材料中没有的技术。
-- 模型 API key 和私人工作文件只保留在后端/本机。
 
 ## 当前限制
 
-- 生成类任务仍是同步请求，耗时较长时只有 loading，没有流式输出或取消功能。
-- GitHub 证据主要以 JSON 形式展示，尚未做结构化可视化报告。
-- 申请记录暂不支持删除、详情页、分页或复杂搜索。
+- 生成任务仍是同步请求，暂时没有流式输出或取消功能。
+- GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
 - 简历和求职信目前是纯文本编辑，没有内置 PDF/DOCX 预览或导出。
-- 项目没有登录、多用户隔离或云端部署设计。
-
-## 后续路线
-
-- 增加一键申请包流程：职位分析、定制简历、cover letter、面试准备和申请记录一次完成。
-- 增加任务队列、进度更新、取消生成和 WebSocket/SSE 流式输出。
-- 增加结构化 GitHub 证据可视化。
-- 增加申请看板、统计信息、批量操作和更丰富的搜索。
-- 增加 PDF/DOCX 预览与导出。
-- 增加深色模式和移动端体验优化。
+- 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。

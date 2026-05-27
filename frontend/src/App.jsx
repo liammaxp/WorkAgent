@@ -6,6 +6,7 @@ import CoverLetter from "./pages/CoverLetter.jsx";
 import Applications from "./pages/Applications.jsx";
 import InterviewPrep from "./pages/InterviewPrep.jsx";
 import GitHubContext from "./pages/GitHubContext.jsx";
+import PromptSettings from "./pages/PromptSettings.jsx";
 import Chat from "./pages/Chat.jsx";
 
 const NAV_ITEMS = [
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { to: "/applications", label: "申请记录" },
   { to: "/interview", label: "面试准备" },
   { to: "/github", label: "GitHub 证据" },
+  { to: "/prompt", label: "Prompt 设置" },
   { to: "/chat", label: "Agent 对话" },
 ];
 
@@ -54,6 +56,7 @@ export default function App() {
           <Route path="/applications" element={<Applications />} />
           <Route path="/interview" element={<InterviewPrep />} />
           <Route path="/github" element={<GitHubContext />} />
+          <Route path="/prompt" element={<PromptSettings />} />
           <Route path="/chat" element={<Chat />} />
         </Routes>
       </main>

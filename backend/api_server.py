@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -54,11 +55,22 @@ class ProviderBody(BaseModel):
     provider: str
 
 
+class ProviderConfigBody(BaseModel):
+    provider: str
+    api_key: str
+    base_url: str = ""
+    model: str = ""
+
+
 class ModelBody(BaseModel):
     model: str
 
 
 class FileBody(BaseModel):
+    content: str
+
+
+class PromptBody(BaseModel):
     content: str
 
 
@@ -99,6 +111,13 @@ class GitHubContextBody(BaseModel):
     resume_source: str = "resume"
 
 
+class GitHubConfigBody(BaseModel):
+    usernames: list[str] = Field(default_factory=list)
+    author_names: list[str] = Field(default_factory=list)
+    author_emails: list[str] = Field(default_factory=list)
+    token: str = ""
+
+
 class ApplicationCreateBody(BaseModel):
     company: str
     role: str
@@ -121,8 +140,151 @@ class ApplicationUpdateBody(BaseModel):
     notes: Optional[str] = None
 
 
+PROVIDER_CONFIGS = {
+    "openai": {
+        "label": "OpenAI",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+        "model_env": "OPENAI_MODEL",
+        "default_base_url": "",
+        "default_model": "gpt-5.5",
+        "requires_base_url": False,
+    },
+    "openai-compatible": {
+        "label": "OpenAI Compatible",
+        "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
+        "base_url_env": "OPENAI_COMPATIBLE_BASE_URL",
+        "model_env": "OPENAI_COMPATIBLE_MODEL",
+        "default_base_url": "",
+        "default_model": os.getenv("OPENAI_MODEL", "gpt-5.5"),
+        "requires_base_url": True,
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url_env": "DEEPSEEK_BASE_URL",
+        "model_env": "DEEPSEEK_MODEL",
+        "default_base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-chat",
+        "requires_base_url": False,
+    },
+    "claude": {
+        "label": "Claude / Anthropic",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "base_url_env": "ANTHROPIC_BASE_URL",
+        "model_env": "ANTHROPIC_MODEL",
+        "default_base_url": "https://api.anthropic.com",
+        "default_model": "claude-sonnet-4-5",
+        "requires_base_url": False,
+    },
+    "gemini": {
+        "label": "Gemini",
+        "api_key_env": "GEMINI_API_KEY",
+        "base_url_env": "GEMINI_BASE_URL",
+        "model_env": "GEMINI_MODEL",
+        "default_base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "default_model": "gemini-2.5-flash",
+        "requires_base_url": False,
+    },
+}
+
+
+def normalize_provider(provider: str) -> str:
+    normalized = provider.lower().strip()
+    aliases = {"compatible": "openai-compatible", "anthropic": "claude", "google": "gemini"}
+    return aliases.get(normalized, normalized)
+
+
+def quote_env_value(value: str) -> str:
+    if not value:
+        return ""
+    if any(char.isspace() for char in value) or any(char in value for char in ['"', "'", "#", "="]):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def write_env_values(values: dict[str, str]) -> None:
+    env_path = agent.INFORMATION_DIR / ".env"
+    existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    pending = dict(values)
+    updated_lines = []
+
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated_lines.append(line)
+            continue
+
+        key = line.split("=", 1)[0].strip()
+        if key in pending:
+            updated_lines.append(f"{key}={quote_env_value(pending.pop(key).strip())}")
+        else:
+            updated_lines.append(line)
+
+    for key, value in pending.items():
+        updated_lines.append(f"{key}={quote_env_value(value.strip())}")
+
+    env_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+
+def clean_string_list(values: list[str]) -> list[str]:
+    cleaned = []
+    seen = set()
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            continue
+        normalized = value.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(value)
+    return cleaned
+
+
+def write_github_identities(
+    usernames: list[str],
+    author_names: list[str],
+    author_emails: list[str],
+) -> None:
+    lines = []
+    for username in clean_string_list(usernames):
+        lines.append(f"username: {username}")
+    for author_name in clean_string_list(author_names):
+        lines.append(f"name: {author_name}")
+    for author_email in clean_string_list(author_emails):
+        lines.append(f"email: {author_email}")
+    agent.GITHUB_ACCOUNTS_PATH.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def build_github_config_status() -> dict[str, Any]:
+    return {
+        "identities": agent.read_github_identities(),
+        "token_configured": agent.github_token_is_configured(),
+    }
+
+
+def build_provider_config_status() -> dict[str, Any]:
+    providers = []
+    for key, config in PROVIDER_CONFIGS.items():
+        providers.append(
+            {
+                "provider": key,
+                "label": config["label"],
+                "configured": bool(os.getenv(config["api_key_env"])),
+                "base_url": os.getenv(config["base_url_env"], config["default_base_url"]),
+                "model": os.getenv(config["model_env"], config["default_model"]),
+                "default_base_url": config["default_base_url"],
+                "default_model": config["default_model"],
+                "requires_base_url": config["requires_base_url"],
+            }
+        )
+    return {"providers": providers}
+
+
 def get_adapter(provider: Optional[str] = None):
-    name = (provider or agent.current_provider).lower().strip()
+    name = normalize_provider(provider or agent.current_provider)
     try:
         return agent.create_model_adapter(name), name
     except ValueError as error:
@@ -169,6 +331,13 @@ def save_file_content(name: str, content: str) -> None:
         agent.save_interview_prep(content)
         return
     agent.write_text_file(FILE_MAP[name], content)
+
+
+def read_prompt_example() -> str:
+    example_path = agent.BACKGROUND_DIR / "prompt.example.txt"
+    if not example_path.exists():
+        return ""
+    return example_path.read_text(encoding="utf-8")
 
 
 def run_agent_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
@@ -355,6 +524,7 @@ def get_status():
     return {
         "provider": agent.current_provider,
         "model": agent.current_model,
+        "provider_configs": build_provider_config_status()["providers"],
         "files": {name: file_ready(name, path) for name, path in FILE_MAP.items()},
         "outputs": {
             "analysis": list_output_files(agent.ANALYSIS_OUTPUT_DIR, ".txt"),
@@ -373,6 +543,53 @@ def set_provider(body: ProviderBody):
     agent.current_adapter = adapter
     agent.current_model = adapter.default_model()
     return {"provider": agent.current_provider, "model": agent.current_model}
+
+
+@app.get("/api/provider-configs")
+def get_provider_configs():
+    return build_provider_config_status()
+
+
+@app.post("/api/provider-configs")
+def save_provider_config(body: ProviderConfigBody):
+    provider = normalize_provider(body.provider)
+    config = PROVIDER_CONFIGS.get(provider)
+    if not config:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported provider '{body.provider}'.",
+        )
+
+    api_key = body.api_key.strip()
+    base_url = body.base_url.strip()
+    model = body.model.strip()
+
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key cannot be empty.")
+    if config["requires_base_url"] and not base_url:
+        raise HTTPException(status_code=400, detail="Base URL is required for this provider.")
+
+    values = {
+        config["api_key_env"]: api_key,
+        config["base_url_env"]: base_url or config["default_base_url"],
+        config["model_env"]: model or config["default_model"],
+        "MODEL_PROVIDER": provider,
+    }
+    write_env_values(values)
+    for key, value in values.items():
+        os.environ[key] = value
+
+    adapter = agent.create_model_adapter(provider)
+    agent.current_provider = provider
+    agent.current_adapter = adapter
+    agent.current_model = values[config["model_env"]]
+
+    return {
+        "saved": True,
+        "provider": agent.current_provider,
+        "model": agent.current_model,
+        "provider_configs": build_provider_config_status()["providers"],
+    }
 
 
 @app.post("/api/model")
@@ -400,6 +617,26 @@ def put_file(name: str, body: FileBody):
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"saved": True, "name": name}
+
+
+@app.get("/api/prompt")
+def get_prompt():
+    return {
+        "content": agent.PROMPT_PATH.read_text(encoding="utf-8")
+        if agent.PROMPT_PATH.exists()
+        else "",
+        "example": read_prompt_example(),
+    }
+
+
+@app.put("/api/prompt")
+def put_prompt(body: PromptBody):
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+    agent.PROMPT_PATH.write_text(content + "\n", encoding="utf-8")
+    agent.SYSTEM_PROMPT = content
+    return {"saved": True, "content": content}
 
 
 @app.post("/api/agent/ask")
@@ -531,6 +768,25 @@ def github_scan(body: GitHubScanBody):
         ],
         "token_configured": agent.github_token_is_configured(),
         "identities": identities,
+    }
+
+
+@app.get("/api/github/config")
+def get_github_config():
+    return build_github_config_status()
+
+
+@app.post("/api/github/config")
+def save_github_config(body: GitHubConfigBody):
+    write_github_identities(body.usernames, body.author_names, body.author_emails)
+    token = body.token.strip()
+    if token:
+        write_env_values({"GITHUB_TOKEN": token})
+        os.environ["GITHUB_TOKEN"] = token
+
+    return {
+        "saved": True,
+        **build_github_config_status(),
     }
 
 
