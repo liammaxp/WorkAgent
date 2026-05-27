@@ -12,16 +12,19 @@ export default function Resume() {
   const [resume, setResume] = useState("");
   const [tailored, setTailored] = useState("");
   const [useGithub, setUseGithub] = useState(false);
+  const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
   const loadFiles = () =>
     run(async () => {
-      const [base, custom] = await Promise.all([
+      const [base, custom, status] = await Promise.all([
         api.getFile("resume"),
         api.getFile("tailored_resume"),
+        api.getStatus(),
       ]);
       setResume(base.content || "");
       setTailored(custom.content || "");
+      setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
     });
 
   useEffect(() => {
@@ -36,12 +39,15 @@ export default function Resume() {
   const saveTailored = () =>
     run(async () => {
       await api.saveFile("tailored_resume", tailored);
+      const status = await api.getStatus();
+      setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
     }, "定制简历已保存");
 
   const generate = () =>
     run(async () => {
       const data = await api.tailorResume(useGithub);
       setTailored(data.content || "");
+      setOutputPath(data.output_path || data.path || "");
       return data;
     }, "定制简历已生成");
 
@@ -75,6 +81,11 @@ export default function Resume() {
             {loading ? "生成中…" : "根据职位描述生成"}
           </button>
         </div>
+        {outputPath && (
+          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
+            最近输出：{outputPath}
+          </p>
+        )}
       </section>
 
       <EditorCard

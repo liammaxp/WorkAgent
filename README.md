@@ -24,23 +24,27 @@ The project is currently focused on Liam's internship search workflow, with an e
 
 ```text
 .
-├── my-agent/
+├── backend/
 │   ├── main.py              # Core CLI agent and tool logic
 │   ├── api_server.py        # FastAPI HTTP layer for the frontend
 │   ├── requirements.txt     # Python dependencies
-│   └── outputs/             # Generated analysis and GitHub context files
 ├── frontend/
 │   ├── src/                 # React app source
 │   ├── package.json         # Frontend scripts and dependencies
 │   └── vite.config.js       # Vite dev server and /api proxy
-├── prompt.txt               # Local system prompt, ignored by git
+├── information/             # Local private working files and database
+├── background/              # Prompts and project background notes
+├── logs/                    # Project and feature logs
+├── outputs/
+│   ├── backend/             # Generated analysis, cover letters, and GitHub context files
+│   └── frontend/            # Frontend production build output
 └── README.md
 ```
 
 The system has three main layers:
 
-1. `my-agent/main.py`: the core local agent, model adapters, file tools, GitHub context logic, and SQLite application tracking.
-2. `my-agent/api_server.py`: a FastAPI service that wraps the agent into REST endpoints for the frontend.
+1. `backend/main.py`: the core local agent, model adapters, file tools, GitHub context logic, and SQLite application tracking.
+2. `backend/api_server.py`: a FastAPI service that wraps the agent into REST endpoints for the frontend.
 3. `frontend/`: a React + Vite web workspace with pages for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, and chat.
 
 ## Backend Features
@@ -91,17 +95,17 @@ Implemented pages:
 
 WorkAgent intentionally uses local files as the working state for a single user. These files can contain private information and are ignored by git:
 
-- `my-agent/.env`
-- `my-agent/resume.txt`
-- `my-agent/tailored_resume.txt`
-- `my-agent/job_description.txt`
-- `my-agent/cover_letter.txt`
-- `my-agent/interview_prep.txt`
-- `my-agent/memory.json`
-- `my-agent/github_accounts.txt`
-- `my-agent/applications.sqlite3`
-- `my-agent/outputs/`
-- `prompt.txt`
+- `information/.env`
+- `information/resume.txt`
+- `information/tailored_resume.txt`
+- `information/job_description.txt`
+- `information/cover_letter.txt`
+- `information/interview_prep.txt`
+- `information/memory.json`
+- `information/github_accounts.txt`
+- `information/applications.sqlite3`
+- `background/prompt.txt`
+- `outputs/`
 
 Do not commit API keys, resumes, job descriptions, GitHub identities, generated letters, application records, or personal background notes.
 
@@ -127,17 +131,17 @@ If the browser opens before Vite finishes starting, refresh the page after a few
 
 ### Backend
 
-From `my-agent/`:
+From `backend/`:
 
 ```powershell
 pip install -r requirements.txt
-uvicorn api_server:app --reload --host 127.0.0.1 --port 8000
+uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
 ```
 
 The API will run at:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8001
 ```
 
 ### Frontend
@@ -155,14 +159,14 @@ The web app will run at:
 http://localhost:5173
 ```
 
-During development, Vite proxies `/api` requests to `http://127.0.0.1:8000`.
+During development, Vite proxies `/api` requests to `http://127.0.0.1:8001`.
 
 ## CLI Usage
 
 The original CLI workflow is still available:
 
 ```powershell
-cd my-agent
+cd backend
 python main.py
 ```
 
@@ -221,23 +225,27 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 
 ```text
 .
-├── my-agent/
+├── backend/
 │   ├── main.py              # 核心 CLI Agent 与工具逻辑
 │   ├── api_server.py        # 面向前端的 FastAPI HTTP 服务层
 │   ├── requirements.txt     # Python 依赖
-│   └── outputs/             # 生成的职位分析与 GitHub 上下文
 ├── frontend/
 │   ├── src/                 # React 应用源码
 │   ├── package.json         # 前端脚本与依赖
 │   └── vite.config.js       # Vite 开发服务器与 /api 代理
-├── prompt.txt               # 本地系统提示词，被 git 忽略
+├── information/             # 本地私有工作文件与数据库
+├── background/              # 提示词与项目背景材料
+├── logs/                    # 项目与功能日志
+├── outputs/
+│   ├── backend/             # 生成的职位分析、求职信与 GitHub 上下文
+│   └── frontend/            # 前端生产构建产物
 └── README.md
 ```
 
 系统主要分为三层：
 
-1. `my-agent/main.py`：核心本地 Agent，包含模型适配、本地文件工具、GitHub 上下文逻辑和 SQLite 申请记录管理。
-2. `my-agent/api_server.py`：FastAPI 服务，将 Agent 能力封装为 REST 接口供前端调用。
+1. `backend/main.py`：核心本地 Agent，包含模型适配、本地文件工具、GitHub 上下文逻辑和 SQLite 申请记录管理。
+2. `backend/api_server.py`：FastAPI 服务，将 Agent 能力封装为 REST 接口供前端调用。
 3. `frontend/`：React + Vite Web 工作台，包含概览、职位描述、简历、求职信、申请记录、面试准备、GitHub 证据和 Agent 对话页面。
 
 ## 后端功能
@@ -288,17 +296,17 @@ FastAPI 服务提供的主要接口：
 
 WorkAgent 有意使用本地文件作为单用户工作状态。以下文件可能包含个人信息，已被 git 忽略：
 
-- `my-agent/.env`
-- `my-agent/resume.txt`
-- `my-agent/tailored_resume.txt`
-- `my-agent/job_description.txt`
-- `my-agent/cover_letter.txt`
-- `my-agent/interview_prep.txt`
-- `my-agent/memory.json`
-- `my-agent/github_accounts.txt`
-- `my-agent/applications.sqlite3`
-- `my-agent/outputs/`
-- `prompt.txt`
+- `information/.env`
+- `information/resume.txt`
+- `information/tailored_resume.txt`
+- `information/job_description.txt`
+- `information/cover_letter.txt`
+- `information/interview_prep.txt`
+- `information/memory.json`
+- `information/github_accounts.txt`
+- `information/applications.sqlite3`
+- `background/prompt.txt`
+- `outputs/`
 
 不要提交 API key、简历、职位描述、GitHub 身份、生成的求职信、申请记录或个人背景材料。
 
@@ -324,17 +332,17 @@ http://localhost:5173
 
 ### 后端
 
-在 `my-agent/` 目录下运行：
+在 `backend/` 目录下运行：
 
 ```powershell
 pip install -r requirements.txt
-uvicorn api_server:app --reload --host 127.0.0.1 --port 8000
+uvicorn api_server:app --reload --host 127.0.0.1 --port 8001
 ```
 
 API 地址：
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8001
 ```
 
 ### 前端
@@ -352,14 +360,14 @@ Web 应用地址：
 http://localhost:5173
 ```
 
-开发模式下，Vite 会将 `/api` 请求代理到 `http://127.0.0.1:8000`。
+开发模式下，Vite 会将 `/api` 请求代理到 `http://127.0.0.1:8001`。
 
 ## CLI 使用
 
 原始 CLI 工作流仍然可用：
 
 ```powershell
-cd my-agent
+cd backend
 python main.py
 ```
 

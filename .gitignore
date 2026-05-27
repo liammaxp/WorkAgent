@@ -1,26 +1,26 @@
-my-agent/.env
+information/.env
 .env.*
 
-my-agent/github_accounts.txt
-my-agent/job_description.txt
-my-agent/resume.txt
-my-agent/tailored_resume.txt
-my-agent/cover_letter.txt
-my-agent/interview_prep.txt
-my-agent/memory.json
-my-agent/applications.sqlite3
-my-agent/*.sqlite3
-my-agent/*.db
+information/github_accounts.txt
+information/job_description.txt
+information/resume.txt
+information/tailored_resume.txt
+information/cover_letter.txt
+information/interview_prep.txt
+information/memory.json
+information/applications.sqlite3
+information/*.sqlite3
+information/*.db
 
-prompt.txt
-Function background.txt
+background/prompt.txt
+background/function_background.txt
 
 # Logs and generated project status notes
 *.log
-log/
+logs/
 *_features_and_log.txt
 backend_logic_and_api_for_frontend.txt
-project_background_and_purpose.txt
+background/project_background_and_purpose.txt
 
 __pycache__/
 *.pyc
@@ -31,7 +31,7 @@ __pycache__/
 .mypy_cache/
 .cache/
 
-my-agent/outputs/
+outputs/
 
 frontend/node_modules/
 frontend/dist/

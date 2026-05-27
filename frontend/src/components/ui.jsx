@@ -19,6 +19,36 @@ export function LoadingBar({ loading }) {
   return <div className="loading-bar" />;
 }
 
+export function ConfirmDialog({
+  open,
+  title,
+  children,
+  confirmLabel = "确认",
+  cancelLabel = "取消",
+  loading = false,
+  onConfirm,
+  onCancel,
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <h2 id="confirm-dialog-title" className="modal-title">{title}</h2>
+        <div className="modal-body">{children}</div>
+        <div className="modal-actions">
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={loading}>
+            {cancelLabel}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={loading}>
+            {loading ? "处理中…" : confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function useAsyncAction() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");

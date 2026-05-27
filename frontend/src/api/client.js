@@ -81,10 +81,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ resume_source }),
     }),
-  fetchGithubContext: (approved = true) =>
+  fetchGithubContext: (approved = true, resume_source = "resume") =>
     request("/github/context", {
       method: "POST",
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ approved, resume_source }),
     }),
   getApplications: (status = "", limit = 50) => {
     const params = new URLSearchParams();
@@ -101,5 +101,9 @@ export const api = {
     request(`/applications/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  deleteApplication: (id) =>
+    request(`/applications/${id}`, {
+      method: "DELETE",
     }),
 };

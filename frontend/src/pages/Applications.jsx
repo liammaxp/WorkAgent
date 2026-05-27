@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import {
   Alert,
-  EditorCard,
+  ConfirmDialog,
   LoadingBar,
   PageHeader,
   useAsyncAction,
@@ -32,6 +32,7 @@ export default function Applications() {
   const [records, setRecords] = useState([]);
   const [filter, setFilter] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadRecords = () =>
@@ -61,6 +62,13 @@ export default function Applications() {
       await api.updateApplication(id, { status });
       await loadRecords();
     }, "状态已更新");
+
+  const deleteRecord = () =>
+    run(async () => {
+      await api.deleteApplication(deleteTarget.id);
+      setDeleteTarget(null);
+      await loadRecords();
+    }, "申请记录已删除");
 
   return (
     <>
@@ -167,6 +175,15 @@ export default function Applications() {
                       ) : (
                         "—"
                       )}
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-small"
+                        onClick={() => setDeleteTarget(record)}
+                        disabled={loading}
+                        style={{ marginLeft: record.link ? 12 : 0 }}
+                      >
+                        删除
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -175,6 +192,19 @@ export default function Applications() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="删除这条申请记录？"
+        confirmLabel="删除"
+        loading={loading}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={deleteRecord}
+      >
+        <p>
+          将删除 {deleteTarget?.company} 的 {deleteTarget?.role} 记录。这个操作不会删除简历、求职信或其他输出文件。
+        </p>
+      </ConfirmDialog>
     </>
   );
 }

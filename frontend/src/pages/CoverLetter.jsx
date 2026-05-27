@@ -16,21 +16,30 @@ const STYLES = [
   { value: "narrative", label: "项目叙事" },
 ];
 
+let cachedCoverLetter = null;
+
 export default function CoverLetter() {
   const [content, setContent] = useState("");
   const [jobReady, setJobReady] = useState(false);
   const [tailoredReady, setTailoredReady] = useState(false);
   const [style, setStyle] = useState("concise");
   const [useGithub, setUseGithub] = useState(false);
+  const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
   useEffect(() => {
     run(async () => {
-      const [letter, status] = await Promise.all([
-        api.getFile("cover_letter"),
+      const [jobData, status] = await Promise.all([
+        api.getFile("job_description"),
         api.getStatus(),
       ]);
-      setContent(letter.content || "");
+      if (cachedCoverLetter?.jobDescription === jobData.content) {
+        setContent(cachedCoverLetter.content);
+        setOutputPath(cachedCoverLetter.outputPath || "");
+      } else if (!cachedCoverLetter) {
+        setContent("");
+        setOutputPath("");
+      }
       setJobReady(status.files.job_description);
       setTailoredReady(status.files.tailored_resume);
     });
@@ -38,17 +47,30 @@ export default function CoverLetter() {
 
   const save = () =>
     run(async () => {
+      const jobData = await api.getFile("job_description");
       await api.saveFile("cover_letter", content);
+      cachedCoverLetter = {
+        content,
+        jobDescription: jobData.content || "",
+        outputPath,
+      };
     }, "求职信已保存");
 
   const generate = () =>
     run(async () => {
+      const jobData = await api.getFile("job_description");
       const data = await api.generateCoverLetter({
         use_tailored_resume: true,
         use_github_context: useGithub,
         style,
       });
       setContent(data.content || "");
+      setOutputPath(data.output_path || data.path || "");
+      cachedCoverLetter = {
+        content: data.content || "",
+        jobDescription: jobData.content || "",
+        outputPath: data.output_path || data.path || "",
+      };
       return data;
     }, "求职信已生成");
 
@@ -102,6 +124,11 @@ export default function CoverLetter() {
             {loading ? "生成中…" : "生成求职信"}
           </button>
         </div>
+        {outputPath && (
+          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
+            最近输出：{outputPath}
+          </p>
+        )}
       </section>
 
       <EditorCard

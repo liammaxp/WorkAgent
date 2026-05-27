@@ -16,21 +16,28 @@ import urllib.request
 
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+ROOT_DIR = BASE_DIR.parent
+BACKGROUND_DIR = ROOT_DIR / "background"
+INFORMATION_DIR = ROOT_DIR / "information"
+load_dotenv(INFORMATION_DIR / ".env")
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt.txt"
+PROMPT_PATH = BACKGROUND_DIR / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
-MEMORY_PATH = BASE_DIR / "memory.json"
-RESUME_PATH = BASE_DIR / "resume.txt"
-JOB_DESCRIPTION_PATH = BASE_DIR / "job_description.txt"
-GITHUB_ACCOUNTS_PATH = BASE_DIR / "github_accounts.txt"
-OUTPUT_DIR = BASE_DIR / "outputs"
+MEMORY_PATH = INFORMATION_DIR / "memory.json"
+RESUME_PATH = INFORMATION_DIR / "resume.txt"
+JOB_DESCRIPTION_PATH = INFORMATION_DIR / "job_description.txt"
+GITHUB_ACCOUNTS_PATH = INFORMATION_DIR / "github_accounts.txt"
+OUTPUT_DIR = ROOT_DIR / "outputs" / "backend"
 ANALYSIS_OUTPUT_DIR = OUTPUT_DIR / "analysis"
 GITHUB_CONTEXT_OUTPUT_DIR = OUTPUT_DIR / "github_context"
-OUTPUT_RESUME_PATH = BASE_DIR / "tailored_resume.txt"
-COVER_LETTER_PATH = BASE_DIR / "cover_letter.txt"
-INTERVIEW_PREP_PATH = BASE_DIR / "interview_prep.txt"
-APPLICATION_DB_PATH = BASE_DIR / "applications.sqlite3"
+COVER_LETTER_OUTPUT_DIR = OUTPUT_DIR / "cover_letters"
+INTERVIEW_PREP_OUTPUT_DIR = OUTPUT_DIR / "interview_prep"
+TAILORED_RESUME_OUTPUT_DIR = OUTPUT_DIR / "tailored_resumes"
+OUTPUT_RESUME_PATH = TAILORED_RESUME_OUTPUT_DIR / "tailored_resume.txt"
+LEGACY_OUTPUT_RESUME_PATH = INFORMATION_DIR / "tailored_resume.txt"
+COVER_LETTER_PATH = INFORMATION_DIR / "cover_letter.txt"
+INTERVIEW_PREP_PATH = INFORMATION_DIR / "interview_prep.txt"
+APPLICATION_DB_PATH = INFORMATION_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
 DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 JOB_AGENT_PROMPT = """
@@ -43,7 +50,6 @@ Analyze the job description and produce:
 5. Best matching user projects
 6. Resume summary rewrite
 7. 3-5 resume bullet points
-8. Cover letter draft
 
 Match score rubric:
 - Required technical skills and keyword overlap with the job description: 40 points
@@ -57,6 +63,7 @@ Score higher when the user's resume, memory, and approved GitHub evidence closel
 Use the available tools to read memory.json, resume.txt, and job_description.txt.
 Use GitHub context only if needed and approved by the user.
 Be specific and do not exaggerate the user's experience.
+Do not generate a cover letter in this analysis. Cover letters are generated only when the user explicitly requests one.
 """
 COVER_LETTER_AGENT_PROMPT = """
 Write a tailored cover letter for the saved job description.
@@ -686,7 +693,9 @@ def read_resume():
 
 
 def read_tailored_resume():
-    return read_text_file(OUTPUT_RESUME_PATH)
+    if file_is_ready(OUTPUT_RESUME_PATH):
+        return read_text_file(OUTPUT_RESUME_PATH)
+    return read_text_file(LEGACY_OUTPUT_RESUME_PATH)
 
 
 def read_job_description():
@@ -698,18 +707,24 @@ def save_tailored_resume(content):
     if not latex:
         raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
 
+    version_path = TAILORED_RESUME_OUTPUT_DIR / f"tailored_resume_{timestamp_slug()}.txt"
     write_text_file(OUTPUT_RESUME_PATH, latex)
-    return f"Saved tailored resume to {OUTPUT_RESUME_PATH}"
+    write_text_file(version_path, latex)
+    return f"Saved tailored resume to {OUTPUT_RESUME_PATH} and {version_path}"
 
 
 def save_cover_letter(content):
+    output_path = COVER_LETTER_OUTPUT_DIR / f"cover_letter_{timestamp_slug()}.txt"
     write_text_file(COVER_LETTER_PATH, content)
-    return f"Saved cover letter to {COVER_LETTER_PATH}"
+    write_text_file(output_path, content)
+    return f"Saved cover letter to {COVER_LETTER_PATH} and {output_path}"
 
 
 def save_interview_prep(content):
+    output_path = INTERVIEW_PREP_OUTPUT_DIR / f"interview_prep_{timestamp_slug()}.txt"
     write_text_file(INTERVIEW_PREP_PATH, content)
-    return f"Saved interview preparation notes to {INTERVIEW_PREP_PATH}"
+    write_text_file(output_path, content)
+    return f"Saved interview preparation notes to {INTERVIEW_PREP_PATH} and {output_path}"
 
 
 def initialize_application_db():
@@ -856,6 +871,23 @@ def update_application_record(
     return json.dumps(
         {
             "updated": cursor.rowcount > 0,
+            "id": record_id,
+        },
+        ensure_ascii=False,
+    )
+
+
+def delete_application_record(record_id):
+    initialize_application_db()
+    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+        cursor = connection.execute(
+            "DELETE FROM applications WHERE id = ?",
+            (record_id,),
+        )
+
+    return json.dumps(
+        {
+            "deleted": cursor.rowcount > 0,
             "id": record_id,
         },
         ensure_ascii=False,
@@ -1214,7 +1246,7 @@ def github_token_is_configured():
 
 def print_github_token_status():
     if not github_token_is_configured():
-        print("Agent: No GITHUB_TOKEN was loaded from my-agent/.env.")
+        print(f"Agent: No GITHUB_TOKEN was loaded from {INFORMATION_DIR / '.env'}.")
         return
 
     try:
@@ -1606,7 +1638,7 @@ def build_github_context(resume):
         )
         print(
             "Agent: If these are private/classroom repositories, add a valid GITHUB_TOKEN "
-            "with access to them in my-agent/.env.\n"
+            f"with access to them in {INFORMATION_DIR / '.env'}.\n"
         )
         return ""
 
@@ -2020,38 +2052,6 @@ def run_cli():
 
                 save_tailored_resume(resume_answer)
                 print(f"\nAgent: Modified resume LaTeX saved to {OUTPUT_RESUME_PATH}\n")
-
-                cover_permission = input(
-                    "Agent: Do you want me to generate a cover letter from the modified resume and job description now? "
-                    "Type yes to generate, or anything else to skip: "
-                )
-                if cover_permission.strip().lower() in ["y", "yes"]:
-                    try:
-                        cover_letter_mtime = (
-                            COVER_LETTER_PATH.stat().st_mtime_ns
-                            if COVER_LETTER_PATH.exists()
-                            else None
-                        )
-                        cover_letter_answer = ask_agent(
-                            COVER_LETTER_AGENT_PROMPT,
-                            adapter=current_adapter,
-                            model=current_model,
-                        )
-                    except (FileNotFoundError, ValueError) as error:
-                        print(f"\nAgent: {error}\n")
-                        continue
-                    except transient_network_errors() as error:
-                        print(f"\nAgent: Network request failed after retries: {error}\n")
-                        continue
-
-                    cover_letter_was_saved = (
-                        COVER_LETTER_PATH.exists()
-                        and COVER_LETTER_PATH.stat().st_mtime_ns != cover_letter_mtime
-                    )
-                    if cover_letter_answer.strip() and not cover_letter_was_saved:
-                        save_cover_letter(cover_letter_answer)
-
-                    print(f"\nAgent: Cover letter saved to {COVER_LETTER_PATH}\n")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendDir = Join-Path $root "my-agent"
+$backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
 $url = "http://localhost:5173"
 

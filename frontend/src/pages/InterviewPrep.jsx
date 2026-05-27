@@ -11,12 +11,17 @@ import {
 export default function InterviewPrep() {
   const [content, setContent] = useState("");
   const [useGithub, setUseGithub] = useState(true);
+  const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
   useEffect(() => {
     run(async () => {
-      const data = await api.getFile("interview_prep");
+      const [data, status] = await Promise.all([
+        api.getFile("interview_prep"),
+        api.getStatus(),
+      ]);
       setContent(data.content || "");
+      setOutputPath(status.outputs?.interview_prep?.[0]?.path || "");
     });
   }, []);
 
@@ -29,6 +34,7 @@ export default function InterviewPrep() {
     run(async () => {
       const data = await api.generateInterviewPrep(useGithub);
       setContent(data.content || "");
+      setOutputPath(data.output_path || data.path || "");
       return data;
     }, "面试准备已生成");
 
@@ -53,6 +59,11 @@ export default function InterviewPrep() {
             {loading ? "生成中…" : "生成面试准备"}
           </button>
         </div>
+        {outputPath && (
+          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
+            最近输出：{outputPath}
+          </p>
+        )}
       </section>
 
       <EditorCard

@@ -39,7 +39,7 @@ Requirements:
 - Read job_description.txt, tailored_resume.txt (fallback to resume.txt), and memory.json.
 - Include likely technical questions, behavioral/STAR prompts, project talking points, and gaps to prepare for.
 - Keep claims grounded in the resume and job description.
-- Save the final notes with save_interview_prep.
+- Return the complete interview preparation notes directly.
 """
 
 RESUME_TAILOR_PROMPT = """
@@ -96,6 +96,7 @@ class GitHubScanBody(BaseModel):
 
 class GitHubContextBody(BaseModel):
     approved: bool = True
+    resume_source: str = "resume"
 
 
 class ApplicationCreateBody(BaseModel):
@@ -136,12 +137,25 @@ def list_output_files(directory: Path, suffix: str, limit: int = 5) -> list[dict
 
 
 def read_file_content(name: str) -> tuple[bool, str]:
+    if name == "tailored_resume" and not agent.file_is_ready(agent.OUTPUT_RESUME_PATH):
+        if not agent.LEGACY_OUTPUT_RESUME_PATH.exists():
+            return False, ""
+        content = agent.LEGACY_OUTPUT_RESUME_PATH.read_text(encoding="utf-8")
+        ready = agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
+        return ready, content
+
     path = FILE_MAP[name]
     if not path.exists():
         return False, ""
     content = path.read_text(encoding="utf-8")
     ready = agent.file_is_ready(path)
     return ready, content
+
+
+def file_ready(name: str, path: Path) -> bool:
+    if name == "tailored_resume":
+        return agent.file_is_ready(path) or agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
+    return agent.file_is_ready(path)
 
 
 def save_file_content(name: str, content: str) -> None:
@@ -170,12 +184,138 @@ def run_agent_task(message: str, provider: Optional[str] = None, model: Optional
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
-def fetch_github_context_api(approved: bool) -> dict[str, Any]:
+def run_text_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
+    adapter, _ = get_adapter(provider)
+    chosen_model = model or adapter.default_model()
+    try:
+        response = adapter.create_response(
+            model=chosen_model,
+            instructions=agent.SYSTEM_PROMPT,
+            tools=[],
+            input_items=[{"role": "user", "content": message}],
+        )
+        return adapter.output_text(response)
+    except agent.transient_network_errors() as error:
+        raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+def build_interview_prep_prompt(use_github_context: bool) -> str:
+    try:
+        job_description = agent.read_job_description()
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
+        resume = agent.read_tailored_resume()
+        resume_source = "tailored_resume.txt"
+    except (FileNotFoundError, ValueError):
+        try:
+            resume = agent.read_resume()
+            resume_source = "resume.txt"
+        except (FileNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    memory = agent.read_memory()
+    github_context = read_approved_github_context() if use_github_context else ""
+
+    github_section = (
+        f"\nApproved GitHub context:\n{github_context}\n"
+        if use_github_context
+        else "\nApproved GitHub context: Not requested for this generation.\n"
+    )
+
+    return f"""
+Create complete interview preparation notes for the job application below.
+
+Rules:
+- Use only the job description, resume, memory, and approved GitHub context provided here.
+- Do not invent projects, employers, degrees, technologies, metrics, or repository facts.
+- If evidence is weak or missing, say what to prepare or verify instead of fabricating.
+- Return only the notes content. Do not say that you saved a file. Do not include placeholders.
+- Write in concise Chinese unless the job description strongly implies English-only preparation.
+- Include these sections:
+  1. 职位重点
+  2. 技术问题准备
+  3. 项目讲述要点
+  4. 行为面试 / STAR 素材
+  5. 需要补强或确认的内容
+  6. 反问面试官的问题
+
+Job description:
+{job_description}
+
+Resume source: {resume_source}
+Resume:
+{resume}
+
+Memory:
+{memory}
+{github_section}
+"""
+
+
+def looks_like_interview_prep(content: str) -> bool:
+    text = content.strip()
+    lowered = text.lower()
+    if len(text) < 400:
+        return False
+    rejected_phrases = [
+        "saved interview preparation notes",
+        "interview preparation notes saved",
+        "saved to",
+        "placeholder",
+        "lorem ipsum",
+        "no usable",
+    ]
+    if any(phrase in lowered[:300] for phrase in rejected_phrases):
+        return False
+    section_hits = sum(
+        1
+        for marker in [
+            "职位重点",
+            "技术问题",
+            "项目讲述",
+            "STAR",
+            "行为面试",
+            "补强",
+            "反问",
+        ]
+        if marker in text
+    )
+    return section_hits >= 3
+
+
+def read_approved_github_context() -> str:
+    outputs = list_output_files(agent.GITHUB_CONTEXT_OUTPUT_DIR, ".json", limit=1)
+    if not outputs:
+        return "No approved GitHub context is available. Ask the user to approve GitHub access in the web UI first."
+
+    path = Path(outputs[0]["path"])
+    try:
+        context = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return f"Approved GitHub context could not be read: {error}"
+
+    if not agent.has_usable_repo_context(context):
+        return "No usable approved GitHub context is available."
+
+    return json.dumps(context, ensure_ascii=False, indent=2)
+
+
+agent.TOOL_FUNCTIONS["read_github_context"] = read_approved_github_context
+
+
+def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> dict[str, Any]:
     if not approved:
         return {"saved": False, "message": "GitHub context fetch was not approved."}
 
     try:
-        resume = agent.read_resume()
+        if resume_source == "tailored_resume":
+            resume = agent.read_tailored_resume()
+        else:
+            resume = agent.read_resume()
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -215,9 +355,12 @@ def get_status():
     return {
         "provider": agent.current_provider,
         "model": agent.current_model,
-        "files": {name: agent.file_is_ready(path) for name, path in FILE_MAP.items()},
+        "files": {name: file_ready(name, path) for name, path in FILE_MAP.items()},
         "outputs": {
             "analysis": list_output_files(agent.ANALYSIS_OUTPUT_DIR, ".txt"),
+            "tailored_resumes": list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt"),
+            "cover_letters": list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt"),
+            "interview_prep": list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt"),
             "github_context": list_output_files(agent.GITHUB_CONTEXT_OUTPUT_DIR, ".json"),
         },
     }
@@ -308,9 +451,11 @@ def tailor_resume(body: TailorBody):
         agent.save_tailored_resume(answer)
     else:
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     return {
         "saved": True,
         "path": str(agent.OUTPUT_RESUME_PATH),
+        "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
     }
 
@@ -323,12 +468,23 @@ def generate_cover_letter(body: CoverLetterBody):
         prompt += "\nUse resume.txt instead of tailored_resume.txt if the user requested it."
     if body.use_github_context:
         prompt += "\nYou may use GitHub context conservatively when it supports a specific claim."
+    cover_letter_mtime = (
+        agent.COVER_LETTER_PATH.stat().st_mtime_ns
+        if agent.COVER_LETTER_PATH.exists()
+        else None
+    )
     answer = run_agent_task(prompt)
-    if answer.strip():
+    cover_letter_was_saved = (
+        agent.COVER_LETTER_PATH.exists()
+        and agent.COVER_LETTER_PATH.stat().st_mtime_ns != cover_letter_mtime
+    )
+    if answer.strip() and not cover_letter_was_saved:
         agent.save_cover_letter(answer)
+    cover_letter_outputs = list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt", limit=1)
     return {
         "saved": True,
         "path": str(agent.COVER_LETTER_PATH),
+        "output_path": cover_letter_outputs[0]["path"] if cover_letter_outputs else None,
         "content": agent.read_text_file(agent.COVER_LETTER_PATH)
         if agent.file_is_ready(agent.COVER_LETTER_PATH)
         else answer,
@@ -337,15 +493,19 @@ def generate_cover_letter(body: CoverLetterBody):
 
 @app.post("/api/interview-prep/generate")
 def generate_interview_prep(body: InterviewPrepBody):
-    prompt = INTERVIEW_PREP_PROMPT
-    if body.use_github_context:
-        prompt += "\nUse GitHub context conservatively when it helps explain project work."
-    answer = run_agent_task(prompt)
-    if answer.strip():
-        agent.save_interview_prep(answer)
+    prompt = build_interview_prep_prompt(body.use_github_context)
+    answer = run_text_task(prompt)
+    if not looks_like_interview_prep(answer):
+        raise HTTPException(
+            status_code=400,
+            detail="Agent did not return usable interview preparation notes. Please regenerate after checking the job description and resume.",
+        )
+    agent.save_interview_prep(answer)
+    interview_prep_outputs = list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt", limit=1)
     return {
         "saved": True,
         "path": str(agent.INTERVIEW_PREP_PATH),
+        "output_path": interview_prep_outputs[0]["path"] if interview_prep_outputs else None,
         "content": agent.read_text_file(agent.INTERVIEW_PREP_PATH)
         if agent.file_is_ready(agent.INTERVIEW_PREP_PATH)
         else answer,
@@ -377,7 +537,7 @@ def github_scan(body: GitHubScanBody):
 @app.post("/api/github/context")
 def github_context(body: GitHubContextBody):
     try:
-        return fetch_github_context_api(body.approved)
+        return fetch_github_context_api(body.approved, body.resume_source)
     except agent.transient_network_errors() as error:
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
 
@@ -413,7 +573,16 @@ def patch_application(record_id: int, body: ApplicationUpdateBody):
     return result
 
 
+@app.delete("/api/applications/{record_id}")
+def delete_application(record_id: int):
+    raw = agent.delete_application_record(record_id)
+    result = json.loads(raw)
+    if not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("api_server:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("api_server:app", host="127.0.0.1", port=8001, reload=True)

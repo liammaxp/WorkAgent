@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client.js";
 import {
   Alert,
+  ConfirmDialog,
   LoadingBar,
   PageHeader,
   StatusBadge,
@@ -12,6 +13,7 @@ export default function GitHubContext() {
   const [scan, setScan] = useState(null);
   const [context, setContext] = useState(null);
   const [source, setSource] = useState("resume");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const { loading, error, success, run } = useAsyncAction();
 
   const scanRepos = () =>
@@ -22,12 +24,22 @@ export default function GitHubContext() {
       return data;
     }, "仓库扫描完成");
 
-  const fetchContext = () =>
+  const fetchContext = () => setConfirmOpen(true);
+
+  const approveFetchContext = () =>
     run(async () => {
-      const data = await api.fetchGithubContext(true);
+      const data = await api.fetchGithubContext(true, source);
       setContext(data);
+      setConfirmOpen(false);
       return data;
     }, "GitHub 上下文已获取");
+
+  const identities = scan?.identities || {};
+  const identityItems = [
+    ...(identities.usernames || []).map((value) => `GitHub username: ${value}`),
+    ...(identities.author_names || []).map((value) => `Commit author name: ${value}`),
+    ...(identities.author_emails || []).map((value) => `Commit author email: ${value}`),
+  ];
 
   return (
     <>
@@ -90,6 +102,39 @@ export default function GitHubContext() {
           </pre>
         </section>
       )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="允许读取 GitHub 仓库信息？"
+        confirmLabel="允许并获取"
+        loading={loading}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={approveFetchContext}
+      >
+        <p>WorkAgent 将访问下面这些仓库的公开或已授权信息，包括 README、语言、目录、提交记录和 diff 信号，用来辅助简历、求职信或面试准备。</p>
+        {scan?.repos?.length ? (
+          <ul>
+            {scan.repos.map((repo) => (
+              <li key={repo.url}>{repo.owner}/{repo.repo}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>当前没有可读取的仓库。</p>
+        )}
+        <p style={{ marginTop: 12 }}>
+          Token 状态：<StatusBadge ready={scan?.token_configured} />
+        </p>
+        {identityItems.length > 0 && (
+          <>
+            <p>将用这些身份匹配你的提交：</p>
+            <ul>
+              {identityItems.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </ConfirmDialog>
     </>
   );
 }
