@@ -78,6 +78,7 @@ class AgentAskBody(BaseModel):
     message: str
     provider: Optional[str] = None
     model: Optional[str] = None
+    language: str = "zh"
 
 
 class JobDescriptionBody(BaseModel):
@@ -86,20 +87,24 @@ class JobDescriptionBody(BaseModel):
 
 class AnalyzeBody(BaseModel):
     use_github_context: bool = False
+    language: str = "zh"
 
 
 class TailorBody(BaseModel):
     use_github_context: bool = True
+    language: str = "zh"
 
 
 class CoverLetterBody(BaseModel):
     use_tailored_resume: bool = True
     use_github_context: bool = False
     style: str = "concise"
+    language: str = "zh"
 
 
 class InterviewPrepBody(BaseModel):
     use_github_context: bool = True
+    language: str = "zh"
 
 
 class GitHubScanBody(BaseModel):
@@ -340,6 +345,20 @@ def read_prompt_example() -> str:
     return example_path.read_text(encoding="utf-8")
 
 
+def normalize_language(language: str) -> str:
+    return "en" if (language or "").lower().strip().startswith("en") else "zh"
+
+
+def output_language_instruction(language: str) -> str:
+    if normalize_language(language) != "en":
+        return ""
+    return (
+        "\n\nOutput language requirement: respond entirely in English. "
+        "All user-facing headings, analysis, recommendations, cover letters, "
+        "interview preparation notes, and chat responses must be English."
+    )
+
+
 def run_agent_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
     adapter, _ = get_adapter(provider)
     chosen_model = model or adapter.default_model()
@@ -370,7 +389,7 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
-def build_interview_prep_prompt(use_github_context: bool) -> str:
+def build_interview_prep_prompt(use_github_context: bool, language: str = "zh") -> str:
     try:
         job_description = agent.read_job_description()
     except (FileNotFoundError, ValueError) as error:
@@ -395,7 +414,7 @@ def build_interview_prep_prompt(use_github_context: bool) -> str:
         else "\nApproved GitHub context: Not requested for this generation.\n"
     )
 
-    return f"""
+    prompt = f"""
 Create complete interview preparation notes for the job application below.
 
 Rules:
@@ -423,6 +442,7 @@ Memory:
 {memory}
 {github_section}
 """
+    return prompt + output_language_instruction(language)
 
 
 def looks_like_interview_prep(content: str) -> bool:
@@ -647,7 +667,11 @@ def agent_ask(body: AgentAskBody):
     if body.model:
         agent.current_model = body.model.strip()
 
-    answer = run_agent_task(body.message, body.provider, body.model)
+    answer = run_agent_task(
+        body.message + output_language_instruction(body.language),
+        body.provider,
+        body.model,
+    )
     return {
         "answer": answer,
         "artifacts": {
@@ -673,6 +697,7 @@ def analyze_job_description(body: AnalyzeBody):
     message = agent.JOB_AGENT_PROMPT
     if body.use_github_context:
         message += "\nUse GitHub context if available and approved."
+    message += output_language_instruction(body.language)
     answer = run_agent_task(message)
     analysis_path = agent.save_analysis_output(answer)
     return {"analysis": answer, "analysis_path": str(analysis_path)}
@@ -680,7 +705,7 @@ def analyze_job_description(body: AnalyzeBody):
 
 @app.post("/api/resume/tailor")
 def tailor_resume(body: TailorBody):
-    prompt = RESUME_TAILOR_PROMPT
+    prompt = RESUME_TAILOR_PROMPT + output_language_instruction(body.language)
     if body.use_github_context:
         prompt += "\nUse read_github_context if needed, but only with user approval via the web UI."
     answer = run_agent_task(prompt)
@@ -700,7 +725,7 @@ def tailor_resume(body: TailorBody):
 @app.post("/api/cover-letter/generate")
 def generate_cover_letter(body: CoverLetterBody):
     style_hint = f"\nPreferred style: {body.style}."
-    prompt = agent.COVER_LETTER_AGENT_PROMPT + style_hint
+    prompt = agent.COVER_LETTER_AGENT_PROMPT + style_hint + output_language_instruction(body.language)
     if not body.use_tailored_resume:
         prompt += "\nUse resume.txt instead of tailored_resume.txt if the user requested it."
     if body.use_github_context:
@@ -730,7 +755,7 @@ def generate_cover_letter(body: CoverLetterBody):
 
 @app.post("/api/interview-prep/generate")
 def generate_interview_prep(body: InterviewPrepBody):
-    prompt = build_interview_prep_prompt(body.use_github_context)
+    prompt = build_interview_prep_prompt(body.use_github_context, body.language)
     answer = run_text_task(prompt)
     if not looks_like_interview_prep(answer):
         raise HTTPException(

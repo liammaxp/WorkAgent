@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { text, useLanguage } from "../i18n.jsx";
 
 export function PageHeader({ title, description }) {
   return (
@@ -23,12 +24,15 @@ export function ConfirmDialog({
   open,
   title,
   children,
-  confirmLabel = "确认",
-  cancelLabel = "取消",
+  confirmLabel,
+  cancelLabel,
   loading = false,
   onConfirm,
   onCancel,
 }) {
+  const { language } = useLanguage();
+  const common = text[language].common;
+
   if (!open) return null;
 
   return (
@@ -38,10 +42,10 @@ export function ConfirmDialog({
         <div className="modal-body">{children}</div>
         <div className="modal-actions">
           <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={loading}>
-            {cancelLabel}
+            {cancelLabel || common.cancel}
           </button>
           <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={loading}>
-            {loading ? "处理中…" : confirmLabel}
+            {loading ? common.loading : confirmLabel || common.confirm}
           </button>
         </div>
       </section>
@@ -63,7 +67,7 @@ export function useAsyncAction() {
       if (successMessage) setSuccess(successMessage);
       return result;
     } catch (err) {
-      setError(err.message || "操作失败");
+      setError(err.message || "Operation failed");
       return null;
     } finally {
       setLoading(false);
@@ -74,9 +78,12 @@ export function useAsyncAction() {
 }
 
 export function StatusBadge({ ready }) {
+  const { language } = useLanguage();
+  const common = text[language].common;
+
   return (
     <span className={`badge ${ready ? "ok" : "missing"}`}>
-      {ready ? "已就绪" : "未配置"}
+      {ready ? common.ready : common.missing}
     </span>
   );
 }
@@ -90,6 +97,9 @@ export function EditorCard({
   placeholder,
   short = false,
 }) {
+  const { language } = useLanguage();
+  const common = text[language].common;
+
   return (
     <section className="card">
       <h2 className="card-title">{title}</h2>
@@ -109,7 +119,7 @@ export function EditorCard({
             onClick={onSave}
             disabled={saving}
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? common.saving : common.save}
           </button>
         </div>
       )}

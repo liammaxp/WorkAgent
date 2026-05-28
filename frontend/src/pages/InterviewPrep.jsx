@@ -7,8 +7,12 @@ import {
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
 export default function InterviewPrep() {
+  const { language } = useLanguage();
+  const copy = text[language].interview;
+  const common = text[language].common;
   const [content, setContent] = useState("");
   const [useGithub, setUseGithub] = useState(true);
   const [outputPath, setOutputPath] = useState("");
@@ -28,7 +32,7 @@ export default function InterviewPrep() {
   const save = () =>
     run(async () => {
       await api.saveFile("interview_prep", content);
-    }, "面试准备已保存");
+    }, copy.saved);
 
   const generate = () =>
     run(async () => {
@@ -36,34 +40,27 @@ export default function InterviewPrep() {
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       return data;
-    }, "面试准备已生成");
+    }, copy.generated);
 
   return (
     <>
-      <PageHeader
-        title="面试准备"
-        description="根据职位描述与简历生成技术问题、STAR 回答要点与项目讲述。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 
       <section className="card">
-        <h2 className="card-title">生成选项</h2>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-muted)" }}>
+        <h2 className="card-title">{common.generateOptions}</h2>
+        <label className="inline-check">
           <input type="checkbox" checked={useGithub} onChange={(e) => setUseGithub(e.target.checked)} />
-          参考 GitHub 项目证据
+          {copy.useGithub}
         </label>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
-            {loading ? "生成中…" : "生成面试准备"}
+            {loading ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && (
-          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
-            最近输出：{outputPath}
-          </p>
-        )}
+        {outputPath && <p className="meta-line">{common.recentOutput}{outputPath}</p>}
       </section>
 
       <EditorCard
@@ -72,7 +69,7 @@ export default function InterviewPrep() {
         onChange={setContent}
         onSave={save}
         saving={loading}
-        placeholder="面试准备笔记将显示在这里…"
+        placeholder={copy.placeholder}
         short
       />
     </>

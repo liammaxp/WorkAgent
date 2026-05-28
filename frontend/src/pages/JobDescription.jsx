@@ -7,10 +7,13 @@ import {
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
 let cachedAnalysis = null;
 
 export default function JobDescription() {
+  const { language } = useLanguage();
+  const copy = text[language].job;
   const [content, setContent] = useState("");
   const [analysis, setAnalysis] = useState("");
   const { loading, error, success, run } = useAsyncAction();
@@ -34,7 +37,7 @@ export default function JobDescription() {
         cachedAnalysis = null;
         setAnalysis("");
       }
-    }, "职位描述已保存");
+    }, copy.saved);
 
   const analyze = () =>
     run(async () => {
@@ -46,39 +49,36 @@ export default function JobDescription() {
         jobDescription: content,
       };
       return data;
-    }, "职位分析完成");
+    }, copy.analyzed);
 
   return (
     <>
-      <PageHeader
-        title="职位描述"
-        description="粘贴目标岗位 JD，保存后一键分析匹配度与重点技能。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 
       <EditorCard
-        title="职位描述内容"
+        title={copy.editorTitle}
         value={content}
         onChange={setContent}
-        placeholder="粘贴职位描述…"
+        placeholder={copy.placeholder}
       />
 
       <section className="card">
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={save} disabled={loading}>
-            保存
+            {text[language].common.save}
           </button>
           <button type="button" className="btn btn-primary" onClick={analyze} disabled={loading}>
-            {loading ? "分析中…" : "分析职位"}
+            {loading ? copy.analyzing : copy.analyze}
           </button>
         </div>
       </section>
 
       {analysis && (
         <section className="card">
-          <h2 className="card-title">分析结果</h2>
+          <h2 className="card-title">{copy.result}</h2>
           <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: 0, fontSize: 14, lineHeight: 1.7 }}>
             {analysis}
           </pre>

@@ -7,8 +7,12 @@ import {
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
 export default function Resume() {
+  const { language } = useLanguage();
+  const copy = text[language].resume;
+  const common = text[language].common;
   const [resume, setResume] = useState("");
   const [tailored, setTailored] = useState("");
   const [useGithub, setUseGithub] = useState(false);
@@ -34,14 +38,14 @@ export default function Resume() {
   const saveResume = () =>
     run(async () => {
       await api.saveFile("resume", resume);
-    }, "原始简历已保存");
+    }, copy.originalSaved);
 
   const saveTailored = () =>
     run(async () => {
       await api.saveFile("tailored_resume", tailored);
       const status = await api.getStatus();
       setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
-    }, "定制简历已保存");
+    }, copy.tailoredSaved);
 
   const generate = () =>
     run(async () => {
@@ -49,52 +53,49 @@ export default function Resume() {
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       return data;
-    }, "定制简历已生成");
+    }, copy.generated);
 
   return (
     <>
-      <PageHeader
-        title="简历"
-        description="编辑原始 LaTeX 简历，并根据当前职位描述生成定制版本。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 
       <EditorCard
-        title="原始简历 (resume.txt)"
+        title={copy.original}
         value={resume}
         onChange={setResume}
         onSave={saveResume}
         saving={loading}
-        placeholder="LaTeX 简历内容…"
+        placeholder={copy.originalPlaceholder}
       />
 
       <section className="card">
-        <h2 className="card-title">生成定制简历</h2>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-muted)" }}>
+        <h2 className="card-title">{copy.generateTitle}</h2>
+        <label className="inline-check">
           <input type="checkbox" checked={useGithub} onChange={(e) => setUseGithub(e.target.checked)} />
-          尝试使用 GitHub 上下文（需先在 GitHub 页面获取）
+          {copy.useGithub}
         </label>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
-            {loading ? "生成中…" : "根据职位描述生成"}
+            {loading ? copy.generating : copy.generate}
           </button>
         </div>
         {outputPath && (
-          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
-            最近输出：{outputPath}
+          <p className="meta-line">
+            {common.recentOutput}{outputPath}
           </p>
         )}
       </section>
 
       <EditorCard
-        title="定制简历 (tailored_resume.txt)"
+        title={copy.tailored}
         value={tailored}
         onChange={setTailored}
         onSave={saveTailored}
         saving={loading}
-        placeholder="生成后的 LaTeX 将显示在这里…"
+        placeholder={copy.tailoredPlaceholder}
       />
     </>
   );

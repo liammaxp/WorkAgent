@@ -4,6 +4,22 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
 $url = "http://localhost:5173"
+$backendUrl = "http://127.0.0.1:8001/api/status"
+
+function Test-HttpReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 2
+        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400)
+    }
+    catch {
+        return $false
+    }
+}
 
 if (-not (Test-Path $backendDir)) {
     Write-Host "Backend directory not found: $backendDir"
@@ -15,24 +31,25 @@ if (-not (Test-Path $frontendDir)) {
     exit 1
 }
 
-Write-Host "Starting WorkAgent backend..."
-Start-Process powershell -ArgumentList @(
-    "-NoExit",
-    "-Command",
-    "Set-Location '$backendDir'; python -m uvicorn api_server:app --reload --host 127.0.0.1 --port 8001"
-)
+if (Test-HttpReady $backendUrl) {
+    Write-Host "Backend is already running on http://127.0.0.1:8001."
+    $backendReady = $true
+}
+else {
+    Write-Host "Starting WorkAgent backend..."
+    Start-Process powershell -ArgumentList @(
+        "-NoExit",
+        "-Command",
+        "Set-Location '$backendDir'; python -m uvicorn api_server:app --host 127.0.0.1 --port 8001"
+    )
 
-Write-Host "Waiting for backend on http://127.0.0.1:8001 ..."
-$backendReady = $false
-for ($i = 1; $i -le 30; $i++) {
-    try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:8001/api/status" -UseBasicParsing -TimeoutSec 2
-        if ($response.StatusCode -eq 200) {
+    Write-Host "Waiting for backend on http://127.0.0.1:8001 ..."
+    $backendReady = $false
+    for ($i = 1; $i -le 30; $i++) {
+        if (Test-HttpReady $backendUrl) {
             $backendReady = $true
             break
         }
-    }
-    catch {
         Start-Sleep -Seconds 1
     }
 }
@@ -42,24 +59,25 @@ if (-not $backendReady) {
     exit 1
 }
 
-Write-Host "Starting WorkAgent frontend..."
-Start-Process powershell -ArgumentList @(
-    "-NoExit",
-    "-Command",
-    "Set-Location '$frontendDir'; npm run dev"
-)
+if (Test-HttpReady $url) {
+    Write-Host "Frontend is already running on $url."
+    $frontendReady = $true
+}
+else {
+    Write-Host "Starting WorkAgent frontend..."
+    Start-Process powershell -ArgumentList @(
+        "-NoExit",
+        "-Command",
+        "Set-Location '$frontendDir'; npm run dev"
+    )
 
-Write-Host "Waiting for frontend on $url ..."
-$frontendReady = $false
-for ($i = 1; $i -le 30; $i++) {
-    try {
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
-        if ($response.StatusCode -eq 200) {
+    Write-Host "Waiting for frontend on $url ..."
+    $frontendReady = $false
+    for ($i = 1; $i -le 30; $i++) {
+        if (Test-HttpReady $url) {
             $frontendReady = $true
             break
         }
-    }
-    catch {
         Start-Sleep -Seconds 1
     }
 }

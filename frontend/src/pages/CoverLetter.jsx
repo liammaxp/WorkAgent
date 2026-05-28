@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import {
   Alert,
@@ -8,17 +8,20 @@ import {
   StatusBadge,
   useAsyncAction,
 } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
-const STYLES = [
-  { value: "concise", label: "简洁" },
-  { value: "formal", label: "正式" },
-  { value: "technical", label: "偏技术" },
-  { value: "narrative", label: "项目叙事" },
-];
+const STYLE_VALUES = ["concise", "formal", "technical", "narrative"];
 
 let cachedCoverLetter = null;
 
 export default function CoverLetter() {
+  const { language } = useLanguage();
+  const copy = text[language].coverLetter;
+  const common = text[language].common;
+  const styles = useMemo(
+    () => STYLE_VALUES.map((value) => ({ value, label: copy.styles[value] })),
+    [copy.styles]
+  );
   const [content, setContent] = useState("");
   const [jobReady, setJobReady] = useState(false);
   const [tailoredReady, setTailoredReady] = useState(false);
@@ -54,7 +57,7 @@ export default function CoverLetter() {
         jobDescription: jobData.content || "",
         outputPath,
       };
-    }, "求职信已保存");
+    }, copy.saved);
 
   const generate = () =>
     run(async () => {
@@ -72,63 +75,52 @@ export default function CoverLetter() {
         outputPath: data.output_path || data.path || "",
       };
       return data;
-    }, "求职信已生成");
+    }, copy.generated);
 
   return (
     <>
-      <PageHeader
-        title="求职信"
-        description="基于定制简历与职位描述生成 Cover Letter，保持内容真实一致。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 
       <section className="card">
-        <h2 className="card-title">前置条件</h2>
+        <h2 className="card-title">{copy.prerequisites}</h2>
         <div className="grid-2">
           <div>
-            <span style={{ marginRight: 8, color: "var(--text-muted)" }}>职位描述</span>
+            <span className="muted-label">{copy.jobDescription}</span>
             <StatusBadge ready={jobReady} />
           </div>
           <div>
-            <span style={{ marginRight: 8, color: "var(--text-muted)" }}>定制简历</span>
+            <span className="muted-label">{copy.tailoredResume}</span>
             <StatusBadge ready={tailoredReady} />
           </div>
         </div>
-        {!tailoredReady && (
-          <p style={{ color: "var(--warning)", fontSize: 14, marginTop: 12 }}>
-            建议先在简历页生成 tailored_resume，以确保求职信与定制简历一致。
-          </p>
-        )}
+        {!tailoredReady && <p className="warning-line">{copy.tailoredWarning}</p>}
       </section>
 
       <section className="card">
-        <h2 className="card-title">生成选项</h2>
+        <h2 className="card-title">{common.generateOptions}</h2>
         <div className="field">
-          <label>写作风格</label>
+          <label>{copy.style}</label>
           <select value={style} onChange={(e) => setStyle(e.target.value)}>
-            {STYLES.map((item) => (
+            {styles.map((item) => (
               <option key={item.value} value={item.value}>
                 {item.label}
               </option>
             ))}
           </select>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-muted)" }}>
+        <label className="inline-check">
           <input type="checkbox" checked={useGithub} onChange={(e) => setUseGithub(e.target.checked)} />
-          使用 GitHub 项目证据（保守引用）
+          {copy.useGithub}
         </label>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
-            {loading ? "生成中…" : "生成求职信"}
+            {loading ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && (
-          <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
-            最近输出：{outputPath}
-          </p>
-        )}
+        {outputPath && <p className="meta-line">{common.recentOutput}{outputPath}</p>}
       </section>
 
       <EditorCard
@@ -137,7 +129,7 @@ export default function CoverLetter() {
         onChange={setContent}
         onSave={save}
         saving={loading}
-        placeholder="生成的求职信将显示在这里…"
+        placeholder={copy.placeholder}
         short
       />
     </>

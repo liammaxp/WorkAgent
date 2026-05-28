@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { Alert, LoadingBar, PageHeader, useAsyncAction } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
 export default function PromptSettings() {
+  const { language } = useLanguage();
+  const copy = text[language].prompt;
   const [prompt, setPrompt] = useState("");
   const [example, setExample] = useState("");
   const { loading, error, success, run } = useAsyncAction();
@@ -24,20 +27,15 @@ export default function PromptSettings() {
       const data = await api.savePrompt(prompt);
       setPrompt(data.content || prompt);
       return data;
-    }, "Prompt 已保存并生效");
+    }, copy.saved);
 
   const useExample = () => {
-    if (example) {
-      setPrompt(example);
-    }
+    if (example) setPrompt(example);
   };
 
   return (
     <>
-      <PageHeader
-        title="Prompt 设置"
-        description="编辑 Agent 的系统 Prompt，让它适配你的背景、目标岗位、写作规则和证据使用方式。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
@@ -45,50 +43,33 @@ export default function PromptSettings() {
       <div className="prompt-layout">
         <section className="card">
           <div className="prompt-card-header">
-            <h2 className="card-title">当前 Prompt</h2>
-            <span className="helper-text">{prompt.length} 字符</span>
+            <h2 className="card-title">{copy.current}</h2>
+            <span className="helper-text">{prompt.length} {copy.chars}</span>
           </div>
           <div className="field">
             <textarea
               className="prompt-editor"
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="写入你的 Agent 工作规则、个人背景和输出偏好"
+              placeholder={copy.placeholder}
             />
           </div>
           <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={savePrompt}
-              disabled={loading || !prompt.trim()}
-            >
-              保存 Prompt
+            <button type="button" className="btn btn-primary" onClick={savePrompt} disabled={loading || !prompt.trim()}>
+              {copy.save}
             </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={loadPrompt}
-              disabled={loading}
-            >
-              重新加载
+            <button type="button" className="btn btn-secondary" onClick={loadPrompt} disabled={loading}>
+              {copy.reload}
             </button>
           </div>
         </section>
 
         <aside className="card">
-          <h2 className="card-title">示例 Prompt</h2>
-          <p className="helper-paragraph">
-            这个模板可以直接试用，也可以把姓名、背景、目标岗位、项目和写作偏好改成自己的。
-          </p>
+          <h2 className="card-title">{copy.example}</h2>
+          <p className="helper-paragraph">{copy.exampleText}</p>
           <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={useExample}
-              disabled={loading || !example}
-            >
-              使用示例
+            <button type="button" className="btn btn-secondary" onClick={useExample} disabled={loading || !example}>
+              {copy.useExample}
             </button>
           </div>
           <pre className="prompt-example">{example}</pre>

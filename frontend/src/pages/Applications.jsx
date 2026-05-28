@@ -7,15 +7,9 @@ import {
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
+import { text, useLanguage } from "../i18n.jsx";
 
-const STATUS_OPTIONS = [
-  "Interested",
-  "Applied",
-  "Interview",
-  "Rejected",
-  "Offer",
-  "Archived",
-];
+const STATUS_OPTIONS = ["Interested", "Applied", "Interview", "Rejected", "Offer", "Archived"];
 
 const EMPTY_FORM = {
   company: "",
@@ -29,6 +23,9 @@ const EMPTY_FORM = {
 };
 
 export default function Applications() {
+  const { language } = useLanguage();
+  const copy = text[language].applications;
+  const common = text[language].common;
   const [records, setRecords] = useState([]);
   const [filter, setFilter] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
@@ -55,97 +52,86 @@ export default function Applications() {
       await api.createApplication(form);
       setForm(EMPTY_FORM);
       await loadRecords();
-    }, "申请记录已添加");
+    }, copy.added);
 
   const updateStatus = (id, status) =>
     run(async () => {
       await api.updateApplication(id, { status });
       await loadRecords();
-    }, "状态已更新");
+    }, copy.updated);
 
   const deleteRecord = () =>
     run(async () => {
       await api.deleteApplication(deleteTarget.id);
       setDeleteTarget(null);
       await loadRecords();
-    }, "申请记录已删除");
+    }, copy.deleted);
 
   return (
     <>
-      <PageHeader
-        title="申请记录"
-        description="追踪各公司申请状态、使用的简历与求职信版本。"
-      />
+      <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 
       <section className="card">
-        <h2 className="card-title">新增申请</h2>
+        <h2 className="card-title">{copy.add}</h2>
         <div className="grid-2">
           <div className="field">
-            <label>公司</label>
+            <label>{copy.company}</label>
             <input value={form.company} onChange={(e) => updateForm("company", e.target.value)} />
           </div>
           <div className="field">
-            <label>岗位</label>
+            <label>{copy.role}</label>
             <input value={form.role} onChange={(e) => updateForm("role", e.target.value)} />
           </div>
           <div className="field">
-            <label>链接</label>
+            <label>{common.link}</label>
             <input value={form.link} onChange={(e) => updateForm("link", e.target.value)} />
           </div>
           <div className="field">
-            <label>状态</label>
+            <label>{copy.status}</label>
             <select value={form.status} onChange={(e) => updateForm("status", e.target.value)}>
-              {STATUS_OPTIONS.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
+              {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
             </select>
           </div>
           <div className="field">
-            <label>申请日期</label>
+            <label>{copy.appliedDate}</label>
             <input value={form.applied_date} onChange={(e) => updateForm("applied_date", e.target.value)} placeholder="YYYY-MM-DD" />
           </div>
           <div className="field">
-            <label>备注</label>
+            <label>{copy.notes}</label>
             <input value={form.notes} onChange={(e) => updateForm("notes", e.target.value)} />
           </div>
         </div>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={createRecord} disabled={loading || !form.company || !form.role}>
-            添加记录
+            {copy.addRecord}
           </button>
         </div>
       </section>
 
       <section className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h2 className="card-title" style={{ margin: 0 }}>申请列表</h2>
-          <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)" }}>
-            <option value="">全部状态</option>
-            {STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
+        <div className="section-toolbar">
+          <h2 className="card-title">{copy.list}</h2>
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="">{copy.allStatuses}</option>
+            {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
           </select>
         </div>
 
         {records.length === 0 ? (
-          <p className="empty-state">暂无申请记录</p>
+          <p className="empty-state">{copy.noRecords}</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>公司</th>
-                  <th>岗位</th>
-                  <th>状态</th>
-                  <th>申请日期</th>
-                  <th>操作</th>
+                  <th>{copy.company}</th>
+                  <th>{copy.role}</th>
+                  <th>{copy.status}</th>
+                  <th>{copy.appliedDate}</th>
+                  <th>{copy.actions}</th>
                 </tr>
               </thead>
               <tbody>
@@ -159,21 +145,17 @@ export default function Applications() {
                         onChange={(e) => updateStatus(record.id, e.target.value)}
                         style={{ border: "none", background: "transparent", fontWeight: 600 }}
                       >
-                        {STATUS_OPTIONS.map((status) => (
-                          <option key={status} value={status}>
-                            {status}
-                          </option>
-                        ))}
+                        {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
                       </select>
                     </td>
-                    <td>{record.applied_date || "—"}</td>
+                    <td>{record.applied_date || common.none}</td>
                     <td>
                       {record.link ? (
                         <a href={record.link} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
-                          链接
+                          {common.link}
                         </a>
                       ) : (
-                        "—"
+                        common.none
                       )}
                       <button
                         type="button"
@@ -182,7 +164,7 @@ export default function Applications() {
                         disabled={loading}
                         style={{ marginLeft: record.link ? 12 : 0 }}
                       >
-                        删除
+                        {common.delete}
                       </button>
                     </td>
                   </tr>
@@ -195,14 +177,16 @@ export default function Applications() {
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}
-        title="删除这条申请记录？"
-        confirmLabel="删除"
+        title={copy.deleteTitle}
+        confirmLabel={common.delete}
         loading={loading}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={deleteRecord}
       >
         <p>
-          将删除 {deleteTarget?.company} 的 {deleteTarget?.role} 记录。这个操作不会删除简历、求职信或其他输出文件。
+          {copy.deleteBody
+            .replace("{company}", deleteTarget?.company || "")
+            .replace("{role}", deleteTarget?.role || "")}
         </p>
       </ConfirmDialog>
     </>

@@ -1,5 +1,9 @@
 const API_BASE = "/api";
 
+function currentLanguage() {
+  return localStorage.getItem("workagent-language") === "en" ? "en" : "zh";
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -57,7 +61,10 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
   askAgent: (message) =>
-    request("/agent/ask", { method: "POST", body: JSON.stringify({ message }) }),
+    request("/agent/ask", {
+      method: "POST",
+      body: JSON.stringify({ message, language: currentLanguage() }),
+    }),
   saveJobDescription: (content) =>
     request("/job-description", {
       method: "POST",
@@ -66,12 +73,12 @@ export const api = {
   analyzeJob: (use_github_context = false) =>
     request("/job-description/analyze", {
       method: "POST",
-      body: JSON.stringify({ use_github_context }),
+      body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
   tailorResume: (use_github_context = true) =>
     request("/resume/tailor", {
       method: "POST",
-      body: JSON.stringify({ use_github_context }),
+      body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
   generateCoverLetter: (options = {}) =>
     request("/cover-letter/generate", {
@@ -80,13 +87,14 @@ export const api = {
         use_tailored_resume: true,
         use_github_context: false,
         style: "concise",
+        language: currentLanguage(),
         ...options,
       }),
     }),
   generateInterviewPrep: (use_github_context = true) =>
     request("/interview-prep/generate", {
       method: "POST",
-      body: JSON.stringify({ use_github_context }),
+      body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
   scanGithub: (resume_source = "resume") =>
     request("/github/scan", {

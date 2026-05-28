@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import Dashboard from "./pages/Dashboard.jsx";
 import JobDescription from "./pages/JobDescription.jsx";
@@ -8,58 +9,88 @@ import InterviewPrep from "./pages/InterviewPrep.jsx";
 import GitHubContext from "./pages/GitHubContext.jsx";
 import PromptSettings from "./pages/PromptSettings.jsx";
 import Chat from "./pages/Chat.jsx";
+import {
+  LANGUAGES,
+  LanguageContext,
+  getInitialLanguage,
+  saveLanguage,
+  text,
+} from "./i18n.jsx";
 
 const NAV_ITEMS = [
-  { to: "/", label: "概览", end: true },
-  { to: "/job", label: "职位描述" },
-  { to: "/resume", label: "简历" },
-  { to: "/cover-letter", label: "求职信" },
-  { to: "/applications", label: "申请记录" },
-  { to: "/interview", label: "面试准备" },
-  { to: "/github", label: "GitHub 证据" },
-  { to: "/prompt", label: "Prompt 设置" },
-  { to: "/chat", label: "Agent 对话" },
+  { to: "/", key: "dashboard", end: true },
+  { to: "/job", key: "job" },
+  { to: "/resume", key: "resume" },
+  { to: "/cover-letter", key: "coverLetter" },
+  { to: "/applications", key: "applications" },
+  { to: "/interview", key: "interview" },
+  { to: "/github", key: "github" },
+  { to: "/prompt", key: "prompt" },
+  { to: "/chat", key: "chat" },
 ];
 
 export default function App() {
+  const [language, setLanguage] = useState(getInitialLanguage);
+  const t = text[language];
+  const languageValue = useMemo(() => ({ language, setLanguage }), [language]);
+
+  useEffect(() => {
+    saveLanguage(language);
+    document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+  }, [language]);
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">WA</div>
-          <div>
-            <div className="brand-title">WorkAgent</div>
-            <div className="brand-subtitle">个人求职工作台</div>
+    <LanguageContext.Provider value={languageValue}>
+      <div className="app-shell">
+        <aside className="sidebar">
+          <div className="brand">
+            <div className="brand-mark">WA</div>
+            <div>
+              <div className="brand-title">WorkAgent</div>
+              <div className="brand-subtitle">{t.appSubtitle}</div>
+            </div>
           </div>
-        </div>
-        <nav className="nav-list">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `nav-link${isActive ? " active" : ""}`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
-      <main className="main-content">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/job" element={<JobDescription />} />
-          <Route path="/resume" element={<Resume />} />
-          <Route path="/cover-letter" element={<CoverLetter />} />
-          <Route path="/applications" element={<Applications />} />
-          <Route path="/interview" element={<InterviewPrep />} />
-          <Route path="/github" element={<GitHubContext />} />
-          <Route path="/prompt" element={<PromptSettings />} />
-          <Route path="/chat" element={<Chat />} />
-        </Routes>
-      </main>
-    </div>
+          <div className="language-switch" aria-label="Language">
+            {Object.entries(LANGUAGES).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={language === key ? "active" : ""}
+                onClick={() => setLanguage(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <nav className="nav-list">
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  `nav-link${isActive ? " active" : ""}`
+                }
+              >
+                {t.nav[item.key]}
+              </NavLink>
+            ))}
+          </nav>
+        </aside>
+        <main className="main-content">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/job" element={<JobDescription />} />
+            <Route path="/resume" element={<Resume />} />
+            <Route path="/cover-letter" element={<CoverLetter />} />
+            <Route path="/applications" element={<Applications />} />
+            <Route path="/interview" element={<InterviewPrep />} />
+            <Route path="/github" element={<GitHubContext />} />
+            <Route path="/prompt" element={<PromptSettings />} />
+            <Route path="/chat" element={<Chat />} />
+          </Routes>
+        </main>
+      </div>
+    </LanguageContext.Provider>
   );
 }
