@@ -538,6 +538,11 @@ def write_text_file(path, content):
     path.write_text(content.strip() + "\n", encoding="utf-8")
 
 
+def clear_interview_prep():
+    INTERVIEW_PREP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    INTERVIEW_PREP_PATH.write_text("", encoding="utf-8")
+
+
 def timestamp_slug():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -653,6 +658,7 @@ Additional user request:
         return user_input, None, False
 
     write_text_file(JOB_DESCRIPTION_PATH, user_input)
+    clear_interview_prep()
     workflow_request = f"""
 The user pasted a new job description. It has already been saved to job_description.txt.
 

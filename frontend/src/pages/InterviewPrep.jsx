@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api/client.js";
 import {
   Alert,
@@ -18,29 +18,21 @@ export default function InterviewPrep() {
   const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
-  useEffect(() => {
-    run(async () => {
-      const [data, status] = await Promise.all([
-        api.getFile("interview_prep"),
-        api.getStatus(),
-      ]);
-      setContent(data.content || "");
-      setOutputPath(status.outputs?.interview_prep?.[0]?.path || "");
-    });
-  }, []);
-
   const save = () =>
     run(async () => {
       await api.saveFile("interview_prep", content);
     }, copy.saved);
 
-  const generate = () =>
-    run(async () => {
+  const generate = () => {
+    setContent("");
+    setOutputPath("");
+    return run(async () => {
       const data = await api.generateInterviewPrep(useGithub);
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       return data;
     }, copy.generated);
+  };
 
   return (
     <>

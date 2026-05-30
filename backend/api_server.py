@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +27,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SHUTDOWN_GRACE_SECONDS = 2.0
+shutdown_timer: Optional[threading.Timer] = None
+shutdown_lock = threading.Lock()
 
 FILE_MAP = {
     "resume": agent.RESUME_PATH,
@@ -93,6 +102,10 @@ class AnalyzeBody(BaseModel):
 class TailorBody(BaseModel):
     use_github_context: bool = True
     language: str = "zh"
+
+
+class ResumeMemoryBody(BaseModel):
+    resume_source: str = "resume"
 
 
 class CoverLetterBody(BaseModel):
@@ -170,7 +183,7 @@ PROVIDER_CONFIGS = {
         "base_url_env": "DEEPSEEK_BASE_URL",
         "model_env": "DEEPSEEK_MODEL",
         "default_base_url": "https://api.deepseek.com",
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-v4-pro",
         "requires_base_url": False,
     },
     "claude": {
@@ -345,6 +358,161 @@ def read_prompt_example() -> str:
     return example_path.read_text(encoding="utf-8")
 
 
+def pids_listening_on_port(port: int) -> set[int]:
+    if os.name != "nt":
+        return set()
+
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+
+    pids = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local_address = parts[1]
+        state = parts[3].upper()
+        if state != "LISTENING" or not local_address.endswith(f":{port}"):
+            continue
+        try:
+            pids.add(int(parts[-1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def frontend_process_pids() -> set[int]:
+    if os.name != "nt":
+        return set()
+
+    return process_pids_for_workspace_command(
+        str(agent.ROOT_DIR / "frontend"),
+        ["*npm run dev*", "*vite*5173*"],
+    )
+
+
+def backend_process_pids() -> set[int]:
+    if os.name != "nt":
+        return set()
+
+    return process_pids_for_workspace_command(
+        str(agent.ROOT_DIR / "backend"),
+        ["*uvicorn*api_server*", "*api_server:app*8001*"],
+    )
+
+
+def process_pids_for_workspace_command(workspace_dir: str, patterns: list[str]) -> set[int]:
+    if os.name != "nt":
+        return set()
+
+    escaped_workspace_dir = workspace_dir.replace("'", "''")
+    pattern_checks = " -or ".join(
+        f"$_.CommandLine -like '{pattern.replace("'", "''")}'" for pattern in patterns
+    )
+    command = (
+        f"$workspaceDir = '{escaped_workspace_dir}'; "
+        "$currentPid = $PID; "
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { "
+        "$_.ProcessId -ne $currentPid -and "
+        "($_.Name -in @('powershell.exe','pwsh.exe','cmd.exe','node.exe','npm.cmd')) -and "
+        "$_.CommandLine -and "
+        f"($_.CommandLine -like \"*$workspaceDir*\" -or {pattern_checks}) "
+        "} | ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+
+    pids = set()
+    for line in result.stdout.splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        try:
+            pids.add(int(value))
+        except ValueError:
+            continue
+    return pids
+
+
+def kill_process_tree(pid: int) -> None:
+    if pid == os.getpid():
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                timeout=8,
+                check=False,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        return
+
+
+def stop_frontend_dev_server() -> None:
+    for pid in pids_listening_on_port(5173) | frontend_process_pids():
+        kill_process_tree(pid)
+
+
+def shutdown_application() -> None:
+    stop_frontend_dev_server()
+    time.sleep(0.2)
+    backend_pids = backend_process_pids()
+    for pid in backend_pids:
+        kill_process_tree(pid)
+    if backend_pids:
+        return
+
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(os.getpid()), "/T", "/F"],
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    else:
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
+def cancel_pending_shutdown() -> bool:
+    global shutdown_timer
+    with shutdown_lock:
+        if not shutdown_timer:
+            return False
+        shutdown_timer.cancel()
+        shutdown_timer = None
+        return True
+
+
+def schedule_shutdown() -> None:
+    global shutdown_timer
+    with shutdown_lock:
+        if shutdown_timer:
+            shutdown_timer.cancel()
+        shutdown_timer = threading.Timer(SHUTDOWN_GRACE_SECONDS, shutdown_application)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
+
+
 def normalize_language(language: str) -> str:
     return "en" if (language or "").lower().strip().startswith("en") else "zh"
 
@@ -356,6 +524,37 @@ def output_language_instruction(language: str) -> str:
         "\n\nOutput language requirement: respond entirely in English. "
         "All user-facing headings, analysis, recommendations, cover letters, "
         "interview preparation notes, and chat responses must be English."
+    )
+
+
+def job_analysis_language_instruction(language: str) -> str:
+    if normalize_language(language) == "en":
+        return (
+            "\n\nOutput language requirement: respond entirely in English. "
+            "Use English section headings and English explanations for the full job analysis."
+        )
+    return (
+        "\n\n输出语言要求：请完全使用中文输出职位分析。"
+        "所有标题、匹配分数说明、技能分析、项目建议和简历修改建议都必须使用中文。"
+    )
+
+
+def interview_prep_language_instruction(language: str) -> str:
+    if normalize_language(language) == "en":
+        return (
+            "\n\nOutput language requirement: respond entirely in English. "
+            "Use English section headings and English notes only."
+        )
+    return (
+        "\n\nOutput language requirement: produce parallel Chinese-English interview preparation notes. "
+        "Every Chinese sentence or bullet must be followed immediately by its matching English translation "
+        "on the next line. Keep the pairs one-to-one: do not group all Chinese together and then all English, "
+        "and do not put Chinese and English in the same sentence. Use this pattern throughout:\n"
+        "中文句子。\n"
+        "English sentence.\n"
+        "- 中文要点。\n"
+        "- English bullet.\n"
+        "Section headings must also be paired on adjacent lines."
     )
 
 
@@ -389,6 +588,101 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
+def extract_json_object(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped).strip()
+
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise HTTPException(status_code=500, detail="Agent did not return valid JSON.")
+        try:
+            parsed = json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=500, detail="Agent did not return valid JSON.") from error
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=500, detail="Agent JSON response must be an object.")
+    return parsed
+
+
+def load_memory_for_merge() -> Any:
+    if not agent.MEMORY_PATH.exists():
+        return {}
+
+    content = agent.MEMORY_PATH.read_text(encoding="utf-8").strip()
+    if not content or content.startswith(agent.PLACEHOLDER_TEXT):
+        return {}
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return {"notes": content}
+
+
+def normalized_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def update_memory_from_resume_source(resume_source: str) -> dict[str, Any]:
+    if resume_source == "tailored_resume":
+        resume = agent.read_tailored_resume()
+        source_label = "tailored_resume.txt"
+    elif resume_source == "resume":
+        resume = agent.read_resume()
+        source_label = "resume.txt"
+    else:
+        raise HTTPException(status_code=400, detail="resume_source must be 'resume' or 'tailored_resume'.")
+
+    current_memory = load_memory_for_merge()
+    prompt = f"""
+Update the user's long-term memory JSON from the resume below.
+
+Rules:
+- Only add factual, durable information explicitly present in the resume.
+- Preserve all existing memory unless the resume clearly gives a more complete version of the same fact.
+- Do not add job-specific tailoring, unsupported claims, guesses, or generic wording.
+- Keep the result compact and useful for future resume, cover letter, and interview prep tasks.
+- Return only valid JSON with exactly these keys:
+  "changed": boolean,
+  "additions": array of short strings describing newly added facts,
+  "memory": object
+
+Current memory JSON:
+{json.dumps(current_memory, ensure_ascii=False, indent=2)}
+
+Resume source: {source_label}
+Resume:
+{resume}
+"""
+    response = run_text_task(prompt)
+    payload = extract_json_object(response)
+    merged_memory = payload.get("memory")
+    if not isinstance(merged_memory, dict):
+        raise HTTPException(status_code=500, detail="Agent JSON response must include a memory object.")
+
+    changed = normalized_json(merged_memory) != normalized_json(current_memory)
+    if changed:
+        agent.write_text_file(agent.MEMORY_PATH, normalized_json(merged_memory))
+
+    additions = payload.get("additions", [])
+    if not isinstance(additions, list):
+        additions = []
+
+    return {
+        "updated": changed,
+        "source": source_label,
+        "additions": [str(item) for item in additions if str(item).strip()],
+        "memory": merged_memory,
+        "path": str(agent.MEMORY_PATH),
+    }
+
+
 def build_interview_prep_prompt(use_github_context: bool, language: str = "zh") -> str:
     try:
         job_description = agent.read_job_description()
@@ -414,6 +708,27 @@ def build_interview_prep_prompt(use_github_context: bool, language: str = "zh") 
         else "\nApproved GitHub context: Not requested for this generation.\n"
     )
 
+    if normalize_language(language) == "en":
+        section_outline = """  1. Role Focus
+  2. Technical Questions
+  3. Project Talking Points
+  4. Behavioral / STAR Material
+  5. Preparation Gaps or Facts to Verify
+  6. Questions to Ask the Interviewer"""
+    else:
+        section_outline = """  1. 职位重点
+     Role Focus
+  2. 技术问题准备
+     Technical Questions
+  3. 项目讲述要点
+     Project Talking Points
+  4. 行为面试 / STAR 素材
+     Behavioral / STAR Material
+  5. 需要补强或确认的内容
+     Preparation Gaps or Facts to Verify
+  6. 反问面试官的问题
+     Questions to Ask the Interviewer"""
+
     prompt = f"""
 Create complete interview preparation notes for the job application below.
 
@@ -422,7 +737,7 @@ Rules:
 - Do not invent projects, employers, degrees, technologies, metrics, or repository facts.
 - If evidence is weak or missing, say what to prepare or verify instead of fabricating.
 - Return only the notes content. Do not say that you saved a file. Do not include placeholders.
-- Write in concise Chinese unless the job description strongly implies English-only preparation.
+- Follow the output language requirement below exactly, regardless of the job description language.
 - Include these sections:
   1. 职位重点
   2. 技术问题准备
@@ -430,6 +745,9 @@ Rules:
   4. 行为面试 / STAR 素材
   5. 需要补强或确认的内容
   6. 反问面试官的问题
+
+If any earlier section labels conflict with this outline, use this exact section outline for the final notes:
+{section_outline}
 
 Job description:
 {job_description}
@@ -442,7 +760,7 @@ Memory:
 {memory}
 {github_section}
 """
-    return prompt + output_language_instruction(language)
+    return prompt + interview_prep_language_instruction(language)
 
 
 def looks_like_interview_prep(content: str) -> bool:
@@ -463,6 +781,12 @@ def looks_like_interview_prep(content: str) -> bool:
     section_hits = sum(
         1
         for marker in [
+            "Role Focus",
+            "Technical Questions",
+            "Project Talking Points",
+            "Behavioral",
+            "Preparation Gaps",
+            "Questions to Ask",
             "职位重点",
             "技术问题",
             "项目讲述",
@@ -554,6 +878,18 @@ def get_status():
             "github_context": list_output_files(agent.GITHUB_CONTEXT_OUTPUT_DIR, ".json"),
         },
     }
+
+
+@app.post("/api/shutdown")
+def shutdown():
+    schedule_shutdown()
+    return {"shutdown": True, "grace_seconds": SHUTDOWN_GRACE_SECONDS}
+
+
+@app.post("/api/session/open")
+def open_session():
+    canceled = cancel_pending_shutdown()
+    return {"open": True, "canceled_shutdown": canceled}
 
 
 @app.post("/api/provider")
@@ -689,7 +1025,12 @@ def agent_ask(body: AgentAskBody):
 @app.post("/api/job-description")
 def save_job_description(body: JobDescriptionBody):
     agent.write_text_file(agent.JOB_DESCRIPTION_PATH, body.content)
-    return {"saved": True, "path": str(agent.JOB_DESCRIPTION_PATH)}
+    agent.clear_interview_prep()
+    return {
+        "saved": True,
+        "path": str(agent.JOB_DESCRIPTION_PATH),
+        "interview_prep_cleared": True,
+    }
 
 
 @app.post("/api/job-description/analyze")
@@ -697,7 +1038,7 @@ def analyze_job_description(body: AnalyzeBody):
     message = agent.JOB_AGENT_PROMPT
     if body.use_github_context:
         message += "\nUse GitHub context if available and approved."
-    message += output_language_instruction(body.language)
+    message += job_analysis_language_instruction(body.language)
     answer = run_agent_task(message)
     analysis_path = agent.save_analysis_output(answer)
     return {"analysis": answer, "analysis_path": str(analysis_path)}
@@ -720,6 +1061,14 @@ def tailor_resume(body: TailorBody):
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
     }
+
+
+@app.post("/api/resume/update-memory")
+def update_resume_memory(body: ResumeMemoryBody):
+    try:
+        return update_memory_from_resume_source(body.resume_source)
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/api/cover-letter/generate")

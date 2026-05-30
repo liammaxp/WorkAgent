@@ -1,5 +1,7 @@
 const API_BASE = "/api";
 
+let shutdownSent = false;
+
 function currentLanguage() {
   return localStorage.getItem("workagent-language") === "en" ? "en" : "zh";
 }
@@ -38,6 +40,23 @@ async function request(path, options = {}) {
 
 export const api = {
   getStatus: () => request("/status"),
+  openSession: () => request("/session/open", { method: "POST" }),
+  shutdown: () => request("/shutdown", { method: "POST", keepalive: true }),
+  sendShutdownBeacon: () => {
+    if (shutdownSent) return;
+    shutdownSent = true;
+    if (navigator.sendBeacon) {
+      const blob = new Blob(["{}"], { type: "application/json" });
+      navigator.sendBeacon(`${API_BASE}/shutdown`, blob);
+      return;
+    }
+    fetch(`${API_BASE}/shutdown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      keepalive: true,
+    }).catch(() => {});
+  },
   setProvider: (provider) =>
     request("/provider", { method: "POST", body: JSON.stringify({ provider }) }),
   getProviderConfigs: () => request("/provider-configs"),
@@ -79,6 +98,11 @@ export const api = {
     request("/resume/tailor", {
       method: "POST",
       body: JSON.stringify({ use_github_context, language: currentLanguage() }),
+    }),
+  updateMemoryFromResume: (resume_source = "resume") =>
+    request("/resume/update-memory", {
+      method: "POST",
+      body: JSON.stringify({ resume_source }),
     }),
   generateCoverLetter: (options = {}) =>
     request("/cover-letter/generate", {

@@ -9,6 +9,7 @@ import InterviewPrep from "./pages/InterviewPrep.jsx";
 import GitHubContext from "./pages/GitHubContext.jsx";
 import PromptSettings from "./pages/PromptSettings.jsx";
 import Chat from "./pages/Chat.jsx";
+import { api } from "./api/client.js";
 import {
   LANGUAGES,
   LanguageContext,
@@ -38,6 +39,19 @@ export default function App() {
     saveLanguage(language);
     document.documentElement.lang = language === "en" ? "en" : "zh-CN";
   }, [language]);
+
+  useEffect(() => {
+    api.openSession().catch(() => {});
+
+    const shutdownOnClose = () => api.sendShutdownBeacon();
+    window.addEventListener("pagehide", shutdownOnClose);
+    window.addEventListener("beforeunload", shutdownOnClose);
+
+    return () => {
+      window.removeEventListener("pagehide", shutdownOnClose);
+      window.removeEventListener("beforeunload", shutdownOnClose);
+    };
+  }, []);
 
   return (
     <LanguageContext.Provider value={languageValue}>

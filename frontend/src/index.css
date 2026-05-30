@@ -603,6 +603,19 @@ th {
   font-size: 14px;
 }
 
+.memory-summary {
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .output-list {
   list-style: none;
   padding: 0;

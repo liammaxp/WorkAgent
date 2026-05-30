@@ -17,6 +17,7 @@ export default function Resume() {
   const [tailored, setTailored] = useState("");
   const [useGithub, setUseGithub] = useState(false);
   const [outputPath, setOutputPath] = useState("");
+  const [memorySummary, setMemorySummary] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
   const loadFiles = () =>
@@ -39,6 +40,19 @@ export default function Resume() {
     run(async () => {
       await api.saveFile("resume", resume);
     }, copy.originalSaved);
+
+  const updateMemory = () =>
+    run(async () => {
+      await api.saveFile("resume", resume);
+      const data = await api.updateMemoryFromResume("resume");
+      const additions = data.additions || [];
+      if (data.updated && additions.length) {
+        setMemorySummary(additions.join("\n"));
+      } else {
+        setMemorySummary(copy.memoryNoNewContent);
+      }
+      return data;
+    }, copy.memoryChecked);
 
   const saveTailored = () =>
     run(async () => {
@@ -70,6 +84,21 @@ export default function Resume() {
         saving={loading}
         placeholder={copy.originalPlaceholder}
       />
+
+      <section className="card">
+        <h2 className="card-title">{copy.memoryTitle}</h2>
+        <p className="helper-paragraph">{copy.memoryDescription}</p>
+        <div className="btn-row">
+          <button type="button" className="btn btn-secondary" onClick={updateMemory} disabled={loading}>
+            {loading ? copy.memoryUpdating : copy.memoryUpdate}
+          </button>
+        </div>
+        {memorySummary && (
+          <pre className="memory-summary">
+            {memorySummary}
+          </pre>
+        )}
+      </section>
 
       <section className="card">
         <h2 className="card-title">{copy.generateTitle}</h2>
