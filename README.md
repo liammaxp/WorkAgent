@@ -13,13 +13,14 @@ The project is designed for truthful, conservative job-search writing. It helps 
 
 - Analyze a saved job description and summarize requirements, skills, responsibilities, expectations, and fit.
 - Edit a base resume and generate a tailored LaTeX resume for the current role.
+- Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory.
 - Update the local memory file from resume/background material.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
 - Configure GitHub usernames, commit author names, commit emails, and GitHub token from the Web UI.
 - Start from an example system prompt and customize the agent prompt from the Web UI.
-- Scan GitHub repository links from the resume and fetch README, languages, commits, file changes, and diff signals after confirmation.
+- Scan GitHub repository links from the resume and memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
@@ -104,7 +105,7 @@ The backend writes:
 - GitHub identities to `information/github_accounts.txt`
 - GitHub token to `information/.env` as `GITHUB_TOKEN`
 
-After saving GitHub settings, scan the resume source, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep.
+After saving GitHub settings, scan the base resume and memory projects, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep. Memory projects can therefore be considered before they appear in a tailored resume.
 
 ## Prompt Customization
 
@@ -132,11 +133,11 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, edit the tailored resume, update memory, and generate a tailored LaTeX resume.
+- Resume: edit the base resume, edit the tailored resume, update memory, and generate a tailored LaTeX resume with optional JD-based project selection.
 - Cover Letter: choose a writing style, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes.
-- GitHub Evidence: configure GitHub identity/token, scan repositories, and fetch approved context.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the resume and memory, and fetch approved context.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow.
 

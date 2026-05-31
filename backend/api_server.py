@@ -55,6 +55,11 @@ Requirements:
 RESUME_TAILOR_PROMPT = """
 Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful,
 generate the modified complete LaTeX resume code.
+Compare the projects currently listed in resume.txt with the factual projects available in memory.json.
+Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
+update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
+Repository links in memory.json may be used only as candidates for approved GitHub evidence.
+Do not invent claims, technologies, metrics, responsibilities, or repository facts.
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
 """
@@ -101,6 +106,7 @@ class AnalyzeBody(BaseModel):
 
 class TailorBody(BaseModel):
     use_github_context: bool = True
+    allow_project_selection: bool = True
     language: str = "zh"
 
 
@@ -820,21 +826,42 @@ def read_approved_github_context() -> str:
 agent.TOOL_FUNCTIONS["read_github_context"] = read_approved_github_context
 
 
+def read_github_repo_source(resume_source: str) -> str:
+    if resume_source == "resume":
+        return agent.read_resume()
+    if resume_source == "tailored_resume":
+        return agent.read_tailored_resume()
+    if resume_source == "memory":
+        return agent.read_memory()
+    if resume_source == "resume_and_memory":
+        return f"{agent.read_resume()}\n\n{agent.read_memory()}"
+    if resume_source == "tailored_resume_and_resume_and_memory":
+        try:
+            tailored_resume = agent.read_tailored_resume()
+        except (FileNotFoundError, ValueError):
+            tailored_resume = ""
+        return f"{tailored_resume}\n\n{agent.read_resume()}\n\n{agent.read_memory()}"
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "resume_source must be 'resume', 'tailored_resume', 'memory', "
+            "'resume_and_memory', or 'tailored_resume_and_resume_and_memory'."
+        ),
+    )
+
+
 def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> dict[str, Any]:
     if not approved:
         return {"saved": False, "message": "GitHub context fetch was not approved."}
 
     try:
-        if resume_source == "tailored_resume":
-            resume = agent.read_tailored_resume()
-        else:
-            resume = agent.read_resume()
+        repo_source = read_github_repo_source(resume_source)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    repos = agent.extract_github_repos(resume)
+    repos = agent.extract_github_repos(repo_source)
     if not repos:
-        return {"saved": False, "message": "No GitHub repositories found in resume."}
+        return {"saved": False, "message": "No GitHub repositories found in the selected source."}
 
     github_identities = agent.read_github_identities()
     if not agent.identity_has_values(github_identities):
@@ -1047,6 +1074,11 @@ def analyze_job_description(body: AnalyzeBody):
 @app.post("/api/resume/tailor")
 def tailor_resume(body: TailorBody):
     prompt = RESUME_TAILOR_PROMPT + output_language_instruction(body.language)
+    if not body.allow_project_selection:
+        prompt += (
+            "\nKeep the existing resume project list. Do not remove projects or add projects from memory.json. "
+            "You may still improve wording when it remains factual."
+        )
     if body.use_github_context:
         prompt += "\nUse read_github_context if needed, but only with user approval via the web UI."
     answer = run_agent_task(prompt)
@@ -1126,14 +1158,11 @@ def generate_interview_prep(body: InterviewPrepBody):
 @app.post("/api/github/scan")
 def github_scan(body: GitHubScanBody):
     try:
-        if body.resume_source == "tailored_resume":
-            resume = agent.read_tailored_resume()
-        else:
-            resume = agent.read_resume()
+        repo_source = read_github_repo_source(body.resume_source)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    repos = agent.extract_github_repos(resume)
+    repos = agent.extract_github_repos(repo_source)
     identities = agent.read_github_identities()
     return {
         "repos": [

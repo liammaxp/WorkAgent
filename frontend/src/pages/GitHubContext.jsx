@@ -26,7 +26,7 @@ export default function GitHubContext() {
   const copy = text[language].github;
   const [scan, setScan] = useState(null);
   const [context, setContext] = useState(null);
-  const [source, setSource] = useState("resume");
+  const [source, setSource] = useState("tailored_resume_and_resume_and_memory");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [githubForm, setGithubForm] = useState({
     usernames: "",
@@ -166,8 +166,13 @@ export default function GitHubContext() {
         <div className="field">
           <label>{copy.resumeSource}</label>
           <select value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="tailored_resume_and_resume_and_memory">
+              {copy.allResumeSources || "定制简历、基础简历与记忆项目"}
+            </option>
+            <option value="resume_and_memory">{copy.resumeAndMemory || "简历与记忆中的项目"}</option>
             <option value="resume">{copy.baseResume}</option>
             <option value="tailored_resume">{copy.tailoredResume}</option>
+            <option value="memory">{copy.memoryProjects || "仅记忆中的项目"}</option>
           </select>
         </div>
         <div className="btn-row">

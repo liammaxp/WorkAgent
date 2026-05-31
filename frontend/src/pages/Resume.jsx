@@ -16,6 +16,7 @@ export default function Resume() {
   const [resume, setResume] = useState("");
   const [tailored, setTailored] = useState("");
   const [useGithub, setUseGithub] = useState(false);
+  const [allowProjectSelection, setAllowProjectSelection] = useState(true);
   const [outputPath, setOutputPath] = useState("");
   const [memorySummary, setMemorySummary] = useState("");
   const { loading, error, success, run } = useAsyncAction();
@@ -63,7 +64,7 @@ export default function Resume() {
 
   const generate = () =>
     run(async () => {
-      const data = await api.tailorResume(useGithub);
+      const data = await api.tailorResume(useGithub, allowProjectSelection);
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       return data;
@@ -105,6 +106,14 @@ export default function Resume() {
         <label className="inline-check">
           <input type="checkbox" checked={useGithub} onChange={(e) => setUseGithub(e.target.checked)} />
           {copy.useGithub}
+        </label>
+        <label className="inline-check">
+          <input
+            type="checkbox"
+            checked={allowProjectSelection}
+            onChange={(e) => setAllowProjectSelection(e.target.checked)}
+          />
+          {copy.allowProjectSelection || "允许 Agent 根据职位描述自主删除、更新或补充记忆中的真实项目"}
         </label>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>

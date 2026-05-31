@@ -305,7 +305,7 @@ class DeepSeekAdapter(OpenAIChatCompletionsAdapter):
             api_key_env="DEEPSEEK_API_KEY",
             base_url_env="DEEPSEEK_BASE_URL",
             model_env="DEEPSEEK_MODEL",
-            fallback_model="deepseek-chat",
+            fallback_model="deepseek-v4-pro",
         )
         if not os.getenv("DEEPSEEK_BASE_URL"):
             self.client.base_url = "https://api.deepseek.com"
@@ -1317,6 +1317,11 @@ def extract_github_repos(text):
     return repos
 
 
+def extract_resume_and_memory_github_repos(resume):
+    memory = read_memory()
+    return extract_github_repos(f"{resume}\n\n{memory}")
+
+
 def fetch_commit_files(base_url, commit_context):
     sha = commit_context.get("sha")
     if not sha:
@@ -1588,7 +1593,7 @@ def has_usable_repo_context(repo_contexts):
 
 
 def build_github_context(resume):
-    repos = extract_github_repos(resume)
+    repos = extract_resume_and_memory_github_repos(resume)
     if not repos:
         return ""
 
@@ -1602,7 +1607,7 @@ def build_github_context(resume):
         )
         return ""
 
-    print("\nAgent: I found these GitHub repositories in your resume:")
+    print("\nAgent: I found these GitHub repositories in your resume or memory:")
     for index, repo in enumerate(repos, start=1):
         print(f"{index}. {repo['url']}")
     print("\nAgent: I will verify contribution evidence using these identities:")
@@ -1708,7 +1713,7 @@ TOOLS = [
         "type": "function",
         "name": "read_github_context",
         "description": (
-            "Find GitHub repository links in resume.txt, ask the user for permission, "
+            "Find GitHub repository links in resume.txt and memory.json, ask the user for permission, "
             "then read public/authorized repository context, matched commits, and commit diff "
             "evidence when available. Use diff evidence conservatively when writing resume bullets."
         ),
@@ -1885,6 +1890,7 @@ You have tools for reading memory.json, resume.txt, tailored_resume.txt, job_des
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
+When tailoring a resume, compare the current resume projects with factual projects in memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
 Keep job analysis, match scores, recommendations, and explanations separate from resume LaTeX code.

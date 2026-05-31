@@ -94,10 +94,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
-  tailorResume: (use_github_context = true) =>
+  tailorResume: (use_github_context = true, allow_project_selection = true) =>
     request("/resume/tailor", {
       method: "POST",
-      body: JSON.stringify({ use_github_context, language: currentLanguage() }),
+      body: JSON.stringify({
+        use_github_context,
+        allow_project_selection,
+        language: currentLanguage(),
+      }),
     }),
   updateMemoryFromResume: (resume_source = "resume") =>
     request("/resume/update-memory", {
