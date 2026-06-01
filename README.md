@@ -46,6 +46,8 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- outputs/
 |   |-- backend/             # Generated analysis, letters, resumes, and legacy GitHub JSON
 |   `-- frontend/            # Frontend production build output
+|-- install_workagent.bat    # Windows one-click dependency installer
+|-- install_workagent.ps1    # Windows dependency installation script
 |-- start_workagent.bat      # Windows one-click launcher
 |-- start_workagent.ps1      # Windows launcher script
 `-- README.md
@@ -231,6 +233,16 @@ Do not commit API keys, resumes, job descriptions, GitHub identities, generated 
 
 ## Setup
 
+### One-Click Dependency Installation On Windows
+
+Before the first start, double-click:
+
+```text
+install_workagent.bat
+```
+
+It checks that Python and npm are available, then installs the backend and frontend dependencies.
+
 ### One-Click Start On Windows
 
 Double-click:
@@ -372,6 +384,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- outputs/
 |   |-- backend/             # 生成的分析、求职信、简历和旧版 GitHub JSON
 |   `-- frontend/            # 前端生产构建输出
+|-- install_workagent.bat    # Windows 一键安装依赖入口
+|-- install_workagent.ps1    # Windows 依赖安装脚本
 |-- start_workagent.bat      # Windows 一键启动入口
 |-- start_workagent.ps1      # Windows 启动脚本
 `-- README.md
@@ -553,6 +567,16 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 不要提交 API Key、简历、职位描述、GitHub 身份、生成文档、投递记录或个人背景资料。
 
 ## 启动方式
+
+### Windows 一键安装依赖
+
+首次启动前，双击：
+
+```text
+install_workagent.bat
+```
+
+脚本会检查 Python 和 npm 是否可用，然后安装后端与前端依赖。
 
 ### Windows 一键启动
 
