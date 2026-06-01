@@ -231,6 +231,25 @@ WorkAgent intentionally uses local files as working state. These files can conta
 
 Do not commit API keys, resumes, job descriptions, GitHub identities, generated documents, application records, or personal background notes.
 
+## Minimum Environment Requirements
+
+The following baseline is the minimum supported environment for the included Windows one-click installation and startup scripts:
+
+| Item | Minimum requirement | Notes |
+| --- | --- | --- |
+| Operating system | 64-bit Windows 10 or Windows 11 | The included `.bat` and `.ps1` scripts are designed for Windows. Manual startup may work on other operating systems, but it is not the documented baseline. |
+| PowerShell | Windows PowerShell 5.1 | Required by the one-click scripts and Windows process management. |
+| Python | Python 3.10 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python` and `pip` are available in `PATH`. |
+| Node.js | Node.js 18 or newer | Required by the React + Vite frontend. |
+| npm | A version bundled with Node.js 18 or newer | Make sure `npm` is available in `PATH`. |
+| Memory | 4 GB RAM | 8 GB or more is recommended when other development tools are open. |
+| Free disk space | 2 GB | Used by Python packages, `node_modules`, local Chroma data, logs, and generated files. |
+| Browser | A current version of Edge, Chrome, or Firefox | Required for the local Web UI. |
+
+Backend packages installed from `backend/requirements.txt` include `openai`, `python-dotenv`, `requests`, `fastapi`, `uvicorn[standard]`, and `chromadb`. Frontend packages are installed from `frontend/package.json`.
+
+An internet connection is required when installing dependencies and when calling a configured AI model provider. GitHub access is required only when using GitHub Evidence features. The local Web UI, SQLite application records, and local Chroma storage run on the local machine.
+
 ## Setup
 
 ### One-Click Dependency Installation On Windows
@@ -565,6 +584,25 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `outputs/`
 
 不要提交 API Key、简历、职位描述、GitHub 身份、生成文档、投递记录或个人背景资料。
+
+## 最低环境配置要求
+
+以下配置是仓库内 Windows 一键安装和启动脚本支持的最低运行基线：
+
+| 项目 | 最低要求 | 说明 |
+| --- | --- | --- |
+| 操作系统 | 64 位 Windows 10 或 Windows 11 | 仓库内的 `.bat` 和 `.ps1` 脚本面向 Windows。其他操作系统可能可以手动启动，但不属于文档约定的最低支持基线。 |
+| PowerShell | Windows PowerShell 5.1 | 一键脚本和 Windows 进程管理功能需要使用。 |
+| Python | Python 3.10 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python` 和 `pip` 已加入 `PATH`。 |
+| Node.js | Node.js 18 或更高版本 | React + Vite 前端需要使用。 |
+| npm | Node.js 18 或更高版本附带的 npm | 请确保 `npm` 已加入 `PATH`。 |
+| 内存 | 4 GB RAM | 如果同时开启其他开发工具，建议使用 8 GB 或更多内存。 |
+| 可用磁盘空间 | 2 GB | 用于 Python 依赖、`node_modules`、本地 Chroma 数据、日志和生成文件。 |
+| 浏览器 | 当前版本的 Edge、Chrome 或 Firefox | 用于访问本地 Web UI。 |
+
+后端会根据 `backend/requirements.txt` 安装 `openai`、`python-dotenv`、`requests`、`fastapi`、`uvicorn[standard]` 和 `chromadb`。前端依赖根据 `frontend/package.json` 安装。
+
+安装依赖以及调用已配置的 AI 模型服务时需要联网。只有使用 GitHub Evidence 功能时才需要访问 GitHub。本地 Web UI、SQLite 投递记录和本地 Chroma 存储均在本机运行。
 
 ## 启动方式
 

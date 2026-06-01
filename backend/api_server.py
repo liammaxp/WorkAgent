@@ -436,8 +436,9 @@ def process_pids_for_workspace_command(workspace_dir: str, patterns: list[str]) 
         return set()
 
     escaped_workspace_dir = workspace_dir.replace("'", "''")
+    escaped_patterns = (pattern.replace("'", "''") for pattern in patterns)
     pattern_checks = " -or ".join(
-        f"$_.CommandLine -like '{pattern.replace("'", "''")}'" for pattern in patterns
+        f"$_.CommandLine -like '{pattern}'" for pattern in escaped_patterns
     )
     command = (
         f"$workspaceDir = '{escaped_workspace_dir}'; "
