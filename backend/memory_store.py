@@ -22,6 +22,7 @@ else:
 EMBEDDING_DIMENSIONS = 384
 PROFILE_COLLECTION = "profile_facts"
 GITHUB_COLLECTION = "github_evidence"
+PROFILE_MIGRATION_MARKER = ".legacy_profile_migrated"
 TOKEN_PATTERN = re.compile(r"[\w.+#-]+", re.UNICODE)
 
 
@@ -97,17 +98,19 @@ class MemoryVectorStore:
         self._migrate_legacy_github()
 
     def _migrate_legacy_profile(self) -> None:
-        if self._profile.count() or not self.legacy_memory_path.exists():
+        marker_path = self.persist_directory / PROFILE_MIGRATION_MARKER
+        if marker_path.exists():
             return
-        content = self.legacy_memory_path.read_text(encoding="utf-8").strip()
-        if not content:
-            return
-        try:
-            memory = json.loads(content)
-        except json.JSONDecodeError:
-            memory = {"notes": content}
-        if isinstance(memory, dict):
-            self._replace_profile(memory, source="legacy-memory-json")
+        if not self._profile.count() and self.legacy_memory_path.exists():
+            content = self.legacy_memory_path.read_text(encoding="utf-8").strip()
+            if content:
+                try:
+                    memory = json.loads(content)
+                except json.JSONDecodeError:
+                    memory = {"notes": content}
+                if isinstance(memory, dict):
+                    self._replace_profile(memory, source="legacy-memory-json")
+        marker_path.touch()
 
     def _migrate_legacy_github(self) -> None:
         if self._github.count() or not self.legacy_github_dir.exists():
@@ -276,6 +279,49 @@ class MemoryVectorStore:
         for section, items in list_sections.items():
             memory[section] = [value for _, value in sorted(items)]
         return memory
+
+    def delete_profile(
+        self,
+        section: str,
+        item_index: int | None = None,
+        delete_section: bool = False,
+    ) -> dict[str, Any]:
+        self._ensure_client()
+        section = section.strip()
+        if not section:
+            raise ValueError("Memory section is required.")
+        if item_index is not None and item_index < 0:
+            raise ValueError("Memory item_index must be zero or greater.")
+        if item_index is None and not delete_section:
+            raise ValueError(
+                "Specify item_index to delete one list item, or set delete_section=true "
+                "to delete the whole memory section."
+            )
+
+        candidates = self._profile.get(
+            where={"section": section},
+            include=["documents", "metadatas"],
+        )
+        deleted_ids = []
+        deleted_values = []
+        for record_id, document, metadata in zip(
+            candidates.get("ids", []),
+            candidates.get("documents", []),
+            candidates.get("metadatas", []),
+        ):
+            is_target_item = metadata.get("is_list") and int(metadata["index"]) == item_index
+            if delete_section or is_target_item:
+                deleted_ids.append(record_id)
+                deleted_values.append(json.loads(document.split("\n", 1)[1]))
+
+        if deleted_ids:
+            self._profile.delete(ids=deleted_ids)
+        return {
+            "deleted": len(deleted_ids),
+            "section": section,
+            "item_index": item_index,
+            "deleted_values": deleted_values,
+        }
 
     @staticmethod
     def _repo_key(context: dict[str, Any], index: int) -> str:

@@ -697,6 +697,14 @@ def replace_profile_memory(memory, source="profile-update"):
     return MEMORY_STORE.replace_profile(memory, source=source)
 
 
+def delete_profile_memory(section, item_index=None, delete_section=False):
+    return MEMORY_STORE.delete_profile(
+        section=section,
+        item_index=item_index,
+        delete_section=delete_section,
+    )
+
+
 def read_stored_github_context(query=""):
     return MEMORY_STORE.read_github_contexts(query=query)
 
@@ -1704,6 +1712,34 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "delete_profile_memory",
+        "description": (
+            "Delete a specific fact from the user's Chroma profile memory. "
+            "Read memory first. To delete one item from a list section, provide its zero-based item_index. "
+            "Set delete_section=true only when the user explicitly asks to delete the whole section."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "description": "Exact profile memory section name, such as skills or projects.",
+                },
+                "item_index": {
+                    "type": "integer",
+                    "description": "Zero-based index for one item in a list section.",
+                },
+                "delete_section": {
+                    "type": "boolean",
+                    "description": "Whether to delete every fact in the section. Use only when explicitly requested.",
+                },
+            },
+            "required": ["section"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_tailored_resume",
         "description": "Read the modified resume LaTeX code from tailored_resume.txt. Prefer this when writing cover letters for the current job.",
         "parameters": {
@@ -1867,6 +1903,7 @@ def read_github_context(query=""):
 
 TOOL_FUNCTIONS = {
     "read_memory": read_memory,
+    "delete_profile_memory": delete_profile_memory,
     "read_resume": read_resume,
     "read_tailored_resume": read_tailored_resume,
     "read_job_description": read_job_description,
@@ -1906,8 +1943,9 @@ def ask_agent(user_input, adapter, model):
 User request:
 {user_input}
 
-You have tools for reading Chroma profile memory, resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+You have tools for reading and deleting specific Chroma profile memory facts, reading resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
+When the user asks to forget or delete profile memory, call read_memory first, then use delete_profile_memory for only the requested fact. Set delete_section=true only when the user explicitly asks to remove the whole section. Report what was deleted.
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
 When tailoring a resume, compare the current resume projects with factual projects retrieved from Chroma profile memory. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.

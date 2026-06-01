@@ -15,6 +15,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Edit a base resume and generate a tailored LaTeX resume for the current role.
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory.
 - Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
+- Delete a specific Chroma profile-memory fact through Agent Chat.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
@@ -130,6 +131,18 @@ Existing `information/memory.json` and older `outputs/backend/github_context/*.j
 
 The Resume page can merge durable facts from the base resume into Chroma. The backend also supports merging from the tailored resume through `POST /api/resume/update-memory`. Chroma records are reconstructed as JSON when profile memory is read through the backend.
 
+Agent Chat can also delete a requested profile-memory fact. The agent reads the stored profile first, then deletes either one indexed item from a list section or an explicitly requested whole section.
+
+Example Agent Chat requests:
+
+```text
+Forget the React skill in my profile memory.
+Delete the WorkAgent project from my profile memory.
+Delete the entire target_roles memory section.
+```
+
+The delete tool requires an exact section plus either a zero-based list-item index or an explicit whole-section deletion flag. Legacy `information/memory.json` migration is marked after its first attempt so deleted facts are not restored from the old JSON source after a restart.
+
 ## Prompt Customization
 
 WorkAgent reads its system prompt from:
@@ -162,7 +175,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 - Interview Prep: generate and edit interview preparation notes.
 - GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, and fetch approved context into Chroma.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
-- Agent Chat: free-form chat interface for the same agent workflow.
+- Agent Chat: free-form chat interface for the same agent workflow, including deletion of specific profile-memory facts.
 - Language Switch: change the Web UI between Chinese and English.
 
 ## API Endpoints
@@ -328,6 +341,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 分析已保存的职位描述，提取岗位要求、技能、职责、隐含期望和匹配度。
 - 编辑基础简历，并为当前岗位生成定制版 LaTeX 简历。
 - 根据简历材料更新 Chroma 向量记忆；新增或更新前会先检索并对比相似记录。
+- 通过 Agent Chat 删除指定的 Chroma 画像记忆。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
 - 生成和编辑面试准备笔记。
 - 直接在 Web UI 中配置模型供应商、模型、Base URL 和 API Key。
@@ -440,6 +454,18 @@ information/chroma/
 
 Resume 页面可以把基础简历中的长期事实合并到 Chroma。后端也支持通过 `POST /api/resume/update-memory` 从定制简历合并长期事实。通过后端读取画像记忆时，Chroma 记录会重新组织为 JSON。
 
+Agent Chat 也可以删除指定的画像记忆。agent 会先读取已存储的画像，再删除列表 section 中指定索引的一项，或删除用户明确要求移除的整个 section。
+
+示例：
+
+```text
+忘记我的 React 技能。
+删除画像记忆中的 WorkAgent 项目。
+删除整个 target_roles 记忆 section。
+```
+
+删除工具必须接收准确的 section，并且需要列表项的从零开始索引，或显式的整段删除标记。旧版 `information/memory.json` 首次尝试迁移后会写入标记，避免已删除的记忆在重启后从旧 JSON 来源恢复。
+
 ## Prompt 个性化
 
 WorkAgent 的系统 Prompt 来自：
@@ -472,7 +498,7 @@ background/prompt.example.txt
 - Interview Prep：生成并编辑面试准备笔记。
 - GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，并把已确认的上下文写入 Chroma。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
-- Agent Chat：与核心 agent 自由对话。
+- Agent Chat：与核心 agent 自由对话，也可以删除指定的画像记忆。
 - 语言切换：在中文和英文界面之间切换。
 
 ## API 接口
