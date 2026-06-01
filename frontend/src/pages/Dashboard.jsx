@@ -232,30 +232,16 @@ export default function Dashboard() {
             </section>
 
             <section className="card">
-              <h2 className="card-title">{copy.recentGithub}</h2>
-              {status.outputs.github_context.length ? (
-                <ul className="output-list">
-                  {status.outputs.github_context.map((item) => <li key={item.path}>{item.name}</li>)}
-                </ul>
-              ) : (
-                <p className="empty-state">{copy.noGithub}</p>
-              )}
+              <h2 className="card-title">{copy.quickStart}</h2>
+              <p className="helper-paragraph">{copy.quickStartText}</p>
               <div className="btn-row">
-                <Link to="/github" className="btn btn-primary">{copy.getGithubEvidence}</Link>
+                <Link to="/job" className="btn btn-secondary">1. {text[language].nav.job}</Link>
+                <Link to="/resume" className="btn btn-secondary">2. {text[language].nav.resume}</Link>
+                <Link to="/cover-letter" className="btn btn-secondary">3. {text[language].nav.coverLetter}</Link>
+                <Link to="/applications" className="btn btn-secondary">4. {text[language].nav.applications}</Link>
               </div>
             </section>
           </div>
-
-          <section className="card">
-            <h2 className="card-title">{copy.quickStart}</h2>
-            <p className="helper-paragraph">{copy.quickStartText}</p>
-            <div className="btn-row">
-              <Link to="/job" className="btn btn-secondary">1. {text[language].nav.job}</Link>
-              <Link to="/resume" className="btn btn-secondary">2. {text[language].nav.resume}</Link>
-              <Link to="/cover-letter" className="btn btn-secondary">3. {text[language].nav.coverLetter}</Link>
-              <Link to="/applications" className="btn btn-secondary">4. {text[language].nav.applications}</Link>
-            </div>
-          </section>
         </>
       )}
     </>
