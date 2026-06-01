@@ -549,6 +549,39 @@ def output_language_instruction(language: str) -> str:
     )
 
 
+def original_resume_language_instruction(output_type: str) -> str:
+    try:
+        resume = agent.read_resume()
+    except FileNotFoundError:
+        return ""
+
+    chinese_character_count = len(re.findall(r"[\u4e00-\u9fff]", resume))
+    if chinese_character_count < 20:
+        return ""
+
+    if output_type == "tailored_resume":
+        output_requirement = (
+            "Generate the tailored resume entirely in Chinese. Preserve the required LaTeX commands and "
+            "factual proper nouns, but write all user-facing section headings, summaries, experience descriptions, "
+            "project descriptions, and bullet points in Chinese."
+        )
+    else:
+        output_requirement = "Write the complete cover letter entirely in Chinese."
+
+    return (
+        "\n\nOriginal resume language requirement: resume.txt is a Chinese resume. "
+        f"{output_requirement} This requirement overrides any conflicting UI language setting."
+    )
+
+
+def original_resume_language_instruction_for_request(message: str) -> str:
+    if agent.is_likely_cover_letter_request(message):
+        return original_resume_language_instruction("cover_letter")
+    if agent.is_likely_resume_edit_request(message):
+        return original_resume_language_instruction("tailored_resume")
+    return ""
+
+
 def job_analysis_language_instruction(language: str) -> str:
     if normalize_language(language) == "en":
         return (
@@ -1053,7 +1086,9 @@ def agent_ask(body: AgentAskBody):
         agent.current_model = body.model.strip()
 
     answer = run_agent_task(
-        body.message + output_language_instruction(body.language),
+        body.message
+        + output_language_instruction(body.language)
+        + original_resume_language_instruction_for_request(body.message),
         body.provider,
         body.model,
     )
@@ -1095,7 +1130,11 @@ def analyze_job_description(body: AnalyzeBody):
 
 @app.post("/api/resume/tailor")
 def tailor_resume(body: TailorBody):
-    prompt = RESUME_TAILOR_PROMPT + output_language_instruction(body.language)
+    prompt = (
+        RESUME_TAILOR_PROMPT
+        + output_language_instruction(body.language)
+        + original_resume_language_instruction("tailored_resume")
+    )
     if not body.allow_project_selection:
         prompt += (
             "\nKeep the existing resume project list. Do not remove projects or add projects from Chroma profile memory. "
@@ -1128,7 +1167,12 @@ def update_resume_memory(body: ResumeMemoryBody):
 @app.post("/api/cover-letter/generate")
 def generate_cover_letter(body: CoverLetterBody):
     style_hint = f"\nPreferred style: {body.style}."
-    prompt = agent.COVER_LETTER_AGENT_PROMPT + style_hint + output_language_instruction(body.language)
+    prompt = (
+        agent.COVER_LETTER_AGENT_PROMPT
+        + style_hint
+        + output_language_instruction(body.language)
+        + original_resume_language_instruction("cover_letter")
+    )
     if not body.use_tailored_resume:
         prompt += "\nUse resume.txt instead of tailored_resume.txt if the user requested it."
     if body.use_github_context:

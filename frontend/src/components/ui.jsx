@@ -26,6 +26,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   cancelLabel,
+  confirmDisabled = false,
   loading = false,
   onConfirm,
   onCancel,
@@ -44,7 +45,7 @@ export function ConfirmDialog({
           <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={loading}>
             {cancelLabel || common.cancel}
           </button>
-          <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={loading || confirmDisabled}>
             {loading ? common.loading : confirmLabel || common.confirm}
           </button>
         </div>
