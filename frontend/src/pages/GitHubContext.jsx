@@ -21,6 +21,16 @@ function textToList(value) {
     .filter(Boolean);
 }
 
+function formatMemoryUpdatedAt(value, language) {
+  const match = value?.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if (!match) return value || "-";
+  const [, year, month, day, hour, minute, second] = match;
+  return new Intl.DateTimeFormat(language === "en" ? "en" : "zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`));
+}
+
 export default function GitHubContext() {
   const { language } = useLanguage();
   const copy = text[language].github;
@@ -35,6 +45,7 @@ export default function GitHubContext() {
     token: "",
   });
   const [tokenConfigured, setTokenConfigured] = useState(false);
+  const [memoryRepositories, setMemoryRepositories] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadGithubConfig = () =>
@@ -47,6 +58,7 @@ export default function GitHubContext() {
         token: current.token,
       }));
       setTokenConfigured(data.token_configured);
+      setMemoryRepositories(data.memory_repositories || []);
       return data;
     });
 
@@ -64,6 +76,7 @@ export default function GitHubContext() {
       });
       setGithubForm((current) => ({ ...current, token: "" }));
       setTokenConfigured(data.token_configured);
+      setMemoryRepositories(data.memory_repositories || []);
       setScan((current) =>
         current
           ? { ...current, identities: data.identities, token_configured: data.token_configured }
@@ -84,7 +97,9 @@ export default function GitHubContext() {
   const approveFetchContext = () =>
     run(async () => {
       const data = await api.fetchGithubContext(true, source);
+      const githubConfig = await api.getGithubConfig();
       setContext(data);
+      setMemoryRepositories(githubConfig.memory_repositories || []);
       setConfirmOpen(false);
       return data;
     }, copy.fetched);
@@ -183,6 +198,25 @@ export default function GitHubContext() {
             {copy.confirmFetch}
           </button>
         </div>
+      </section>
+
+      <section className="card">
+        <h2 className="card-title">{copy.memoryRepositories}</h2>
+        <p className="helper-text">{copy.memoryRepositoriesHint}</p>
+        {memoryRepositories.length ? (
+          <div className="repo-list">
+            {memoryRepositories.map((repo) => (
+              <div key={repo.repository} className="repo-item">
+                <span>{repo.repository}</span>
+                <span className="status-line">
+                  {copy.memoryUpdatedAt}{formatMemoryUpdatedAt(repo.updated_at, language)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">{copy.noMemoryRepositories}</p>
+        )}
       </section>
 
       {scan && (

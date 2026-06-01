@@ -286,6 +286,7 @@ def build_github_config_status() -> dict[str, Any]:
     return {
         "identities": agent.read_github_identities(),
         "token_configured": agent.github_token_is_configured(),
+        "memory_repositories": agent.MEMORY_STORE.list_github_repositories(),
     }
 
 
@@ -825,21 +826,36 @@ def read_approved_github_context(query: str = "") -> str:
 agent.TOOL_FUNCTIONS["read_github_context"] = read_approved_github_context
 
 
+def read_github_memory_repo_source() -> str:
+    repositories = agent.MEMORY_STORE.list_github_repositories()
+    return "\n".join(
+        f"https://github.com/{item['repository']}"
+        for item in repositories
+        if item.get("repository")
+    )
+
+
 def read_github_repo_source(resume_source: str) -> str:
     if resume_source == "resume":
         return agent.read_resume()
     if resume_source == "tailored_resume":
         return agent.read_tailored_resume()
     if resume_source == "memory":
-        return agent.read_memory()
+        return f"{agent.read_memory()}\n\n{read_github_memory_repo_source()}"
     if resume_source == "resume_and_memory":
-        return f"{agent.read_resume()}\n\n{agent.read_memory()}"
+        return (
+            f"{agent.read_resume()}\n\n{agent.read_memory()}\n\n"
+            f"{read_github_memory_repo_source()}"
+        )
     if resume_source == "tailored_resume_and_resume_and_memory":
         try:
             tailored_resume = agent.read_tailored_resume()
         except (FileNotFoundError, ValueError):
             tailored_resume = ""
-        return f"{tailored_resume}\n\n{agent.read_resume()}\n\n{agent.read_memory()}"
+        return (
+            f"{tailored_resume}\n\n{agent.read_resume()}\n\n{agent.read_memory()}\n\n"
+            f"{read_github_memory_repo_source()}"
+        )
     raise HTTPException(
         status_code=400,
         detail=(

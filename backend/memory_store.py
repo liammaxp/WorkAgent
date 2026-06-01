@@ -369,6 +369,21 @@ class MemoryVectorStore:
             documents = self._github.get(include=["documents"]).get("documents", [])
         return [json.loads(document.split("\n", 1)[1]) for document in documents]
 
+    def list_github_repositories(self) -> list[dict[str, str]]:
+        self._ensure_client()
+        if not self._github.count():
+            return []
+        metadatas = self._github.get(include=["metadatas"]).get("metadatas", [])
+        repositories = [
+            {
+                "repository": str(metadata.get("repository", "")),
+                "updated_at": str(metadata.get("updated_at", "")),
+            }
+            for metadata in metadatas
+            if metadata.get("repository")
+        ]
+        return sorted(repositories, key=lambda item: item["updated_at"], reverse=True)
+
     def github_count(self) -> int:
         self._ensure_client()
         return self._github.count()
