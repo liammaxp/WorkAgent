@@ -14,16 +14,17 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Analyze a saved job description and summarize requirements, skills, responsibilities, expectations, and fit.
 - Edit a base resume and generate a tailored LaTeX resume for the current role.
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory.
-- Update the local memory file from resume/background material.
+- Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
 - Configure GitHub usernames, commit author names, commit emails, and GitHub token from the Web UI.
 - Start from an example system prompt and customize the agent prompt from the Web UI.
-- Scan GitHub repository links from the resume and memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
+- Scan GitHub repository links from the resume and vector memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
+- Switch the Web UI between Chinese and English.
 
 ## Architecture
 
@@ -32,27 +33,29 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- backend/
 |   |-- main.py              # Core CLI agent, model adapters, tools, GitHub logic
 |   |-- api_server.py        # FastAPI HTTP layer for the frontend
+|   |-- memory_store.py      # Chroma persistence, local embeddings, semantic retrieval
 |   `-- requirements.txt     # Python dependencies
 |-- frontend/
 |   |-- src/                 # React app source
 |   |-- package.json         # Frontend scripts and dependencies
 |   `-- vite.config.js       # Vite dev server and /api proxy
-|-- information/             # Local private working files and database
+|-- information/             # Local private working files, Chroma vectors, and SQLite database
 |-- background/              # Prompts and background notes
 |-- logs/                    # Development/runtime logs
 |-- outputs/
-|   |-- backend/             # Generated analysis, letters, resumes, GitHub context
+|   |-- backend/             # Generated analysis, letters, resumes, and legacy GitHub JSON
 |   `-- frontend/            # Frontend production build output
 |-- start_workagent.bat      # Windows one-click launcher
 |-- start_workagent.ps1      # Windows launcher script
 `-- README.md
 ```
 
-The system has three main layers:
+The system has four main layers:
 
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
-2. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
-3. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
+3. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
+4. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
 
@@ -63,6 +66,8 @@ Supported providers:
 - DeepSeek
 - Claude / Anthropic
 - Gemini / Google
+
+Default models include `deepseek-v4-pro` for DeepSeek when `DEEPSEEK_MODEL` is not explicitly configured.
 
 You can configure providers from the Dashboard:
 
@@ -105,7 +110,25 @@ The backend writes:
 - GitHub identities to `information/github_accounts.txt`
 - GitHub token to `information/.env` as `GITHUB_TOKEN`
 
-After saving GitHub settings, scan the base resume and memory projects, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep. Memory projects can therefore be considered before they appear in a tailored resume.
+After saving GitHub settings, scan the tailored resume, base resume, and vector-memory projects, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep. The combined source is selected by default, ignores a missing tailored resume, and deduplicates repository links. Memory projects can therefore be considered before they appear in a tailored resume.
+
+Approved repository metadata, verified identities, matched commits, changed files, diff patches, and extracted diff signals are written to the `github_evidence` Chroma collection. GitHub evidence remains separate from durable profile facts.
+
+## Vector Memory
+
+WorkAgent stores durable profile memory and approved GitHub evidence in separate collections inside a local Chroma vector database:
+
+```text
+information/chroma/
+```
+
+The `profile_facts` collection stores durable user facts. The `github_evidence` collection stores approved repository and commit evidence.
+
+New facts are embedded locally, compared with similar stored records, and then inserted, updated, or deduplicated. Retrieval also uses vector search when the agent provides a task, skill, or project query. The local embedder is deterministic and works offline without downloading an embedding model or sending private profile data to an external embedding API.
+
+Existing `information/memory.json` and older `outputs/backend/github_context/*.json` files are imported automatically when the Chroma collections are empty. They remain migration sources only; Chroma is the active store after migration.
+
+The Resume page can merge durable facts from the base resume into Chroma. The backend also supports merging from the tailored resume through `POST /api/resume/update-memory`. Chroma records are reconstructed as JSON when profile memory is read through the backend.
 
 ## Prompt Customization
 
@@ -133,13 +156,14 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, edit the tailored resume, update memory, and generate a tailored LaTeX resume with optional JD-based project selection.
+- Resume: edit the base resume, edit the tailored resume, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
 - Cover Letter: choose a writing style, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes.
-- GitHub Evidence: configure GitHub identity/token, scan repositories from the resume and memory, and fetch approved context.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, and fetch approved context into Chroma.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow.
+- Language Switch: change the Web UI between Chinese and English.
 
 ## API Endpoints
 
@@ -183,6 +207,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/cover_letter.txt`
 - `information/interview_prep.txt`
 - `information/memory.json`
+- `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
@@ -206,6 +231,8 @@ It starts the backend API, starts the frontend dev server, waits for both to bec
 ```text
 http://localhost:5173
 ```
+
+The Web UI opens a local session when loaded and notifies the backend when the page closes.
 
 ### Manual Backend Start
 
@@ -262,7 +289,7 @@ Useful CLI commands:
 Backend syntax check:
 
 ```powershell
-python -m py_compile backend\api_server.py backend\main.py
+python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
 ```
 
 Frontend production build:
@@ -300,16 +327,17 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 
 - 分析已保存的职位描述，提取岗位要求、技能、职责、隐含期望和匹配度。
 - 编辑基础简历，并为当前岗位生成定制版 LaTeX 简历。
-- 根据简历和背景材料更新本地记忆文件。
+- 根据简历材料更新 Chroma 向量记忆；新增或更新前会先检索并对比相似记录。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
 - 生成和编辑面试准备笔记。
 - 直接在 Web UI 中配置模型供应商、模型、Base URL 和 API Key。
 - 直接在 Web UI 中配置 GitHub 用户名、提交作者名、提交邮箱和 GitHub Token。
 - 提供可直接试用的示例系统 Prompt，并支持在 Web UI 中编辑个性化 Prompt。
-- 从简历链接中扫描 GitHub 仓库，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
+- 从简历和向量记忆中扫描 GitHub 仓库链接，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
 - 保守使用 GitHub 证据支持项目描述，避免夸大个人贡献。
 - 使用本地 SQLite 数据库追踪求职申请。
 - 同时提供本地 Web UI 和原始 CLI 流程。
+- 在 Web UI 中切换中文和英文。
 
 ## 架构
 
@@ -318,27 +346,29 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- backend/
 |   |-- main.py              # 核心 CLI agent、模型适配、工具、GitHub 逻辑
 |   |-- api_server.py        # 面向前端的 FastAPI HTTP 层
+|   |-- memory_store.py      # Chroma 持久化、本地向量化和语义检索
 |   `-- requirements.txt     # Python 依赖
 |-- frontend/
 |   |-- src/                 # React 应用源码
 |   |-- package.json         # 前端脚本和依赖
 |   `-- vite.config.js       # Vite 开发服务器和 /api 代理
-|-- information/             # 本地私有工作文件和数据库
+|-- information/             # 本地私有工作文件、Chroma 向量和 SQLite 数据库
 |-- background/              # Prompt 和背景说明
 |-- logs/                    # 开发和运行日志
 |-- outputs/
-|   |-- backend/             # 生成的分析、求职信、简历、GitHub 上下文
+|   |-- backend/             # 生成的分析、求职信、简历和旧版 GitHub JSON
 |   `-- frontend/            # 前端生产构建输出
 |-- start_workagent.bat      # Windows 一键启动入口
 |-- start_workagent.ps1      # Windows 启动脚本
 `-- README.md
 ```
 
-系统主要分为三层：
+系统主要分为四层：
 
 1. `backend/main.py`：本地 agent 逻辑、模型适配器、文件工具、GitHub 上下文提取和 SQLite 投递记录。
-2. `backend/api_server.py`：Web UI 使用的 FastAPI 接口。
-3. `frontend/`：React + Vite 前端，包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面。
+2. `backend/memory_store.py`：Chroma collections、确定性的本地向量化、写入前相似度对比、语义检索和旧 JSON 自动迁移。
+3. `backend/api_server.py`：Web UI 使用的 FastAPI 接口。
+4. `frontend/`：React + Vite 前端，包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面。
 
 ## 模型配置
 
@@ -349,6 +379,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - DeepSeek
 - Claude / Anthropic
 - Gemini / Google
+
+如果没有显式配置 `DEEPSEEK_MODEL`，DeepSeek 默认使用 `deepseek-v4-pro`。
 
 可以在 Dashboard 中配置：
 
@@ -388,7 +420,25 @@ GitHub Evidence 页面可以配置：
 
 后端会把 GitHub 身份写入 `information/github_accounts.txt`，把 Token 写入 `information/.env` 的 `GITHUB_TOKEN`。
 
-保存后，扫描简历中的仓库链接并确认授权，即可读取仓库上下文，用于简历定制、求职信和面试准备。
+保存后，扫描定制简历、基础简历和向量记忆中的仓库链接并确认授权，即可读取仓库上下文，用于简历定制、求职信和面试准备。页面默认选择这个完整组合；定制简历尚不存在时会自动忽略，并对仓库链接去重。记忆中的项目即使还没有出现在当前简历里，也可以进入候选范围。
+
+已授权的仓库元数据、已验证身份、匹配到的 commits、文件变更、diff patch 和提取出的 diff 信号会写入 Chroma 的 `github_evidence` collection。GitHub 证据与长期画像事实分开存储。
+
+## 向量记忆
+
+WorkAgent 使用本地 Chroma 向量数据库保存长期画像记忆和已授权的 GitHub 证据：
+
+```text
+information/chroma/
+```
+
+`profile_facts` collection 保存稳定的个人画像事实。`github_evidence` collection 保存已授权的仓库和 commit 证据。
+
+新增信息会先在本地完成向量化，再与已有记录进行相似度对比，最后决定新增、更新或去重。提取信息时，agent 也可以根据任务、技能或项目关键词进行语义检索。内置向量化器是确定性的本地实现，不会下载 embedding 模型，也不会把个人资料发送给外部 embedding API。
+
+旧版 `information/memory.json` 和 `outputs/backend/github_context/*.json` 会在 Chroma collection 为空时自动导入。导入后，它们只作为迁移来源保留；日常读写以 Chroma 为准。
+
+Resume 页面可以把基础简历中的长期事实合并到 Chroma。后端也支持通过 `POST /api/resume/update-memory` 从定制简历合并长期事实。通过后端读取画像记忆时，Chroma 记录会重新组织为 JSON。
 
 ## Prompt 个性化
 
@@ -416,13 +466,14 @@ background/prompt.example.txt
 
 - Dashboard：查看 provider/model 状态、配置 API Key、检查文件状态、查看最近输出和快速入口。
 - Job Description：编辑、保存并分析当前职位描述。
-- Resume：编辑基础简历和定制简历，更新记忆，生成定制版 LaTeX 简历。
+- Resume：编辑基础简历和定制简历，更新 Chroma 向量记忆，生成定制版 LaTeX 简历。
 - Cover Letter：选择写作风格，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记。
-- GitHub Evidence：配置 GitHub 身份/Token，扫描仓库并获取已确认的上下文。
+- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，并把已确认的上下文写入 Chroma。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话。
+- 语言切换：在中文和英文界面之间切换。
 
 ## API 接口
 
@@ -466,6 +517,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/cover_letter.txt`
 - `information/interview_prep.txt`
 - `information/memory.json`
+- `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
@@ -489,6 +541,8 @@ start_workagent.bat
 ```text
 http://localhost:5173
 ```
+
+Web UI 加载时会打开本地会话，页面关闭时会通知后端。
 
 ### 手动启动后端
 
@@ -545,7 +599,7 @@ python main.py
 后端语法检查：
 
 ```powershell
-python -m py_compile backend\api_server.py backend\main.py
+python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
 ```
 
 前端生产构建：

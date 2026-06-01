@@ -14,6 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from memory_store import MemoryVectorStore
+
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
@@ -24,6 +26,7 @@ load_dotenv(INFORMATION_DIR / ".env")
 PROMPT_PATH = BACKGROUND_DIR / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
 MEMORY_PATH = INFORMATION_DIR / "memory.json"
+CHROMA_DB_PATH = INFORMATION_DIR / "chroma"
 RESUME_PATH = INFORMATION_DIR / "resume.txt"
 JOB_DESCRIPTION_PATH = INFORMATION_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = INFORMATION_DIR / "github_accounts.txt"
@@ -39,6 +42,7 @@ COVER_LETTER_PATH = INFORMATION_DIR / "cover_letter.txt"
 INTERVIEW_PREP_PATH = INFORMATION_DIR / "interview_prep.txt"
 APPLICATION_DB_PATH = INFORMATION_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
+MEMORY_STORE = MemoryVectorStore(CHROMA_DB_PATH, MEMORY_PATH, GITHUB_CONTEXT_OUTPUT_DIR)
 DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 JOB_AGENT_PROMPT = """
 Analyze the job description and produce:
@@ -60,7 +64,7 @@ Match score rubric:
 
 Score higher when the user's resume, memory, and approved GitHub evidence closely match the exact job description. Penalize missing required skills, weak evidence, unrelated projects, and unsupported claims. Explain the score by category.
 
-Use the available tools to read memory.json, resume.txt, and job_description.txt.
+Use the available tools to read the Chroma profile memory, resume.txt, and job_description.txt.
 Use GitHub context only if needed and approved by the user.
 Be specific and do not exaggerate the user's experience.
 Do not generate a cover letter in this analysis. Cover letters are generated only when the user explicitly requests one.
@@ -71,7 +75,7 @@ Write a tailored cover letter for the saved job description.
 Requirements:
 - Base the letter primarily on tailored_resume.txt, because it contains the resume version already modified for this job.
 - If tailored_resume.txt is not available, use resume.txt as a fallback and say that the tailored resume was not found.
-- Read job_description.txt and memory.json before drafting.
+- Read job_description.txt and the Chroma profile memory before drafting.
 - Use GitHub context only if it is needed to support a specific project claim and the user approves it.
 - Keep claims grounded in the resume, memory, job description, and approved GitHub evidence.
 - Do not exaggerate experience, ownership, seniority, or technologies.
@@ -554,9 +558,8 @@ def save_analysis_output(content, prefix="job_analysis"):
 
 
 def save_github_context_output(repo_contexts):
-    path = GITHUB_CONTEXT_OUTPUT_DIR / f"github_context_{timestamp_slug()}.json"
-    write_text_file(path, json.dumps(repo_contexts, ensure_ascii=False, indent=2))
-    return path
+    MEMORY_STORE.store_github_contexts(repo_contexts)
+    return CHROMA_DB_PATH
 
 
 def extract_latex_document(content):
@@ -667,11 +670,12 @@ The user pasted a new job description. It has already been saved to job_descript
     return workflow_request, f"Saved pasted job description to {JOB_DESCRIPTION_PATH}", True
 
 
-def read_memory():
-    if not MEMORY_PATH.exists():
+def read_memory(query=""):
+    memory = MEMORY_STORE.read_profile(query=query)
+    if not memory:
         return json.dumps(
             {
-                "note": "memory.json does not exist yet.",
+                "note": "The Chroma profile memory does not contain any facts yet.",
                 "expected_fields": [
                     "name",
                     "major",
@@ -684,14 +688,17 @@ def read_memory():
             ensure_ascii=False,
         )
 
-    content = MEMORY_PATH.read_text(encoding="utf-8").strip()
-    if not content or content.startswith(PLACEHOLDER_TEXT):
-        return json.dumps({"note": "memory.json is empty or still placeholder content."})
+    return json.dumps(memory, ensure_ascii=False, indent=2)
 
-    try:
-        return json.dumps(json.loads(content), ensure_ascii=False, indent=2)
-    except json.JSONDecodeError:
-        return content
+
+def replace_profile_memory(memory, source="profile-update"):
+    if not isinstance(memory, dict):
+        raise ValueError("Profile memory must be a JSON object.")
+    return MEMORY_STORE.replace_profile(memory, source=source)
+
+
+def read_stored_github_context(query=""):
+    return MEMORY_STORE.read_github_contexts(query=query)
 
 
 def read_resume():
@@ -1641,7 +1648,7 @@ def build_github_context(resume):
         repo_contexts.append(repo_context)
     print_github_context_summary(repo_contexts)
     github_context_path = save_github_context_output(repo_contexts)
-    print(f"\nAgent: GitHub context with commit diffs saved to {github_context_path}\n")
+    print(f"\nAgent: GitHub context with commit diffs saved to Chroma at {github_context_path}\n")
 
     if not has_usable_repo_context(repo_contexts):
         print(
@@ -1668,10 +1675,18 @@ TOOLS = [
     {
         "type": "function",
         "name": "read_memory",
-        "description": "Read the user's long-term profile from memory.json.",
+        "description": (
+            "Retrieve the user's long-term profile from the Chroma vector database. "
+            "Provide a task or topic query to retrieve the most relevant memory facts."
+        ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional task, job, skill, or project query for semantic retrieval.",
+                }
+            },
             "required": [],
             "additionalProperties": False,
         },
@@ -1713,13 +1728,18 @@ TOOLS = [
         "type": "function",
         "name": "read_github_context",
         "description": (
-            "Find GitHub repository links in resume.txt and memory.json, ask the user for permission, "
+            "Find GitHub repository links in resume.txt and Chroma profile memory, ask the user for permission, "
             "then read public/authorized repository context, matched commits, and commit diff "
             "evidence when available. Use diff evidence conservatively when writing resume bullets."
         ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional task or project query for semantic evidence retrieval.",
+                }
+            },
             "required": [],
             "additionalProperties": False,
         },
@@ -1836,7 +1856,7 @@ TOOLS = [
 ]
 
 
-def read_github_context():
+def read_github_context(query=""):
     resume = read_resume()
     github_context = build_github_context(resume)
     if not github_context:
@@ -1886,11 +1906,11 @@ def ask_agent(user_input, adapter, model):
 User request:
 {user_input}
 
-You have tools for reading memory.json, resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+You have tools for reading Chroma profile memory, resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
-When tailoring a resume, compare the current resume projects with factual projects in memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.
+When tailoring a resume, compare the current resume projects with factual projects retrieved from Chroma profile memory. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
 Keep job analysis, match scores, recommendations, and explanations separate from resume LaTeX code.
@@ -2051,7 +2071,7 @@ def run_cli():
             if permission.strip().lower() in ["y", "yes"]:
                 try:
                     resume_answer = ask_agent(
-                        "Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
+                        "Based on the saved job_description.txt, Chroma profile memory, resume.txt, and approved GitHub context if useful, generate the modified complete LaTeX resume code. Return only LaTeX code with no Markdown fences.",
                         adapter=current_adapter,
                         model=current_model,
                     )

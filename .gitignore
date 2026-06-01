@@ -8,6 +8,7 @@ information/tailored_resume.txt
 information/cover_letter.txt
 information/interview_prep.txt
 information/memory.json
+information/chroma/
 information/applications.sqlite3
 information/*.sqlite3
 information/*.db

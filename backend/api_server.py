@@ -46,19 +46,19 @@ INTERVIEW_PREP_PROMPT = """
 Generate interview preparation notes for the saved job description.
 
 Requirements:
-- Read job_description.txt, tailored_resume.txt (fallback to resume.txt), and memory.json.
+- Read job_description.txt, tailored_resume.txt (fallback to resume.txt), and Chroma profile memory.
 - Include likely technical questions, behavioral/STAR prompts, project talking points, and gaps to prepare for.
 - Keep claims grounded in the resume and job description.
 - Return the complete interview preparation notes directly.
 """
 
 RESUME_TAILOR_PROMPT = """
-Based on the saved job_description.txt, memory.json, resume.txt, and approved GitHub context if useful,
+Based on the saved job_description.txt, Chroma profile memory, resume.txt, and approved GitHub context if useful,
 generate the modified complete LaTeX resume code.
-Compare the projects currently listed in resume.txt with the factual projects available in memory.json.
+Compare the projects currently listed in resume.txt with the factual projects available in Chroma profile memory.
 Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
 update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
-Repository links in memory.json may be used only as candidates for approved GitHub evidence.
+Repository links in Chroma profile memory may be used only as candidates for approved GitHub evidence.
 Do not invent claims, technologies, metrics, responsibilities, or repository facts.
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
@@ -323,6 +323,10 @@ def list_output_files(directory: Path, suffix: str, limit: int = 5) -> list[dict
 
 
 def read_file_content(name: str) -> tuple[bool, str]:
+    if name == "memory":
+        content = agent.read_memory()
+        return bool(agent.MEMORY_STORE.profile_count()), content
+
     if name == "tailored_resume" and not agent.file_is_ready(agent.OUTPUT_RESUME_PATH):
         if not agent.LEGACY_OUTPUT_RESUME_PATH.exists():
             return False, ""
@@ -339,12 +343,23 @@ def read_file_content(name: str) -> tuple[bool, str]:
 
 
 def file_ready(name: str, path: Path) -> bool:
+    if name == "memory":
+        return bool(agent.MEMORY_STORE.profile_count())
     if name == "tailored_resume":
         return agent.file_is_ready(path) or agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
     return agent.file_is_ready(path)
 
 
 def save_file_content(name: str, content: str) -> None:
+    if name == "memory":
+        try:
+            memory = json.loads(content)
+        except json.JSONDecodeError as error:
+            raise ValueError("Memory must be a valid JSON object.") from error
+        if not isinstance(memory, dict):
+            raise ValueError("Memory must be a valid JSON object.")
+        agent.replace_profile_memory(memory, source="web-memory-editor")
+        return
     if name == "tailored_resume":
         agent.save_tailored_resume(content)
         return
@@ -618,17 +633,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
 
 def load_memory_for_merge() -> Any:
-    if not agent.MEMORY_PATH.exists():
-        return {}
-
-    content = agent.MEMORY_PATH.read_text(encoding="utf-8").strip()
-    if not content or content.startswith(agent.PLACEHOLDER_TEXT):
-        return {}
-
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {"notes": content}
+    return agent.MEMORY_STORE.read_profile()
 
 
 def normalized_json(value: Any) -> str:
@@ -674,7 +679,7 @@ Resume:
 
     changed = normalized_json(merged_memory) != normalized_json(current_memory)
     if changed:
-        agent.write_text_file(agent.MEMORY_PATH, normalized_json(merged_memory))
+        agent.replace_profile_memory(merged_memory, source=f"resume-merge:{source_label}")
 
     additions = payload.get("additions", [])
     if not isinstance(additions, list):
@@ -685,7 +690,7 @@ Resume:
         "source": source_label,
         "additions": [str(item) for item in additions if str(item).strip()],
         "memory": merged_memory,
-        "path": str(agent.MEMORY_PATH),
+        "path": str(agent.CHROMA_DB_PATH),
     }
 
 
@@ -806,16 +811,10 @@ def looks_like_interview_prep(content: str) -> bool:
     return section_hits >= 3
 
 
-def read_approved_github_context() -> str:
-    outputs = list_output_files(agent.GITHUB_CONTEXT_OUTPUT_DIR, ".json", limit=1)
-    if not outputs:
+def read_approved_github_context(query: str = "") -> str:
+    context = agent.read_stored_github_context(query=query)
+    if not context:
         return "No approved GitHub context is available. Ask the user to approve GitHub access in the web UI first."
-
-    path = Path(outputs[0]["path"])
-    try:
-        context = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        return f"Approved GitHub context could not be read: {error}"
 
     if not agent.has_usable_repo_context(context):
         return "No usable approved GitHub context is available."
@@ -902,7 +901,14 @@ def get_status():
             "tailored_resumes": list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt"),
             "cover_letters": list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt"),
             "interview_prep": list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt"),
-            "github_context": list_output_files(agent.GITHUB_CONTEXT_OUTPUT_DIR, ".json"),
+            "github_context": [
+                {
+                    "name": "Chroma GitHub evidence",
+                    "path": str(agent.CHROMA_DB_PATH),
+                }
+            ]
+            if agent.MEMORY_STORE.github_count()
+            else [],
         },
     }
 
@@ -1076,7 +1082,7 @@ def tailor_resume(body: TailorBody):
     prompt = RESUME_TAILOR_PROMPT + output_language_instruction(body.language)
     if not body.allow_project_selection:
         prompt += (
-            "\nKeep the existing resume project list. Do not remove projects or add projects from memory.json. "
+            "\nKeep the existing resume project list. Do not remove projects or add projects from Chroma profile memory. "
             "You may still improve wording when it remains factual."
         )
     if body.use_github_context:
