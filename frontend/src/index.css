@@ -633,6 +633,60 @@ th {
   border-bottom: none;
 }
 
+.chat-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 160px));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-image-grid img {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.chat-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chat-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 13px;
+}
+
+.chat-attachment img {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.chat-attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attachment button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     flex-direction: column;

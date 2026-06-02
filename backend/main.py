@@ -170,6 +170,82 @@ class SimpleToolCall:
         self.call_id = call_id
         self.arguments = arguments or "{}"
 
+
+def strip_empty_images_field(item):
+    if isinstance(item, dict) and "images" in item and not item.get("images"):
+        return {key: value for key, value in item.items() if key != "images"}
+    return item
+
+
+def openai_responses_input_item(item):
+    if not isinstance(item, dict):
+        return item
+
+    images = item.get("images") or []
+    if not images:
+        return strip_empty_images_field(item)
+
+    content = [{"type": "input_text", "text": item.get("content", "")}]
+    content.extend(
+        {"type": "input_image", "image_url": image["data_url"]}
+        for image in images
+    )
+    return {"role": item.get("role", "user"), "content": content}
+
+
+def openai_chat_input_item(item):
+    if not isinstance(item, dict):
+        return item
+
+    images = item.get("images") or []
+    if not images:
+        return strip_empty_images_field(item)
+
+    content = [{"type": "text", "text": item.get("content", "")}]
+    content.extend(
+        {"type": "image_url", "image_url": {"url": image["data_url"]}}
+        for image in images
+    )
+    return {"role": item.get("role", "user"), "content": content}
+
+
+def anthropic_input_item(item):
+    if not isinstance(item, dict):
+        return item
+
+    images = item.get("images") or []
+    if not images:
+        return strip_empty_images_field(item)
+
+    content = [{"type": "text", "text": item.get("content", "")}]
+    content.extend(
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image["mime_type"],
+                "data": image["base64_data"],
+            },
+        }
+        for image in images
+    )
+    return {"role": item.get("role", "user"), "content": content}
+
+
+def gemini_input_parts(item):
+    parts = [{"text": item.get("content", "")}]
+    parts.extend(
+        {
+            "inlineData": {
+                "mimeType": image["mime_type"],
+                "data": image["base64_data"],
+            }
+        }
+        for image in item.get("images", [])
+    )
+    return parts
+
+
 class OpenAIResponsesAdapter(ModelAdapter):
     provider_name = "openai"
     def __init__(
@@ -200,7 +276,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
             model=model,
             instructions=instructions,
             tools=tools,
-            input=input_items,
+            input=[openai_responses_input_item(item) for item in input_items],
         )
 
     def get_function_calls(self, response):
@@ -259,7 +335,7 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
     def create_response(self, model, instructions, tools, input_items):
         if not self.messages:
             self.messages = [{"role": "system", "content": instructions}]
-            self.messages.extend(input_items)
+            self.messages.extend(openai_chat_input_item(item) for item in input_items)
         return self.client.chat.completions.create(
             model=model,
             messages=self.messages,
@@ -360,7 +436,7 @@ class ClaudeMessagesAdapter(ModelAdapter):
 
     def create_response(self, model, instructions, tools, input_items):
         if not self.messages:
-            self.messages.extend(input_items)
+            self.messages.extend(anthropic_input_item(item) for item in input_items)
         return self.post_json(
             "/v1/messages",
             {
@@ -458,7 +534,7 @@ class GeminiAdapter(ModelAdapter):
         if not self.contents:
             for item in input_items:
                 self.contents.append(
-                    {"role": "user", "parts": [{"text": item.get("content", "")}]}
+                    {"role": "user", "parts": gemini_input_parts(item)}
                 )
         return self.post_json(
             model,
@@ -545,6 +621,13 @@ def write_text_file(path, content):
 def clear_interview_prep():
     INTERVIEW_PREP_PATH.parent.mkdir(parents=True, exist_ok=True)
     INTERVIEW_PREP_PATH.write_text("", encoding="utf-8")
+
+
+def clear_tailored_resume():
+    TAILORED_RESUME_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_RESUME_PATH.write_text("", encoding="utf-8")
+    if LEGACY_OUTPUT_RESUME_PATH.exists():
+        LEGACY_OUTPUT_RESUME_PATH.write_text("", encoding="utf-8")
 
 
 def timestamp_slug():
@@ -660,8 +743,16 @@ Additional user request:
     if not is_likely_job_description(user_input):
         return user_input, None, False
 
+    previous_job_description = (
+        read_text_file(JOB_DESCRIPTION_PATH).strip()
+        if file_is_ready(JOB_DESCRIPTION_PATH)
+        else ""
+    )
+    new_job_description = user_input.strip()
     write_text_file(JOB_DESCRIPTION_PATH, user_input)
     clear_interview_prep()
+    if new_job_description != previous_job_description:
+        clear_tailored_resume()
     workflow_request = f"""
 The user pasted a new job description. It has already been saved to job_description.txt.
 
@@ -1935,11 +2026,10 @@ def execute_tool_call(tool_call, adapter):
     return adapter.make_tool_output(call_id, output)
 
 
-def ask_agent(user_input, adapter, model):
-    input_items = [
-        {
-            "role": "user",
-            "content": f"""
+def ask_agent(user_input, adapter, model, images=None):
+    user_item = {
+        "role": "user",
+        "content": f"""
 User request:
 {user_input}
 
@@ -1949,12 +2039,15 @@ When the user asks to forget or delete profile memory, call read_memory first, t
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
 When tailoring a resume, compare the current resume projects with factual projects retrieved from Chroma profile memory. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.
+When tailoring resume Experience entries, you may reorder factual bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. Preserve each existing Experience entry unless the user explicitly allows removing an entire entry. Never invent or change employers, roles, dates, responsibilities, technologies, or metrics.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
 Keep job analysis, match scores, recommendations, and explanations separate from resume LaTeX code.
 """,
-        }
-    ]
+    }
+    if images:
+        user_item["images"] = images
+    input_items = [user_item]
 
     for _ in range(6):
         response = adapter.create_response(

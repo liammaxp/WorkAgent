@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import Dashboard from "./pages/Dashboard.jsx";
 import JobDescription from "./pages/JobDescription.jsx";
@@ -32,6 +32,15 @@ const NAV_ITEMS = [
 
 export default function App() {
   const [language, setLanguage] = useState(getInitialLanguage);
+  const [chatSession, setChatSession] = useState(() => ({
+    sessionId: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    message: "",
+    images: [],
+    attachmentError: "",
+    history: [],
+  }));
+  const chatSessionRef = useRef(chatSession);
   const t = text[language];
   const languageValue = useMemo(() => ({ language, setLanguage }), [language]);
 
@@ -43,7 +52,7 @@ export default function App() {
   useEffect(() => {
     api.openSession().catch(() => {});
 
-    const shutdownOnClose = () => api.sendShutdownBeacon();
+    const shutdownOnClose = () => api.sendShutdownBeacon(chatSessionRef.current);
     window.addEventListener("pagehide", shutdownOnClose);
     window.addEventListener("beforeunload", shutdownOnClose);
 
@@ -52,6 +61,20 @@ export default function App() {
       window.removeEventListener("beforeunload", shutdownOnClose);
     };
   }, []);
+
+  useEffect(() => {
+    chatSessionRef.current = chatSession;
+    const hasContent =
+      chatSession.message.trim() ||
+      chatSession.images.length ||
+      chatSession.history.length;
+    if (!hasContent) return undefined;
+
+    const saveTimer = window.setTimeout(() => {
+      api.saveChatSession(chatSession).catch(() => {});
+    }, 500);
+    return () => window.clearTimeout(saveTimer);
+  }, [chatSession]);
 
   return (
     <LanguageContext.Provider value={languageValue}>
@@ -101,7 +124,7 @@ export default function App() {
             <Route path="/interview" element={<InterviewPrep />} />
             <Route path="/github" element={<GitHubContext />} />
             <Route path="/prompt" element={<PromptSettings />} />
-            <Route path="/chat" element={<Chat />} />
+            <Route path="/chat" element={<Chat session={chatSession} setSession={setChatSession} />} />
           </Routes>
         </main>
       </div>

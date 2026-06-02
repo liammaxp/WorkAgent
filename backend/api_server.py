@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -9,11 +12,14 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from openai import APIStatusError
 from pydantic import BaseModel, Field
 
 import main as agent
@@ -31,6 +37,8 @@ app.add_middleware(
 SHUTDOWN_GRACE_SECONDS = 2.0
 shutdown_timer: Optional[threading.Timer] = None
 shutdown_lock = threading.Lock()
+CHAT_SESSION_OUTPUT_DIR = agent.OUTPUT_DIR / "chat_sessions"
+chat_session_lock = threading.Lock()
 
 FILE_MAP = {
     "resume": agent.RESUME_PATH,
@@ -58,8 +66,11 @@ generate the modified complete LaTeX resume code.
 Compare the projects currently listed in resume.txt with the factual projects available in Chroma profile memory.
 Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
 update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
+Tailor the Experience section for the saved job description: you may reorder factual bullets, rewrite bullets
+for relevance and clarity, and remove weaker or redundant bullets. Preserve the factual meaning of the source resume.
+Keep every existing Experience entry unless the user explicitly allows removing entire Experience entries.
 Repository links in Chroma profile memory may be used only as candidates for approved GitHub evidence.
-Do not invent claims, technologies, metrics, responsibilities, or repository facts.
+Do not invent claims, technologies, metrics, responsibilities, employers, roles, dates, or repository facts.
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
 """
@@ -88,8 +99,35 @@ class PromptBody(BaseModel):
     content: str
 
 
+class AgentImageBody(BaseModel):
+    name: str = ""
+    mime_type: str
+    data_url: str
+
+
+class ChatHistoryEntryBody(BaseModel):
+    role: str
+    text: str = ""
+    images: list[AgentImageBody] = Field(default_factory=list)
+
+
+class ChatSessionBody(BaseModel):
+    session_id: str
+    created_at: str = ""
+    language: str = "zh"
+    message: str = ""
+    images: list[AgentImageBody] = Field(default_factory=list)
+    attachment_error: str = ""
+    history: list[ChatHistoryEntryBody] = Field(default_factory=list)
+
+
+class ShutdownBody(BaseModel):
+    chat_session: Optional[ChatSessionBody] = None
+
+
 class AgentAskBody(BaseModel):
     message: str
+    images: list[AgentImageBody] = Field(default_factory=list)
     provider: Optional[str] = None
     model: Optional[str] = None
     language: str = "zh"
@@ -107,6 +145,8 @@ class AnalyzeBody(BaseModel):
 class TailorBody(BaseModel):
     use_github_context: bool = True
     allow_project_selection: bool = True
+    allow_experience_removal: bool = False
+    include_application_hint: bool = False
     language: str = "zh"
 
 
@@ -219,6 +259,64 @@ def normalize_provider(provider: str) -> str:
     return aliases.get(normalized, normalized)
 
 
+def provider_supports_images(provider: str) -> bool:
+    return normalize_provider(provider) != "deepseek"
+
+
+def extract_model_api_error_message(error: Exception) -> str:
+    if isinstance(error, APIStatusError):
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            nested = body.get("error")
+            if isinstance(nested, dict) and nested.get("message"):
+                return str(nested["message"])
+        message = getattr(error, "message", None)
+        if message:
+            return str(message)
+        return str(error)
+
+    if isinstance(error, urllib.error.HTTPError):
+        raw_body = ""
+        if error.fp is not None:
+            try:
+                raw_body = error.read().decode("utf-8", errors="replace")
+            except OSError:
+                raw_body = ""
+        if raw_body:
+            try:
+                payload = json.loads(raw_body)
+            except json.JSONDecodeError:
+                return raw_body.strip() or error.reason or str(error)
+            if isinstance(payload, dict):
+                nested = payload.get("error")
+                if isinstance(nested, dict) and nested.get("message"):
+                    return str(nested["message"])
+                if payload.get("message"):
+                    return str(payload["message"])
+                if payload.get("error"):
+                    return str(payload["error"])
+            return raw_body.strip()
+        return error.reason or str(error)
+
+    return str(error)
+
+
+def raise_model_api_http_exception(error: Exception) -> None:
+    if isinstance(error, APIStatusError):
+        upstream_status = error.status_code or 502
+        http_status = upstream_status if 400 <= upstream_status < 600 else 502
+    elif isinstance(error, urllib.error.HTTPError):
+        http_status = error.code if 400 <= error.code < 600 else 502
+    else:
+        raise error
+
+    message = extract_model_api_error_message(error)
+    raise HTTPException(
+        status_code=http_status,
+        detail=f"Model API error: {message}",
+    ) from error
+
+
 def quote_env_value(value: str) -> str:
     if not value:
         return ""
@@ -303,6 +401,7 @@ def build_provider_config_status() -> dict[str, Any]:
                 "default_base_url": config["default_base_url"],
                 "default_model": config["default_model"],
                 "requires_base_url": config["requires_base_url"],
+                "supports_images": provider_supports_images(key),
             }
         )
     return {"providers": providers}
@@ -614,13 +713,128 @@ def interview_prep_language_instruction(language: str) -> str:
     )
 
 
-def run_agent_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
+MAX_AGENT_IMAGES = 4
+MAX_AGENT_IMAGE_BYTES = 10 * 1024 * 1024
+ALLOWED_AGENT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+def validate_agent_images(images: list[AgentImageBody]) -> list[dict[str, str]]:
+    if len(images) > MAX_AGENT_IMAGES:
+        raise HTTPException(status_code=400, detail=f"Attach at most {MAX_AGENT_IMAGES} images.")
+
+    validated = []
+    for image in images:
+        mime_type = image.mime_type.lower().strip()
+        if mime_type not in ALLOWED_AGENT_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail=f"Unsupported image type: {image.mime_type}")
+
+        prefix = f"data:{mime_type};base64,"
+        if not image.data_url.startswith(prefix):
+            raise HTTPException(status_code=400, detail="Invalid image data URL.")
+
+        base64_data = image.data_url[len(prefix) :]
+        try:
+            decoded = base64.b64decode(base64_data, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(status_code=400, detail="Invalid base64 image data.") from error
+
+        if not decoded:
+            raise HTTPException(status_code=400, detail="Attached image is empty.")
+        if len(decoded) > MAX_AGENT_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail="Each image must be 10 MB or smaller.")
+
+        validated.append(
+            {
+                "name": image.name.strip(),
+                "mime_type": mime_type,
+                "data_url": image.data_url,
+                "base64_data": base64_data,
+            }
+        )
+
+    return validated
+
+
+def save_chat_session(body: ChatSessionBody) -> dict[str, Any]:
+    safe_session_id = re.sub(r"[^A-Za-z0-9_-]", "", body.session_id)[:80]
+    if not safe_session_id:
+        raise HTTPException(status_code=400, detail="Chat session id is required.")
+
+    CHAT_SESSION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    assets_dir = CHAT_SESSION_OUTPUT_DIR / f"chat_session_{safe_session_id}_assets"
+    image_extensions = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }
+
+    def save_images(images: list[AgentImageBody]) -> list[dict[str, Any]]:
+        saved_images = []
+        for image in validate_agent_images(images):
+            decoded = base64.b64decode(image["base64_data"], validate=True)
+            digest = hashlib.sha256(decoded).hexdigest()[:16]
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            image_path = assets_dir / f"{digest}{image_extensions[image['mime_type']]}"
+            if not image_path.exists():
+                image_path.write_bytes(decoded)
+            saved_images.append(
+                {
+                    "name": image["name"],
+                    "mime_type": image["mime_type"],
+                    "path": str(image_path.relative_to(agent.ROOT_DIR)),
+                    "size_bytes": len(decoded),
+                }
+            )
+        return saved_images
+
+    payload = {
+        "session_id": safe_session_id,
+        "created_at": body.created_at,
+        "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "language": normalize_language(body.language),
+        "draft": {
+            "message": body.message,
+            "images": save_images(body.images),
+            "attachment_error": body.attachment_error,
+        },
+        "history": [
+            {
+                "role": entry.role,
+                "text": entry.text,
+                "images": save_images(entry.images),
+            }
+            for entry in body.history
+        ],
+    }
+    path = CHAT_SESSION_OUTPUT_DIR / f"chat_session_{safe_session_id}.json"
+    with chat_session_lock:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"saved": True, "path": str(path)}
+
+
+def ensure_provider_supports_images(provider: str, images: list[dict[str, str]]) -> None:
+    if images and not provider_supports_images(provider):
+        raise HTTPException(
+            status_code=400,
+            detail="The configured DeepSeek provider does not support image attachments. Switch to OpenAI, Claude, Gemini, or a vision-capable OpenAI-compatible provider.",
+        )
+
+
+def run_agent_task(
+    message: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    images: Optional[list[dict[str, str]]] = None,
+) -> str:
     adapter, _ = get_adapter(provider)
     chosen_model = model or adapter.default_model()
     try:
-        return agent.ask_agent(message, adapter=adapter, model=chosen_model)
+        return agent.ask_agent(message, adapter=adapter, model=chosen_model, images=images)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except (APIStatusError, urllib.error.HTTPError) as error:
+        raise_model_api_http_exception(error)
     except agent.transient_network_errors() as error:
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
     except RuntimeError as error:
@@ -638,10 +852,58 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
             input_items=[{"role": "user", "content": message}],
         )
         return adapter.output_text(response)
+    except (APIStatusError, urllib.error.HTTPError) as error:
+        raise_model_api_http_exception(error)
     except agent.transient_network_errors() as error:
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+APPLICATION_HINT_EXTRACTION_PROMPT = """
+Read the job description below and extract fields for an internal application-tracking form.
+Return ONLY valid JSON with exactly these string keys: "company", "role", "link", "notes".
+
+Rules:
+- company: hiring employer / company name only (not a person, team, or location).
+- role: job title / position name only (not seniority fluff alone, not the company name).
+- link: the single best URL to view or apply for this job posting; use "" if none is clearly a job link.
+- notes: optional brief context such as location or employment type (max 120 characters), or "".
+- Use the same language as the job description for company and role when the JD mixes languages.
+- Do not invent employers, titles, URLs, or facts that are not supported by the text.
+- Ignore resume bullets, benefits marketing, and equal-opportunity boilerplate when choosing company and role.
+
+Job description:
+"""
+
+
+def resolve_application_hint(job_description: str) -> dict[str, str]:
+    empty = {"company": "", "role": "", "link": "", "notes": ""}
+    trimmed = job_description.strip()
+    if not trimmed:
+        return empty
+
+    prompt = APPLICATION_HINT_EXTRACTION_PROMPT + trimmed
+    try:
+        response = run_text_task(prompt)
+        payload = extract_json_object(response)
+    except HTTPException:
+        return empty
+
+    def as_string(key: str) -> str:
+        value = payload.get(key, "")
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        return value.strip()
+
+    return {
+        "company": as_string("company"),
+        "role": as_string("role"),
+        "link": as_string("link"),
+        "notes": as_string("notes")[:120],
+    }
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -944,6 +1206,7 @@ def get_status():
     return {
         "provider": agent.current_provider,
         "model": agent.current_model,
+        "supports_images": provider_supports_images(agent.current_provider),
         "provider_configs": build_provider_config_status()["providers"],
         "files": {name: file_ready(name, path) for name, path in FILE_MAP.items()},
         "outputs": {
@@ -951,6 +1214,7 @@ def get_status():
             "tailored_resumes": list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt"),
             "cover_letters": list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt"),
             "interview_prep": list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt"),
+            "chat_sessions": list_output_files(CHAT_SESSION_OUTPUT_DIR, ".json"),
             "github_context": [
                 {
                     "name": "Chroma GitHub evidence",
@@ -964,15 +1228,25 @@ def get_status():
 
 
 @app.post("/api/shutdown")
-def shutdown():
+def shutdown(body: ShutdownBody):
+    chat_session = save_chat_session(body.chat_session) if body.chat_session else None
     schedule_shutdown()
-    return {"shutdown": True, "grace_seconds": SHUTDOWN_GRACE_SECONDS}
+    return {
+        "shutdown": True,
+        "grace_seconds": SHUTDOWN_GRACE_SECONDS,
+        "chat_session": chat_session,
+    }
 
 
 @app.post("/api/session/open")
 def open_session():
     canceled = cancel_pending_shutdown()
     return {"open": True, "canceled_shutdown": canceled}
+
+
+@app.post("/api/chat/session")
+def persist_chat_session(body: ChatSessionBody):
+    return save_chat_session(body)
 
 
 @app.post("/api/provider")
@@ -1086,12 +1360,21 @@ def agent_ask(body: AgentAskBody):
     if body.model:
         agent.current_model = body.model.strip()
 
+    images = validate_agent_images(body.images)
+    ensure_provider_supports_images(body.provider or agent.current_provider, images)
+    message = body.message.strip()
+    if not message and not images:
+        raise HTTPException(status_code=400, detail="Message or image attachment is required.")
+    if not message:
+        message = "Please inspect the attached image and describe what you can do with it."
+
     answer = run_agent_task(
-        body.message
+        message
         + output_language_instruction(body.language)
-        + original_resume_language_instruction_for_request(body.message),
+        + original_resume_language_instruction_for_request(message),
         body.provider,
         body.model,
+        images,
     )
     return {
         "answer": answer,
@@ -1109,12 +1392,23 @@ def agent_ask(body: AgentAskBody):
 
 @app.post("/api/job-description")
 def save_job_description(body: JobDescriptionBody):
+    previous_job_description = (
+        agent.read_text_file(agent.JOB_DESCRIPTION_PATH).strip()
+        if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
+        else ""
+    )
+    new_job_description = body.content.strip()
     agent.write_text_file(agent.JOB_DESCRIPTION_PATH, body.content)
     agent.clear_interview_prep()
+    tailored_resume_cleared = False
+    if new_job_description != previous_job_description:
+        agent.clear_tailored_resume()
+        tailored_resume_cleared = True
     return {
         "saved": True,
         "path": str(agent.JOB_DESCRIPTION_PATH),
         "interview_prep_cleared": True,
+        "tailored_resume_cleared": tailored_resume_cleared,
     }
 
 
@@ -1141,6 +1435,12 @@ def tailor_resume(body: TailorBody):
             "\nKeep the existing resume project list. Do not remove projects or add projects from Chroma profile memory. "
             "You may still improve wording when it remains factual."
         )
+    if body.allow_experience_removal:
+        prompt += (
+            "\nThe user explicitly allows removing an entire Experience entry when it is weakly relevant to the saved "
+            "job description and removing it improves the tailored resume. Keep stronger relevant Experience entries. "
+            "Never remove an entry merely to invent or substitute unsupported experience."
+        )
     if body.use_github_context:
         prompt += "\nUse read_github_context if needed, but only with user approval via the web UI."
     answer = run_agent_task(prompt)
@@ -1149,12 +1449,20 @@ def tailor_resume(body: TailorBody):
     else:
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
-    return {
+    response: dict[str, Any] = {
         "saved": True,
         "path": str(agent.OUTPUT_RESUME_PATH),
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
     }
+    if body.include_application_hint:
+        job_description = (
+            agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
+            if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
+            else ""
+        )
+        response["application_hint"] = resolve_application_hint(job_description)
+    return response
 
 
 @app.post("/api/resume/update-memory")

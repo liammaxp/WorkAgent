@@ -11,6 +11,14 @@ import { text, useLanguage } from "../i18n.jsx";
 
 let cachedAnalysis = null;
 
+const JD_SAVED_EVENT = "workagent-jd-saved";
+
+function notifyJobDescriptionSaved(result) {
+  if (result?.tailored_resume_cleared) {
+    window.dispatchEvent(new CustomEvent(JD_SAVED_EVENT));
+  }
+}
+
 export default function JobDescription() {
   const { language } = useLanguage();
   const copy = text[language].job;
@@ -37,7 +45,8 @@ export default function JobDescription() {
 
   const save = () =>
     run(async () => {
-      await api.saveJobDescription(content);
+      const result = await api.saveJobDescription(content);
+      notifyJobDescriptionSaved(result);
       if (
         cachedAnalysis?.jobDescription !== content ||
         cachedAnalysis?.language !== language
@@ -49,7 +58,10 @@ export default function JobDescription() {
 
   const analyze = () =>
     run(async () => {
-      if (content.trim()) await api.saveJobDescription(content);
+      if (content.trim()) {
+        const result = await api.saveJobDescription(content);
+        notifyJobDescriptionSaved(result);
+      }
       const data = await api.analyzeJob(false);
       setAnalysis(data.analysis || "");
       cachedAnalysis = {

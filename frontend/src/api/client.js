@@ -6,6 +6,18 @@ function currentLanguage() {
   return localStorage.getItem("workagent-language") === "en" ? "en" : "zh";
 }
 
+function chatSessionPayload(session) {
+  return {
+    session_id: session.sessionId,
+    created_at: session.createdAt,
+    language: currentLanguage(),
+    message: session.message,
+    images: session.images,
+    attachment_error: session.attachmentError,
+    history: session.history,
+  };
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -42,18 +54,25 @@ export const api = {
   getStatus: () => request("/status"),
   openSession: () => request("/session/open", { method: "POST" }),
   shutdown: () => request("/shutdown", { method: "POST", keepalive: true }),
-  sendShutdownBeacon: () => {
+  saveChatSession: (session) =>
+    request("/chat/session", {
+      method: "POST",
+      body: JSON.stringify(chatSessionPayload(session)),
+    }),
+  sendShutdownBeacon: (session) => {
     if (shutdownSent) return;
     shutdownSent = true;
+    const body = JSON.stringify({
+      chat_session: session ? chatSessionPayload(session) : null,
+    });
     if (navigator.sendBeacon) {
-      const blob = new Blob(["{}"], { type: "application/json" });
-      navigator.sendBeacon(`${API_BASE}/shutdown`, blob);
-      return;
+      const blob = new Blob([body], { type: "application/json" });
+      if (navigator.sendBeacon(`${API_BASE}/shutdown`, blob)) return;
     }
     fetch(`${API_BASE}/shutdown`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body,
       keepalive: true,
     }).catch(() => {});
   },
@@ -79,10 +98,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
-  askAgent: (message) =>
+  askAgent: (message, images = []) =>
     request("/agent/ask", {
       method: "POST",
-      body: JSON.stringify({ message, language: currentLanguage() }),
+      body: JSON.stringify({ message, images, language: currentLanguage() }),
     }),
   saveJobDescription: (content) =>
     request("/job-description", {
@@ -94,12 +113,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
-  tailorResume: (use_github_context = true, allow_project_selection = true) =>
+  tailorResume: (
+    use_github_context = true,
+    allow_project_selection = true,
+    allow_experience_removal = false,
+    include_application_hint = false,
+  ) =>
     request("/resume/tailor", {
       method: "POST",
       body: JSON.stringify({
         use_github_context,
         allow_project_selection,
+        allow_experience_removal,
+        include_application_hint,
         language: currentLanguage(),
       }),
     }),

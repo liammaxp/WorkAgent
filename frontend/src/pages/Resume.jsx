@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
 import {
   Alert,
@@ -9,7 +10,6 @@ import {
   useAsyncAction,
 } from "../components/ui.jsx";
 import { text, useLanguage } from "../i18n.jsx";
-
 const APPLICATION_PROMPT_JD_KEY = "workagent-application-prompt-jds";
 
 const EMPTY_APPLICATION_FORM = {
@@ -18,19 +18,6 @@ const EMPTY_APPLICATION_FORM = {
   link: "",
   notes: "",
 };
-
-const COMPANY_LABELS = ["company", "company name", "employer", "公司", "公司名称", "企业", "企业名称"];
-const ROLE_LABELS = ["role", "position", "job title", "title", "岗位", "岗位名称", "职位", "职位名称", "招聘职位"];
-const JD_SECTION_HEADINGS = new Set([
-  "about the job",
-  "job description",
-  "responsibilities",
-  "requirements",
-  "职位描述",
-  "岗位职责",
-  "职位要求",
-  "任职要求",
-]);
 
 function fingerprint(value) {
   let hash = 0;
@@ -63,68 +50,18 @@ function rememberHandledJobDescription(jobFingerprint) {
   );
 }
 
-function escapeRegularExpression(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function findLabeledValue(lines, labels) {
-  const labelPattern = labels.map(escapeRegularExpression).join("|");
-  const pattern = new RegExp(`^(?:[-*]\\s*)?(?:${labelPattern})\\s*[:：]\\s*(.+)$`, "i");
-  for (const line of lines) {
-    const match = line.match(pattern);
-    if (match?.[1]) return match[1].trim();
-  }
-  return "";
-}
-
-function isLikelyMetadataLine(line) {
-  return (
-    line.length <= 100 &&
-    !line.includes("：") &&
-    !line.includes(":") &&
-    !/^https?:\/\//i.test(line) &&
-    !JD_SECTION_HEADINGS.has(line.toLowerCase())
-  );
-}
-
-function extractApplicationForm(jobDescription) {
-  const lines = jobDescription
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  let company = findLabeledValue(lines, COMPANY_LABELS);
-  let role = findLabeledValue(lines, ROLE_LABELS);
-
-  for (const line of lines.slice(0, 5)) {
-    if (company && role) break;
-    const atMatch = line.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
-    const dividerMatch = line.match(/^(.+?)\s*[|｜]\s*(.+)$/);
-    const match = atMatch || dividerMatch;
-    if (!match) continue;
-    if (!role) role = match[1].trim();
-    if (!company) company = match[2].trim();
-  }
-
-  if (!company && !role && lines.length >= 2) {
-    const [firstLine, secondLine] = lines;
-    if (isLikelyMetadataLine(firstLine) && isLikelyMetadataLine(secondLine)) {
-      role = firstLine;
-      company = secondLine;
-    }
-  }
-
-  const link = jobDescription.match(/https?:\/\/[^\s<>"')\]]+/i)?.[0] || "";
-  return { ...EMPTY_APPLICATION_FORM, company, role, link };
-}
+const JD_SAVED_EVENT = "workagent-jd-saved";
 
 export default function Resume() {
   const { language } = useLanguage();
+  const location = useLocation();
   const copy = text[language].resume;
   const common = text[language].common;
   const [resume, setResume] = useState("");
   const [tailored, setTailored] = useState("");
   const [useGithub, setUseGithub] = useState(false);
   const [allowProjectSelection, setAllowProjectSelection] = useState(true);
+  const [allowExperienceRemoval, setAllowExperienceRemoval] = useState(false);
   const [outputPath, setOutputPath] = useState("");
   const [memorySummary, setMemorySummary] = useState("");
   const [applicationPrompt, setApplicationPrompt] = useState(null);
@@ -138,13 +75,27 @@ export default function Resume() {
         api.getFile("tailored_resume"),
         api.getStatus(),
       ]);
+      const tailoredContent = custom.content || "";
       setResume(base.content || "");
-      setTailored(custom.content || "");
-      setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
+      setTailored(tailoredContent);
+      setOutputPath(
+        tailoredContent.trim() ? status.outputs?.tailored_resumes?.[0]?.path || "" : "",
+      );
     });
+
+  const clearTailoredResume = () => {
+    setTailored("");
+    setOutputPath("");
+  };
 
   useEffect(() => {
     loadFiles();
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const handleJobDescriptionSaved = () => clearTailoredResume();
+    window.addEventListener(JD_SAVED_EVENT, handleJobDescriptionSaved);
+    return () => window.removeEventListener(JD_SAVED_EVENT, handleJobDescriptionSaved);
   }, []);
 
   const saveResume = () =>
@@ -175,15 +126,20 @@ export default function Resume() {
   const generate = () =>
     run(async () => {
       const jobData = await api.getFile("job_description");
-      const data = await api.tailorResume(useGithub, allowProjectSelection);
+      const jobFingerprint = fingerprint(jobData.content || "");
+      const needsApplicationHint = Boolean(
+        jobData.content?.trim() && !hasHandledJobDescription(jobFingerprint),
+      );
+      const data = await api.tailorResume(
+        useGithub,
+        allowProjectSelection,
+        allowExperienceRemoval,
+        needsApplicationHint,
+      );
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
-      const jobFingerprint = fingerprint(jobData.content || "");
-      if (
-        jobData.content?.trim() &&
-        !hasHandledJobDescription(jobFingerprint)
-      ) {
-        setApplicationForm(extractApplicationForm(jobData.content));
+      if (needsApplicationHint) {
+        setApplicationForm({ ...EMPTY_APPLICATION_FORM, ...(data.application_hint || {}) });
         setApplicationPrompt({
           jobFingerprint,
           resumeVersion: data.output_path || data.path || "tailored_resume.txt",
@@ -260,6 +216,15 @@ export default function Resume() {
           />
           {copy.allowProjectSelection || "允许 Agent 根据职位描述自主删除、更新或补充记忆中的真实项目"}
         </label>
+        <label className="inline-check">
+          <input
+            type="checkbox"
+            checked={allowExperienceRemoval}
+            onChange={(e) => setAllowExperienceRemoval(e.target.checked)}
+          />
+          {copy.allowExperienceRemoval}
+        </label>
+        <p className="helper-text">{copy.experienceTailoringHint}</p>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
             {loading ? copy.generating : copy.generate}
