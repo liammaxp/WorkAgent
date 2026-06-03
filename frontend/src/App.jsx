@@ -20,8 +20,8 @@ import {
 
 const NAV_ITEMS = [
   { to: "/", key: "dashboard", end: true },
-  { to: "/job", key: "job" },
   { to: "/resume", key: "resume" },
+  { to: "/job", key: "job" },
   { to: "/cover-letter", key: "coverLetter" },
   { to: "/applications", key: "applications" },
   { to: "/interview", key: "interview" },

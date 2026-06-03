@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
 import {
@@ -66,6 +66,7 @@ export default function Resume() {
   const [memorySummary, setMemorySummary] = useState("");
   const [applicationPrompt, setApplicationPrompt] = useState(null);
   const [applicationForm, setApplicationForm] = useState(EMPTY_APPLICATION_FORM);
+  const pdfInputRef = useRef(null);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadFiles = () =>
@@ -103,6 +104,35 @@ export default function Resume() {
       await api.saveFile("resume", resume);
     }, copy.originalSaved);
 
+  const openPdfPicker = () => {
+    pdfInputRef.current?.click();
+  };
+
+  const convertPdfToLatex = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    run(async () => {
+      if (file.type && file.type !== "application/pdf") {
+        throw new Error(copy.pdfInvalidType || "Please choose a PDF file.");
+      }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error(copy.pdfReadFailed || "Could not read the PDF file."));
+        reader.readAsDataURL(file);
+      });
+      const base64 = dataUrl.split(",")[1] || "";
+      const data = await api.convertResumePdfToLatex({
+        filename: file.name,
+        data_base64: base64,
+      });
+      setResume(data.content || "");
+      return data;
+    }, copy.pdfConverted || "PDF converted to LaTeX");
+  };
+
   const updateMemory = () =>
     run(async () => {
       await api.saveFile("resume", resume);
@@ -122,6 +152,13 @@ export default function Resume() {
       const status = await api.getStatus();
       setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
     }, copy.tailoredSaved);
+
+  const exportTailoredPdf = () =>
+    run(async () => {
+      const data = await api.exportTailoredResumePdf(tailored);
+      setOutputPath(data.output_path || data.path || "");
+      return data;
+    }, copy.tailoredPdfExported || "Tailored resume PDF exported");
 
   const generate = () =>
     run(async () => {
@@ -185,6 +222,20 @@ export default function Resume() {
         onSave={saveResume}
         saving={loading}
         placeholder={copy.originalPlaceholder}
+        extraActions={
+          <>
+            <input
+              ref={pdfInputRef}
+              className="hidden-file-input"
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={convertPdfToLatex}
+            />
+            <button type="button" className="btn btn-secondary" onClick={openPdfPicker} disabled={loading}>
+              {loading ? copy.pdfConverting || "Converting..." : copy.pdfToLatex || "PDF to LaTeX"}
+            </button>
+          </>
+        }
       />
 
       <section className="card">
@@ -244,6 +295,11 @@ export default function Resume() {
         onSave={saveTailored}
         saving={loading}
         placeholder={copy.tailoredPlaceholder}
+        extraActions={
+          <button type="button" className="btn btn-secondary" onClick={exportTailoredPdf} disabled={loading}>
+            {loading ? copy.tailoredPdfExporting || "Exporting..." : copy.exportTailoredPdf || "Export PDF"}
+          </button>
+        }
       />
 
       <ConfirmDialog

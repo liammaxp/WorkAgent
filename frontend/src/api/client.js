@@ -134,6 +134,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ resume_source }),
     }),
+  convertResumePdfToLatex: (payload) =>
+    request("/resume/pdf-to-latex", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, language: currentLanguage() }),
+    }),
+  exportTailoredResumePdf: (content) =>
+    request("/resume/tailored/pdf", {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
   generateCoverLetter: (options = {}) =>
     request("/cover-letter/generate", {
       method: "POST",

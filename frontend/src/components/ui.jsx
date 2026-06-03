@@ -12,7 +12,11 @@ export function PageHeader({ title, description }) {
 
 export function Alert({ type = "error", message }) {
   if (!message) return null;
-  return <div className={`alert ${type}`}>{message}</div>;
+  return (
+    <div className={`alert ${type}`} role={type === "error" ? "alert" : "status"}>
+      {message}
+    </div>
+  );
 }
 
 export function LoadingBar({ loading }) {
@@ -97,6 +101,7 @@ export function EditorCard({
   saving,
   placeholder,
   short = false,
+  extraActions = null,
 }) {
   const { language } = useLanguage();
   const common = text[language].common;
@@ -122,6 +127,7 @@ export function EditorCard({
           >
             {saving ? common.saving : common.save}
           </button>
+          {extraActions}
         </div>
       )}
     </section>

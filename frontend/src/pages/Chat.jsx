@@ -111,32 +111,25 @@ export default function Chat({ session, setSession }) {
     });
 
   return (
-    <>
-      <PageHeader title={copy.title} description={copy.description} />
-      <LoadingBar loading={loading} />
-      <Alert type="error" message={error} />
-      <Alert type="success" message={success} />
+    <div className="chat-page">
+      <div className="chat-header">
+        <PageHeader title={copy.title} description={copy.description} />
+        <LoadingBar loading={loading} />
+        <Alert type="error" message={error} />
+        <Alert type="success" message={success} />
+      </div>
 
-      <section className="card" style={{ minHeight: 360 }}>
+      <section className="card chat-history-card">
         {history.length === 0 ? (
           <p className="empty-state">{copy.empty}</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div className="chat-message-list">
             {history.map((entry, index) => (
               <div
                 key={index}
-                style={{
-                  alignSelf: entry.role === "user" ? "flex-end" : "flex-start",
-                  maxWidth: "85%",
-                  padding: "12px 16px",
-                  borderRadius: 12,
-                  background: entry.role === "user" ? "var(--accent-soft)" : "var(--surface-muted)",
-                  fontSize: 14,
-                  lineHeight: 1.7,
-                  whiteSpace: "pre-wrap",
-                }}
+                className={`chat-message ${entry.role === "user" ? "user" : "agent"}`}
               >
-                <strong style={{ display: "block", marginBottom: 4, fontSize: 12, color: "var(--text-muted)" }}>
+                <strong>
                   {entry.role === "user" ? copy.you : "Agent"}
                 </strong>
                 {entry.images?.length > 0 && (
@@ -153,7 +146,7 @@ export default function Chat({ session, setSession }) {
         )}
       </section>
 
-      <section className="card">
+      <section className="card chat-composer">
         <div className="field">
           <label>{copy.message}</label>
           <textarea
@@ -218,6 +211,6 @@ export default function Chat({ session, setSession }) {
           </button>
         </div>
       </section>
-    </>
+    </div>
   );
 }

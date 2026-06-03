@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import io
 import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import threading
 import time
@@ -38,7 +40,11 @@ SHUTDOWN_GRACE_SECONDS = 2.0
 shutdown_timer: Optional[threading.Timer] = None
 shutdown_lock = threading.Lock()
 CHAT_SESSION_OUTPUT_DIR = agent.OUTPUT_DIR / "chat_sessions"
+JOB_ANALYSIS_HISTORY_PATH = agent.INFORMATION_DIR / "job_analysis_history.json"
+MAX_JOB_ANALYSIS_HISTORY = 20
 chat_session_lock = threading.Lock()
+TAILORED_RESUME_PDF_OUTPUT_DIR = agent.OUTPUT_DIR / "tailored_resume_pdfs"
+LATEX_BUILD_DIR = agent.OUTPUT_DIR / "latex_build"
 
 FILE_MAP = {
     "resume": agent.RESUME_PATH,
@@ -152,6 +158,16 @@ class TailorBody(BaseModel):
 
 class ResumeMemoryBody(BaseModel):
     resume_source: str = "resume"
+
+
+class ResumePdfToLatexBody(BaseModel):
+    filename: str = "resume.pdf"
+    data_base64: str
+    language: str = "zh"
+
+
+class TailoredResumePdfBody(BaseModel):
+    content: str = ""
 
 
 class CoverLetterBody(BaseModel):
@@ -420,6 +436,105 @@ def list_output_files(directory: Path, suffix: str, limit: int = 5) -> list[dict
         return []
     files = sorted(directory.glob(f"*{suffix}"), key=lambda path: path.stat().st_mtime, reverse=True)
     return [{"name": path.name, "path": str(path)} for path in files[:limit]]
+
+
+def clean_history_text(value: Any, fallback: str) -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text or fallback
+
+
+def job_hash(job_description: str) -> str:
+    normalized = re.sub(r"\s+", " ", job_description).strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def job_history_key(company: str, role: str, description_hash: str) -> str:
+    if company and role:
+        normalized = re.sub(r"\s+", " ", f"{company}:{role}").strip().lower()
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"description:{description_hash}"
+
+
+def job_history_display_name(entry: dict[str, Any]) -> str:
+    company = clean_history_text(entry.get("company"), "未知公司")
+    role = clean_history_text(entry.get("role"), "未知职位")
+    updated_at = clean_history_text(entry.get("updated_at_display"), "")
+    return f"{company}：{role}，{updated_at}" if updated_at else f"{company}：{role}"
+
+
+def read_job_analysis_history() -> list[dict[str, Any]]:
+    if not JOB_ANALYSIS_HISTORY_PATH.exists():
+        return []
+    try:
+        payload = json.loads(JOB_ANALYSIS_HISTORY_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def write_job_analysis_history(entries: list[dict[str, Any]]) -> None:
+    JOB_ANALYSIS_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    JOB_ANALYSIS_HISTORY_PATH.write_text(
+        json.dumps(entries[:MAX_JOB_ANALYSIS_HISTORY], ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def update_job_analysis_history(
+    company: str,
+    role: str,
+    job_description: str,
+    analysis_path: Path,
+) -> dict[str, Any]:
+    description_hash = job_hash(job_description)
+    key = job_history_key(company, role, description_hash)
+    saved_at = datetime.now().astimezone()
+    updated_at = saved_at.isoformat(timespec="seconds")
+    updated_at_display = saved_at.strftime("%Y-%m-%d %H:%M")
+    entries = read_job_analysis_history()
+
+    existing = None
+    remaining = []
+    for entry in entries:
+        same_key = entry.get("key") == key
+        same_job = bool(company and role and entry.get("company") == company and entry.get("role") == role)
+        same_description = entry.get("job_hash") == description_hash
+        if existing is None and (same_key or same_job or same_description):
+            existing = entry
+        else:
+            remaining.append(entry)
+
+    entry = {
+        **(existing or {}),
+        "key": key,
+        "job_hash": description_hash,
+        "company": clean_history_text(company, "未知公司"),
+        "role": clean_history_text(role, "未知职位"),
+        "updated_at": updated_at,
+        "updated_at_display": updated_at_display,
+        "analysis_path": str(analysis_path),
+    }
+    entry.setdefault("created_at", updated_at)
+    updated_entries = sorted([entry, *remaining], key=lambda item: item.get("updated_at", ""), reverse=True)
+    write_job_analysis_history(updated_entries)
+    return entry
+
+
+def list_job_analysis_history(limit: int = 5) -> list[dict[str, str]]:
+    return [
+        {
+            "name": job_history_display_name(entry),
+            "path": str(entry.get("analysis_path", "")),
+            "company": clean_history_text(entry.get("company"), "未知公司"),
+            "role": clean_history_text(entry.get("role"), "未知职位"),
+            "updated_at": clean_history_text(entry.get("updated_at"), ""),
+        }
+        for entry in read_job_analysis_history()[:limit]
+    ]
 
 
 def read_file_content(name: str) -> tuple[bool, str]:
@@ -716,6 +831,229 @@ def interview_prep_language_instruction(language: str) -> str:
 MAX_AGENT_IMAGES = 4
 MAX_AGENT_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_AGENT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_RESUME_PDF_BYTES = 20 * 1024 * 1024
+MAX_RESUME_PDF_TEXT_CHARS = 45000
+
+
+def validate_resume_pdf(body: ResumePdfToLatexBody) -> bytes:
+    try:
+        decoded = base64.b64decode(body.data_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise HTTPException(status_code=400, detail="Invalid base64 PDF data.") from error
+
+    if not decoded:
+        raise HTTPException(status_code=400, detail="PDF file is empty.")
+    if len(decoded) > MAX_RESUME_PDF_BYTES:
+        raise HTTPException(status_code=400, detail="PDF file must be 20 MB or smaller.")
+    if not decoded.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Selected file is not a valid PDF.")
+
+    return decoded
+
+
+def extract_pdf_resume_content(pdf_bytes: bytes) -> dict[str, Any]:
+    try:
+        from pypdf import PdfReader
+    except ImportError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "PDF parsing dependency is missing. Install backend requirements again "
+                "so the 'pypdf' package is available."
+            ),
+        ) from error
+
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Could not read PDF: {error}") from error
+
+    page_texts: list[str] = []
+    links: list[dict[str, Any]] = []
+    seen_links: set[tuple[int, str]] = set()
+    for page_index, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        if text.strip():
+            page_texts.append(f"--- Page {page_index} ---\n{text.strip()}")
+
+        annotations = page.get("/Annots") or []
+        for annotation_ref in annotations:
+            try:
+                annotation = annotation_ref.get_object()
+                action = annotation.get("/A") or {}
+                uri = str(action.get("/URI") or "").strip()
+            except Exception:
+                uri = ""
+            if not uri:
+                continue
+            key = (page_index, uri)
+            if key in seen_links:
+                continue
+            seen_links.add(key)
+            links.append({"page": page_index, "url": uri})
+
+    text_content = "\n\n".join(page_texts).strip()
+    if not text_content:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No selectable text was found in the PDF. If this is an image-only scanned "
+                "resume, run OCR first and upload the OCR/searchable PDF."
+            ),
+        )
+
+    return {
+        "text": text_content[:MAX_RESUME_PDF_TEXT_CHARS],
+        "truncated": len(text_content) > MAX_RESUME_PDF_TEXT_CHARS,
+        "links": links,
+        "pages": len(reader.pages),
+    }
+
+
+def build_pdf_to_latex_prompt(filename: str, extracted: dict[str, Any], language: str) -> str:
+    links_text = "\n".join(
+        f"- Page {link['page']}: {link['url']}" for link in extracted["links"]
+    ) or "- None detected"
+    language_requirement = (
+        "Write user-facing resume content in English."
+        if normalize_language(language) == "en"
+        else (
+            "Preserve the resume's original language as detected from the extracted PDF text. "
+            "If the source is Chinese, write user-facing resume content in Chinese; if it is English, write in English."
+        )
+    )
+    truncation_note = (
+        "\nThe extracted text was truncated for model limits; convert all visible high-signal resume content."
+        if extracted["truncated"]
+        else ""
+    )
+
+    return f"""
+Convert the extracted PDF resume into complete, compile-ready LaTeX resume code.
+
+Requirements:
+- Return only LaTeX code. Do not wrap it in Markdown fences and do not add analysis text.
+- Include a full document beginning with \\documentclass and ending with \\end{{document}}.
+- Preserve factual names, schools, employers, roles, dates, projects, skills, metrics, and contact details from the PDF.
+- Preserve detected hyperlinks using \\href{{url}}{{label}} where the label is supported by nearby PDF text or clearly implied by the URL.
+- Do not invent content that is not supported by the extracted text or detected links.
+- Use a clean ATS-friendly resume structure with compact sections.
+- Escape LaTeX special characters correctly.
+- {language_requirement}
+
+Source filename: {filename}
+Page count: {extracted["pages"]}{truncation_note}
+
+Detected PDF hyperlinks:
+{links_text}
+
+Extracted PDF text:
+{extracted["text"]}
+""".strip()
+
+
+def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]]:
+    commands = []
+
+    xelatex = shutil.which("xelatex")
+    if xelatex:
+        commands.append(
+            [
+                xelatex,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-output-directory={build_dir}",
+                str(tex_path),
+            ]
+        )
+
+    pdflatex = shutil.which("pdflatex")
+    if pdflatex:
+        commands.append(
+            [
+                pdflatex,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-output-directory={build_dir}",
+                str(tex_path),
+            ]
+        )
+
+    latexmk = shutil.which("latexmk")
+    if latexmk:
+        commands.append(
+            [
+                latexmk,
+                "-xelatex",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-outdir={build_dir}",
+                str(tex_path),
+            ]
+        )
+
+    if commands:
+        return commands
+
+    raise HTTPException(
+        status_code=500,
+        detail=(
+            "No LaTeX compiler was found. Install MiKTeX or TeX Live and make sure "
+            "latexmk, xelatex, or pdflatex is available on PATH."
+        ),
+    )
+
+
+def compile_tailored_resume_pdf(latex: str) -> Path:
+    document = agent.extract_latex_document(latex)
+    if not document:
+        raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
+
+    TAILORED_RESUME_PDF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LATEX_BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    stem = f"tailored_resume_{agent.timestamp_slug()}"
+    tex_path = LATEX_BUILD_DIR / f"{stem}.tex"
+    tex_path.write_text(document + "\n", encoding="utf-8")
+
+    failures = []
+    result = None
+    for command in latex_commands_for_resume(tex_path, LATEX_BUILD_DIR):
+        runs = 1 if Path(command[0]).name.lower().startswith("latexmk") else 2
+        for _ in range(runs):
+            result = subprocess.run(
+                command,
+                cwd=LATEX_BUILD_DIR,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            if result.returncode != 0:
+                break
+
+        if result.returncode == 0:
+            break
+
+        output = (result.stdout + "\n" + result.stderr).strip()
+        log_tail = "\n".join(output.splitlines()[-20:])
+        failures.append(f"{Path(command[0]).name} failed:\n{log_tail or 'No compiler output.'}")
+
+    if result is None or result.returncode != 0:
+        raise HTTPException(
+            status_code=400,
+            detail="LaTeX PDF export failed. Compiler log:\n" + "\n\n".join(failures),
+        )
+
+    built_pdf = LATEX_BUILD_DIR / f"{stem}.pdf"
+    if not built_pdf.exists():
+        raise HTTPException(status_code=500, detail="LaTeX compiler finished but no PDF was produced.")
+
+    output_pdf = TAILORED_RESUME_PDF_OUTPUT_DIR / f"{stem}.pdf"
+    shutil.copyfile(built_pdf, output_pdf)
+    return output_pdf
 
 
 def validate_agent_images(images: list[AgentImageBody]) -> list[dict[str, str]]:
@@ -788,28 +1126,48 @@ def save_chat_session(body: ChatSessionBody) -> dict[str, Any]:
             )
         return saved_images
 
-    payload = {
-        "session_id": safe_session_id,
-        "created_at": body.created_at,
-        "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "language": normalize_language(body.language),
-        "draft": {
-            "message": body.message,
-            "images": save_images(body.images),
-            "attachment_error": body.attachment_error,
-        },
-        "history": [
-            {
-                "role": entry.role,
-                "text": entry.text,
-                "images": save_images(entry.images),
-            }
-            for entry in body.history
-        ],
-    }
-    path = CHAT_SESSION_OUTPUT_DIR / f"chat_session_{safe_session_id}.json"
+    saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    draft_images = save_images(body.images)
+    transcript_lines = [
+        "WorkAgent Chat Session",
+        f"Session ID: {safe_session_id}",
+        f"Created at: {body.created_at or '-'}",
+        f"Saved at: {saved_at}",
+        f"Language: {normalize_language(body.language)}",
+        "",
+        "Draft",
+        "-----",
+        body.message.strip() or "(no unsent text)",
+    ]
+    if draft_images:
+        transcript_lines.append("")
+        transcript_lines.append("Draft attachments:")
+        for image in draft_images:
+            transcript_lines.append(
+                f"- {image['name'] or 'image'} ({image['mime_type']}, {image['size_bytes']} bytes): {image['path']}"
+            )
+    if body.attachment_error:
+        transcript_lines.extend(["", f"Attachment error: {body.attachment_error}"])
+
+    transcript_lines.extend(["", "Conversation", "------------"])
+    if not body.history:
+        transcript_lines.append("(no sent messages)")
+    for index, entry in enumerate(body.history, start=1):
+        role = entry.role.strip() or "unknown"
+        transcript_lines.extend(["", f"[{index}] {role}", "-" * (len(role) + len(str(index)) + 3)])
+        transcript_lines.append(entry.text.strip() or "(no text)")
+        entry_images = save_images(entry.images)
+        if entry_images:
+            transcript_lines.append("")
+            transcript_lines.append("Attachments:")
+            for image in entry_images:
+                transcript_lines.append(
+                    f"- {image['name'] or 'image'} ({image['mime_type']}, {image['size_bytes']} bytes): {image['path']}"
+                )
+
+    path = CHAT_SESSION_OUTPUT_DIR / f"chat_session_{safe_session_id}.txt"
     with chat_session_lock:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text("\n".join(transcript_lines).rstrip() + "\n", encoding="utf-8")
     return {"saved": True, "path": str(path)}
 
 
@@ -1210,11 +1568,12 @@ def get_status():
         "provider_configs": build_provider_config_status()["providers"],
         "files": {name: file_ready(name, path) for name, path in FILE_MAP.items()},
         "outputs": {
-            "analysis": list_output_files(agent.ANALYSIS_OUTPUT_DIR, ".txt"),
+            "analysis": list_job_analysis_history(),
             "tailored_resumes": list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt"),
+            "tailored_resume_pdfs": list_output_files(TAILORED_RESUME_PDF_OUTPUT_DIR, ".pdf"),
             "cover_letters": list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt"),
             "interview_prep": list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt"),
-            "chat_sessions": list_output_files(CHAT_SESSION_OUTPUT_DIR, ".json"),
+            "chat_sessions": list_output_files(CHAT_SESSION_OUTPUT_DIR, ".txt"),
             "github_context": [
                 {
                     "name": "Chroma GitHub evidence",
@@ -1414,13 +1773,59 @@ def save_job_description(body: JobDescriptionBody):
 
 @app.post("/api/job-description/analyze")
 def analyze_job_description(body: AnalyzeBody):
+    try:
+        job_description = agent.read_job_description()
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
     message = agent.JOB_AGENT_PROMPT
     if body.use_github_context:
         message += "\nUse GitHub context if available and approved."
-    message += job_analysis_language_instruction(body.language)
+    message += (
+        job_analysis_language_instruction(body.language)
+        + """
+
+Return ONLY valid JSON with exactly these string keys:
+- "analysis": the complete job analysis shown to the user.
+- "company": hiring employer / company name only.
+- "role": job title / position name only.
+
+Rules for this response:
+- The company and role are metadata for history only. Do not include a separate company/title section in "analysis".
+- If the employer or title is not supported by the job description, use an empty string for that field.
+- Do not wrap the JSON in Markdown fences.
+"""
+    )
     answer = run_agent_task(message)
-    analysis_path = agent.save_analysis_output(answer)
-    return {"analysis": answer, "analysis_path": str(analysis_path)}
+    try:
+        payload = extract_json_object(answer)
+        analysis = clean_history_text(payload.get("analysis"), "")
+        company = clean_history_text(payload.get("company"), "")
+        role = clean_history_text(payload.get("role"), "")
+    except HTTPException:
+        analysis = answer
+        hint = resolve_application_hint(job_description)
+        company = hint["company"]
+        role = hint["role"]
+
+    if not analysis:
+        raise HTTPException(status_code=500, detail="Agent did not return job analysis content.")
+
+    analysis_path = agent.save_analysis_output(analysis)
+    history_entry = update_job_analysis_history(company, role, job_description, analysis_path)
+    return {
+        "analysis": analysis,
+        "analysis_path": str(analysis_path),
+        "company": history_entry["company"],
+        "role": history_entry["role"],
+        "history_entry": {
+            "name": job_history_display_name(history_entry),
+            "path": str(analysis_path),
+            "company": history_entry["company"],
+            "role": history_entry["role"],
+            "updated_at": history_entry["updated_at"],
+        },
+    }
 
 
 @app.post("/api/resume/tailor")
@@ -1471,6 +1876,55 @@ def update_resume_memory(body: ResumeMemoryBody):
         return update_memory_from_resume_source(body.resume_source)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/resume/pdf-to-latex")
+def resume_pdf_to_latex(body: ResumePdfToLatexBody):
+    pdf_bytes = validate_resume_pdf(body)
+    extracted = extract_pdf_resume_content(pdf_bytes)
+    prompt = build_pdf_to_latex_prompt(body.filename, extracted, body.language)
+    answer = run_text_task(prompt)
+    latex = agent.extract_latex_document(answer)
+    if not latex or not agent.looks_like_latex_resume(latex):
+        raise HTTPException(
+            status_code=400,
+            detail="Model did not return complete LaTeX resume code. Please try again.",
+        )
+
+    agent.write_text_file(agent.RESUME_PATH, latex)
+    return {
+        "saved": True,
+        "path": str(agent.RESUME_PATH),
+        "content": latex,
+        "pdf": {
+            "filename": body.filename,
+            "pages": extracted["pages"],
+            "links": extracted["links"],
+            "truncated": extracted["truncated"],
+        },
+    }
+
+
+@app.post("/api/resume/tailored/pdf")
+def export_tailored_resume_pdf(body: TailoredResumePdfBody):
+    content = body.content.strip()
+    if content:
+        try:
+            agent.save_tailored_resume(content)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    else:
+        try:
+            content = agent.read_tailored_resume()
+        except (FileNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    output_pdf = compile_tailored_resume_pdf(content)
+    return {
+        "saved": True,
+        "path": str(output_pdf),
+        "output_path": str(output_pdf),
+    }
 
 
 @app.post("/api/cover-letter/generate")

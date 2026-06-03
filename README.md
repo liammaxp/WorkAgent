@@ -50,6 +50,8 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   `-- frontend/            # Frontend production build output
 |-- install_workagent.bat    # Windows one-click dependency installer
 |-- install_workagent.ps1    # Windows dependency installation script
+|-- uninstall_workagent.bat  # Windows one-click environment uninstaller
+|-- uninstall_workagent.ps1  # Windows environment uninstall script
 |-- start_workagent.bat      # Windows one-click launcher
 |-- start_workagent.ps1      # Windows launcher script
 `-- README.md
@@ -143,6 +145,8 @@ Agent Chat also accepts image attachments. Select up to 4 JPG, PNG, GIF, or WebP
 
 Agent Chat keeps conversation history, unsent text, and selected images while the app remains open, including when you navigate to other pages. Opening the app again starts a fresh chat session.
 
+Agent Chat also saves readable transcript files to `outputs/backend/chat_sessions/`. The frontend autosaves after chat changes and sends a final snapshot when the page closes. Each `.txt` file contains the conversation history and unsent draft text in chronological order; attached images are saved in the matching session assets directory and referenced by path in the transcript.
+
 Example Agent Chat requests:
 
 ```text
@@ -206,6 +210,7 @@ Main FastAPI endpoints:
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
+- `POST /api/chat/session`
 - `POST /api/job-description`
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
@@ -269,12 +274,13 @@ The following baseline is the minimum supported environment for the included Win
 | --- | --- | --- |
 | Operating system | 64-bit Windows 10 or Windows 11 | The included `.bat` and `.ps1` scripts are designed for Windows. Manual startup may work on other operating systems, but it is not the documented baseline. |
 | PowerShell | Windows PowerShell 5.1 | Required by the one-click scripts and Windows process management. |
-| Python | Python 3.10 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python` and `pip` are available in `PATH`. |
+| Python | Python 3.12 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python` and `pip` are available in `PATH`. |
 | Node.js | Node.js 18 or newer | Required by the React + Vite frontend. |
 | npm | A version bundled with Node.js 18 or newer | Make sure `npm` is available in `PATH`. |
 | Memory | 4 GB RAM | 8 GB or more is recommended when other development tools are open. |
 | Free disk space | 2 GB | Used by Python packages, `node_modules`, local Chroma data, logs, and generated files. |
 | Browser | A current version of Edge, Chrome, or Firefox | Required for the local Web UI. |
+| LaTeX toolchain | MiKTeX or TeX Live, plus Strawberry Perl for `latexmk` | Optional for normal use, but required for one-click PDF export of tailored resumes. The installer can install MiKTeX and Strawberry Perl automatically through `winget`; otherwise make sure `xelatex` or `pdflatex` is available in `PATH`, and make sure `perl` is available if using `latexmk`. |
 
 Backend packages installed from `backend/requirements.txt` include `openai`, `python-dotenv`, `requests`, `fastapi`, `uvicorn[standard]`, and `chromadb`. Frontend packages are installed from `frontend/package.json`.
 
@@ -290,7 +296,17 @@ Before the first start, double-click:
 install_workagent.bat
 ```
 
-It checks that Python and npm are available, then installs the backend and frontend dependencies.
+It checks that Python and npm are available, installs the backend and frontend dependencies, then installs MiKTeX and Strawberry Perl through `winget` when needed for tailored-resume PDF export. It also runs a small LaTeX warmup compile in `outputs/latex_install_warmup/` so MiKTeX can download common resume packages during installation instead of waiting until the first PDF export.
+
+### One-Click Environment Uninstall On Windows
+
+To remove the installed WorkAgent environment, double-click:
+
+```text
+uninstall_workagent.bat
+```
+
+The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment and before uninstalling MiKTeX or Strawberry Perl, because those may be shared with other projects.
 
 ### One-Click Start On Windows
 
@@ -437,6 +453,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   `-- frontend/            # 前端生产构建输出
 |-- install_workagent.bat    # Windows 一键安装依赖入口
 |-- install_workagent.ps1    # Windows 依赖安装脚本
+|-- uninstall_workagent.bat  # Windows 一键卸载环境入口
+|-- uninstall_workagent.ps1  # Windows 环境卸载脚本
 |-- start_workagent.bat      # Windows 一键启动入口
 |-- start_workagent.ps1      # Windows 启动脚本
 `-- README.md
@@ -527,6 +545,8 @@ Agent Chat 也支持上传图片。每条消息最多选择 4 张 JPG、PNG、GI
 
 只要应用仍然打开，Agent Chat 就会保留对话记录、未发送的文字和已选择的图片，包括切换到其他页面再返回的情况。重新打开应用时会创建新的空白对话。
 
+Agent Chat 也会把可直接阅读的转录文件保存到 `outputs/backend/chat_sessions/`。前端会在对话变化后自动保存，并在网页关闭时提交最后一次快照。每个 `.txt` 文件按时间顺序包含对话记录和未发送草稿；附件图片保存在对应的会话资源目录中，并在转录文本里标注路径。
+
 示例：
 
 ```text
@@ -590,6 +610,7 @@ background/prompt.example.txt
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
+- `POST /api/chat/session`
 - `POST /api/job-description`
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
@@ -653,12 +674,13 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 | --- | --- | --- |
 | 操作系统 | 64 位 Windows 10 或 Windows 11 | 仓库内的 `.bat` 和 `.ps1` 脚本面向 Windows。其他操作系统可能可以手动启动，但不属于文档约定的最低支持基线。 |
 | PowerShell | Windows PowerShell 5.1 | 一键脚本和 Windows 进程管理功能需要使用。 |
-| Python | Python 3.10 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python` 和 `pip` 已加入 `PATH`。 |
+| Python | Python 3.12 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python` 和 `pip` 已加入 `PATH`。 |
 | Node.js | Node.js 18 或更高版本 | React + Vite 前端需要使用。 |
 | npm | Node.js 18 或更高版本附带的 npm | 请确保 `npm` 已加入 `PATH`。 |
 | 内存 | 4 GB RAM | 如果同时开启其他开发工具，建议使用 8 GB 或更多内存。 |
 | 可用磁盘空间 | 2 GB | 用于 Python 依赖、`node_modules`、本地 Chroma 数据、日志和生成文件。 |
 | 浏览器 | 当前版本的 Edge、Chrome 或 Firefox | 用于访问本地 Web UI。 |
+| LaTeX 工具链 | MiKTeX 或 TeX Live，以及 `latexmk` 所需的 Strawberry Perl | 普通使用可不安装；如果要使用定制简历的一键导出 PDF 功能，则必须安装。安装脚本可通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl；否则请确保 `xelatex` 或 `pdflatex` 已加入 `PATH`，如果使用 `latexmk` 还需确保 `perl` 已加入 `PATH`。 |
 
 后端会根据 `backend/requirements.txt` 安装 `openai`、`python-dotenv`、`requests`、`fastapi`、`uvicorn[standard]` 和 `chromadb`。前端依赖根据 `frontend/package.json` 安装。
 
@@ -674,7 +696,17 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 install_workagent.bat
 ```
 
-脚本会检查 Python 和 npm 是否可用，然后安装后端与前端依赖。
+脚本会检查 Python 和 npm 是否可用，安装后端与前端依赖，并在需要时通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl，用于定制简历 PDF 导出。脚本还会在 `outputs/latex_install_warmup/` 执行一次小型 LaTeX 预热编译，让 MiKTeX 在安装阶段下载常用简历宏包，而不是等到第一次导出 PDF 时再下载。
+
+### Windows 一键卸载环境
+
+如需移除 WorkAgent 安装的环境，双击：
+
+```text
+uninstall_workagent.bat
+```
+
+脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖、MiKTeX 或 Strawberry Perl 前会先询问确认，因为它们可能被其他项目共用。
 
 ### Windows 一键启动
 

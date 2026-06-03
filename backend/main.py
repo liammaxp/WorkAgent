@@ -47,7 +47,7 @@ DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 JOB_AGENT_PROMPT = """
 Analyze the job description and produce:
 
-1. Job title and company if available
+1. Role focus and key responsibilities
 2. Required technical skills
 3. Required soft skills
 4. Match score from 0 to 100 using the rubric below
@@ -67,6 +67,7 @@ Score higher when the user's resume, memory, and approved GitHub evidence closel
 Use the available tools to read the Chroma profile memory, resume.txt, and job_description.txt.
 Use GitHub context only if needed and approved by the user.
 Be specific and do not exaggerate the user's experience.
+Do not include a standalone company name or job title section in the analysis.
 Do not generate a cover letter in this analysis. Cover letters are generated only when the user explicitly requests one.
 """
 COVER_LETTER_AGENT_PROMPT = """

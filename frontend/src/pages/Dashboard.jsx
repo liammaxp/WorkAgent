@@ -36,6 +36,7 @@ export default function Dashboard() {
   const [model, setModel] = useState("");
   const [providerConfigs, setProviderConfigs] = useState(DEFAULT_PROVIDERS);
   const [providerForm, setProviderForm] = useState(emptyProviderForm());
+  const [applications, setApplications] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
 
   const selectedProviderConfig = useMemo(
@@ -47,11 +48,15 @@ export default function Dashboard() {
 
   const loadStatus = () =>
     run(async () => {
-      const data = await api.getStatus();
+      const [data, applicationRecords] = await Promise.all([
+        api.getStatus(),
+        api.getApplications("", 100),
+      ]);
       const configs = data.provider_configs?.length
         ? data.provider_configs
         : DEFAULT_PROVIDERS;
       setStatus(data);
+      setApplications(applicationRecords || []);
       setProvider(data.provider);
       setModel(data.model);
       setProviderConfigs(configs);
@@ -122,8 +127,8 @@ export default function Dashboard() {
 
       {status && (
         <>
-          <div className="dashboard-config-grid">
-            <section className="card stat-card">
+          <div className="card dashboard-config-grid">
+            <section className="dashboard-config-section">
               <h2 className="card-title">{copy.modelSettings}</h2>
               <div className="summary-row">
                 <div>
@@ -162,7 +167,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section className="card">
+            <section className="dashboard-config-section">
               <h2 className="card-title">{copy.addApiKey}</h2>
               <div className="api-key-grid">
                 <div className="field">
@@ -216,12 +221,12 @@ export default function Dashboard() {
             </div>
           </section>
 
-          <div className="grid-2">
-            <section className="card">
+          <div className="card recent-panel">
+            <section className="recent-section">
               <h2 className="card-title">{copy.recentAnalysis}</h2>
               {status.outputs.analysis.length ? (
                 <ul className="output-list">
-                  {status.outputs.analysis.map((item) => <li key={item.path}>{item.name}</li>)}
+                  {status.outputs.analysis.map((item) => <li key={item.path || item.name}>{item.name}</li>)}
                 </ul>
               ) : (
                 <p className="empty-state">{copy.noAnalysis}</p>
@@ -231,15 +236,17 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section className="card">
-              <h2 className="card-title">{copy.quickStart}</h2>
-              <p className="helper-paragraph">{copy.quickStartText}</p>
-              <div className="btn-row">
-                <Link to="/job" className="btn btn-secondary">1. {text[language].nav.job}</Link>
-                <Link to="/resume" className="btn btn-secondary">2. {text[language].nav.resume}</Link>
-                <Link to="/cover-letter" className="btn btn-secondary">3. {text[language].nav.coverLetter}</Link>
-                <Link to="/applications" className="btn btn-secondary">4. {text[language].nav.applications}</Link>
-              </div>
+            <section className="recent-section">
+              <h2 className="card-title">{copy.recentApplications}</h2>
+              {applications.length ? (
+                <ul className="output-list scroll-list">
+                  {applications.map((item, index) => (
+                    <li key={item.id}>{index + 1}. {item.company}：{item.role}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="empty-state">{copy.noApplications}</p>
+              )}
             </section>
           </div>
         </>
