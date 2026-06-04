@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
+import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
   ConfirmDialog,
@@ -55,34 +56,43 @@ const JD_SAVED_EVENT = "workagent-jd-saved";
 export default function Resume() {
   const { language } = useLanguage();
   const location = useLocation();
+  const navigate = useNavigate();
   const copy = text[language].resume;
   const common = text[language].common;
   const [resume, setResume] = useState("");
   const [tailored, setTailored] = useState("");
-  const [useGithub, setUseGithub] = useState(false);
-  const [allowProjectSelection, setAllowProjectSelection] = useState(true);
-  const [allowExperienceRemoval, setAllowExperienceRemoval] = useState(false);
+  const [useGithub, setUseGithub] = useState(() => readStoredBoolean("workagent-resume-use-github", false));
+  const [allowProjectSelection, setAllowProjectSelection] = useState(() =>
+    readStoredBoolean("workagent-resume-allow-project-selection", true),
+  );
+  const [allowExperienceRemoval, setAllowExperienceRemoval] = useState(() =>
+    readStoredBoolean("workagent-resume-allow-experience-removal", false),
+  );
   const [outputPath, setOutputPath] = useState("");
   const [memorySummary, setMemorySummary] = useState("");
+  const [routeError, setRouteError] = useState("");
   const [applicationPrompt, setApplicationPrompt] = useState(null);
   const [applicationForm, setApplicationForm] = useState(EMPTY_APPLICATION_FORM);
   const pdfInputRef = useRef(null);
   const { loading, error, success, run } = useAsyncAction();
 
-  const loadFiles = () =>
+  const loadFiles = useCallback(() =>
     run(async () => {
-      const [base, custom, status] = await Promise.all([
+      const [base, status] = await Promise.all([
         api.getFile("resume"),
-        api.getFile("tailored_resume"),
         api.getStatus(),
       ]);
-      const tailoredContent = custom.content || "";
       setResume(base.content || "");
+      if (!fileChangedSinceAppOpened(status, "tailored_resume")) {
+        setTailored("");
+        setOutputPath("");
+        return;
+      }
+      const custom = await api.getFile("tailored_resume");
+      const tailoredContent = custom.content || "";
       setTailored(tailoredContent);
-      setOutputPath(
-        tailoredContent.trim() ? status.outputs?.tailored_resumes?.[0]?.path || "" : "",
-      );
-    });
+      setOutputPath(tailoredContent.trim() ? status.outputs?.tailored_resumes?.[0]?.path || "" : "");
+    }), [run]);
 
   const clearTailoredResume = () => {
     setTailored("");
@@ -90,14 +100,39 @@ export default function Resume() {
   };
 
   useEffect(() => {
+    const nextRouteError = location.state?.routeError;
+    if (!nextRouteError) return;
+    setRouteError(String(nextRouteError));
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.pathname, location.state, navigate]);
+
+  useEffect(() => {
     loadFiles();
-  }, [location.pathname]);
+  }, [location.pathname, loadFiles]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => loadFiles();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [loadFiles]);
 
   useEffect(() => {
     const handleJobDescriptionSaved = () => clearTailoredResume();
     window.addEventListener(JD_SAVED_EVENT, handleJobDescriptionSaved);
     return () => window.removeEventListener(JD_SAVED_EVENT, handleJobDescriptionSaved);
   }, []);
+
+  useEffect(() => {
+    writeStoredBoolean("workagent-resume-use-github", useGithub);
+  }, [useGithub]);
+
+  useEffect(() => {
+    writeStoredBoolean("workagent-resume-allow-project-selection", allowProjectSelection);
+  }, [allowProjectSelection]);
+
+  useEffect(() => {
+    writeStoredBoolean("workagent-resume-allow-experience-removal", allowExperienceRemoval);
+  }, [allowExperienceRemoval]);
 
   const saveResume = () =>
     run(async () => {
@@ -212,6 +247,7 @@ export default function Resume() {
     <>
       <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
+      <Alert type="error" message={routeError} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
+import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
   EditorCard,
@@ -16,6 +18,7 @@ let cachedCoverLetter = null;
 
 export default function CoverLetter() {
   const { language } = useLanguage();
+  const location = useLocation();
   const copy = text[language].coverLetter;
   const common = text[language].common;
   const styles = useMemo(
@@ -26,27 +29,48 @@ export default function CoverLetter() {
   const [jobReady, setJobReady] = useState(false);
   const [tailoredReady, setTailoredReady] = useState(false);
   const [style, setStyle] = useState("concise");
-  const [useGithub, setUseGithub] = useState(false);
+  const [useGithub, setUseGithub] = useState(() => readStoredBoolean("workagent-cover-letter-use-github", false));
   const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
-  useEffect(() => {
+  const loadCoverLetter = useCallback(() => {
     run(async () => {
       const [jobData, status] = await Promise.all([
         api.getFile("job_description"),
         api.getStatus(),
       ]);
-      if (cachedCoverLetter?.jobDescription === jobData.content) {
-        setContent(cachedCoverLetter.content);
-        setOutputPath(cachedCoverLetter.outputPath || "");
-      } else if (!cachedCoverLetter) {
-        setContent("");
-        setOutputPath("");
-      }
+      const coverLetterData = fileChangedSinceAppOpened(status, "cover_letter")
+        ? await api.getFile("cover_letter")
+        : { ready: false, content: "" };
+      const latestContent = coverLetterData.ready ? coverLetterData.content || "" : "";
+      const latestOutputPath = latestContent.trim()
+        ? status.outputs?.cover_letters?.[0]?.path || ""
+        : "";
+      setContent(latestContent);
+      setOutputPath(latestOutputPath);
+      cachedCoverLetter = {
+        content: latestContent,
+        jobDescription: jobData.content || "",
+        outputPath: latestOutputPath,
+      };
       setJobReady(status.files.job_description);
       setTailoredReady(status.files.tailored_resume);
     });
-  }, []);
+  }, [run]);
+
+  useEffect(() => {
+    loadCoverLetter();
+  }, [location.pathname, loadCoverLetter]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => loadCoverLetter();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [loadCoverLetter]);
+
+  useEffect(() => {
+    writeStoredBoolean("workagent-cover-letter-use-github", useGithub);
+  }, [useGithub]);
 
   const save = () =>
     run(async () => {

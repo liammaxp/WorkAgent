@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import {
   Alert,
@@ -21,10 +22,20 @@ function notifyJobDescriptionSaved(result) {
 
 export default function JobDescription() {
   const { language } = useLanguage();
+  const location = useLocation();
+  const navigate = useNavigate();
   const copy = text[language].job;
   const [content, setContent] = useState("");
   const [analysis, setAnalysis] = useState("");
+  const [routeError, setRouteError] = useState("");
   const { loading, error, success, run } = useAsyncAction();
+
+  useEffect(() => {
+    const nextRouteError = location.state?.routeError;
+    if (!nextRouteError) return;
+    setRouteError(String(nextRouteError));
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.pathname, location.state, navigate]);
 
   useEffect(() => {
     run(async () => {
@@ -76,6 +87,7 @@ export default function JobDescription() {
     <>
       <PageHeader title={copy.title} description={copy.description} />
       <LoadingBar loading={loading} />
+      <Alert type="error" message={routeError} />
       <Alert type="error" message={error} />
       <Alert type="success" message={success} />
 

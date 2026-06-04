@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
   EditorCard,
@@ -14,9 +15,39 @@ export default function InterviewPrep() {
   const copy = text[language].interview;
   const common = text[language].common;
   const [content, setContent] = useState("");
-  const [useGithub, setUseGithub] = useState(true);
+  const [useGithub, setUseGithub] = useState(() => readStoredBoolean("workagent-interview-use-github", true));
   const [outputPath, setOutputPath] = useState("");
   const { loading, error, success, run } = useAsyncAction();
+
+  const refreshOutput = useCallback(() => {
+    run(async () => {
+      const status = await api.getStatus();
+      if (!fileChangedSinceAppOpened(status, "interview_prep")) {
+        setContent("");
+        setOutputPath("");
+        return null;
+      }
+      const data = await api.getFile("interview_prep");
+      const latestContent = data.ready ? data.content || "" : "";
+      setContent(latestContent);
+      setOutputPath(latestContent.trim() ? status.outputs?.interview_prep?.[0]?.path || "" : "");
+      return data;
+    });
+  }, [run]);
+
+  useEffect(() => {
+    refreshOutput();
+  }, [refreshOutput]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => refreshOutput();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [refreshOutput]);
+
+  useEffect(() => {
+    writeStoredBoolean("workagent-interview-use-github", useGithub);
+  }, [useGithub]);
 
   const save = () =>
     run(async () => {

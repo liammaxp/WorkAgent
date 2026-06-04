@@ -174,6 +174,7 @@ class CoverLetterBody(BaseModel):
     use_tailored_resume: bool = True
     use_github_context: bool = False
     style: str = "concise"
+    include_application_hint: bool = False
     language: str = "zh"
 
 
@@ -1561,12 +1562,23 @@ def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> d
 
 @app.get("/api/status")
 def get_status():
+    file_metadata = {}
+    for name, path in FILE_MAP.items():
+        if path.exists():
+            file_metadata[name] = {
+                "mtime": path.stat().st_mtime,
+                "mtime_ms": int(path.stat().st_mtime * 1000),
+            }
+        else:
+            file_metadata[name] = {"mtime": None, "mtime_ms": None}
+
     return {
         "provider": agent.current_provider,
         "model": agent.current_model,
         "supports_images": provider_supports_images(agent.current_provider),
         "provider_configs": build_provider_config_status()["providers"],
         "files": {name: file_ready(name, path) for name, path in FILE_MAP.items()},
+        "file_metadata": file_metadata,
         "outputs": {
             "analysis": list_job_analysis_history(),
             "tailored_resumes": list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt"),
@@ -1611,9 +1623,19 @@ def persist_chat_session(body: ChatSessionBody):
 @app.post("/api/provider")
 def set_provider(body: ProviderBody):
     adapter, provider_name = get_adapter(body.provider)
+    config = PROVIDER_CONFIGS.get(provider_name)
+    if not config:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider '{body.provider}'.")
     agent.current_provider = provider_name
     agent.current_adapter = adapter
     agent.current_model = adapter.default_model()
+    values = {
+        "MODEL_PROVIDER": provider_name,
+        config["model_env"]: agent.current_model,
+    }
+    write_env_values(values)
+    for key, value in values.items():
+        os.environ[key] = value
     return {"provider": agent.current_provider, "model": agent.current_model}
 
 
@@ -1666,9 +1688,20 @@ def save_provider_config(body: ProviderConfigBody):
 
 @app.post("/api/model")
 def set_model(body: ModelBody):
-    agent.current_model = body.model.strip()
-    if not agent.current_model:
+    model = body.model.strip()
+    if not model:
         raise HTTPException(status_code=400, detail="Model name cannot be empty.")
+    config = PROVIDER_CONFIGS.get(normalize_provider(agent.current_provider))
+    if not config:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider '{agent.current_provider}'.")
+    agent.current_model = model
+    values = {
+        "MODEL_PROVIDER": agent.current_provider,
+        config["model_env"]: agent.current_model,
+    }
+    write_env_values(values)
+    for key, value in values.items():
+        os.environ[key] = value
     return {"provider": agent.current_provider, "model": agent.current_model}
 
 
@@ -1953,7 +1986,7 @@ def generate_cover_letter(body: CoverLetterBody):
     if answer.strip() and not cover_letter_was_saved:
         agent.save_cover_letter(answer)
     cover_letter_outputs = list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt", limit=1)
-    return {
+    response: dict[str, Any] = {
         "saved": True,
         "path": str(agent.COVER_LETTER_PATH),
         "output_path": cover_letter_outputs[0]["path"] if cover_letter_outputs else None,
@@ -1961,6 +1994,14 @@ def generate_cover_letter(body: CoverLetterBody):
         if agent.file_is_ready(agent.COVER_LETTER_PATH)
         else answer,
     }
+    if body.include_application_hint:
+        job_description = (
+            agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
+            if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
+            else ""
+        )
+        response["application_hint"] = resolve_application_hint(job_description)
+    return response
 
 
 @app.post("/api/interview-prep/generate")

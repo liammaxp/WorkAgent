@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import {
   Alert,
@@ -8,10 +9,82 @@ import {
 } from "../components/ui.jsx";
 import { text, useLanguage } from "../i18n.jsx";
 
+const FLOW_TARGETS = {
+  job_description: { route: "/job", zh: "职位描述", en: "Job Description" },
+  resume: { route: "/resume", zh: "简历", en: "Resume" },
+};
+
+function includesAny(value, patterns) {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+function detectApplicationMaterialRequest(message) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const applicationIntent = includesAny(normalized, [
+    /申请/,
+    /投递/,
+    /岗位/,
+    /职位/,
+    /求职材料/,
+    /申请材料/,
+    /\bapply\b/,
+    /\bapplication\b/,
+    /\bjob\b/,
+    /\bposition\b/,
+    /\brole\b/,
+  ]);
+  const resumeIntent = includesAny(normalized, [
+    /简历/,
+    /resume/,
+    /cv\b/,
+  ]);
+  const coverLetterIntent = includesAny(normalized, [
+    /cover\s*letter/,
+    /求职信/,
+    /动机信/,
+    /申请信/,
+  ]);
+  const materialIntent = includesAny(normalized, [
+    /材料/,
+    /准备/,
+    /帮我/,
+    /生成/,
+    /修改/,
+    /改/,
+    /tailor/,
+    /prepare/,
+    /generate/,
+    /write/,
+    /revise/,
+    /edit/,
+  ]);
+
+  if (!applicationIntent && !resumeIntent && !coverLetterIntent) return null;
+  if (!materialIntent && !coverLetterIntent && !resumeIntent) return null;
+
+  if ((applicationIntent && materialIntent) || (resumeIntent && coverLetterIntent)) {
+    return { resume: true, coverLetter: true };
+  }
+  if (coverLetterIntent) return { resume: false, coverLetter: true };
+  if (resumeIntent) return { resume: true, coverLetter: false };
+  return null;
+}
+
+function formatPageList(pages, language) {
+  if (pages.length <= 1) return pages[0] || "";
+  if (language === "zh") {
+    return `${pages.slice(0, -1).join("、")}和${pages[pages.length - 1]}`;
+  }
+  return `${pages.slice(0, -1).join(", ")} and ${pages[pages.length - 1]}`;
+}
+
 export default function Chat({ session, setSession }) {
   const { language } = useLanguage();
   const copy = text[language].chat;
-  const { message, images, attachmentError, history } = session;
+  const { message, images, attachmentError, history, pendingFlow } = session;
+  const navigate = useNavigate();
   const imageInputRef = useRef(null);
   const [supportsImages, setSupportsImages] = useState(true);
   const { loading, error, success, run } = useAsyncAction();
@@ -28,6 +101,37 @@ export default function Chat({ session, setSession }) {
     } catch {
       setSupportsImages(true);
     }
+  };
+
+  const flowCopy = {
+    needsFreshJob:
+      language === "zh"
+        ? "当前职位描述不是本次打开应用后保存的内容。请到职位描述页输入或保存新的 JD，然后回到这里继续。"
+        : "The saved job description is older than this app session. Please enter or save the current JD on the Job Description page, then return here to continue.",
+    needsResume:
+      language === "zh"
+        ? "生成申请材料需要先填写基础简历。请到简历页补充并保存后，回到这里继续。"
+        : "Application materials need a saved base resume. Please fill and save it on the Resume page, then return here to continue.",
+    paused:
+      language === "zh"
+        ? "流程已暂停，补齐材料后可以继续，或取消本次请求。"
+        : "The flow is paused. Continue after updating the materials, or cancel this request.",
+    continue:
+      language === "zh" ? "继续流程" : "Continue Flow",
+    cancel:
+      language === "zh" ? "取消" : "Cancel",
+    generating:
+      language === "zh" ? "正在生成材料..." : "Generating materials...",
+    saved:
+      language === "zh"
+        ? "您的材料已在{pages}页生成，可以前往查看。"
+        : "Your materials are ready on the {pages} page.",
+    savedWithApplication:
+      language === "zh"
+        ? "您的材料已在{pages}页生成，可以前往查看；申请列表也已自动添加记录。"
+        : "Your materials are ready on the {pages} page, and an application record was added automatically.",
+    canceled:
+      language === "zh" ? "已取消本次材料生成请求。" : "This material generation request was canceled.",
   };
 
   useEffect(() => {
@@ -86,6 +190,107 @@ export default function Chat({ session, setSession }) {
     updateSession((current) => ({ images: [...current.images, ...added] }));
   };
 
+  const addHistory = (entry) => {
+    updateSession((current) => ({ history: [...current.history, entry] }));
+  };
+
+  const clearPendingFlow = () => {
+    updateSession({ pendingFlow: null });
+  };
+
+  const missingFlowPrerequisite = async () => {
+    const status = await api.getStatus();
+    if (!status.files?.job_description) {
+      return {
+        key: "job_description",
+        route: FLOW_TARGETS.job_description.route,
+        message: flowCopy.needsFreshJob,
+      };
+    }
+
+    const openedAt = Date.parse(session.createdAt || "");
+    const jobMtime = status.file_metadata?.job_description?.mtime_ms;
+    if (Number.isFinite(openedAt) && jobMtime && jobMtime < openedAt) {
+      return {
+        key: "job_description",
+        route: FLOW_TARGETS.job_description.route,
+        message: flowCopy.needsFreshJob,
+      };
+    }
+
+    if (!status.files?.resume) {
+      return {
+        key: "resume",
+        route: FLOW_TARGETS.resume.route,
+        message: flowCopy.needsResume,
+      };
+    }
+
+    return null;
+  };
+
+  const pauseFlow = (flow, reason) => {
+    updateSession({
+      pendingFlow: { ...flow, pausedAt: new Date().toISOString(), reason },
+      message: "",
+      images: [],
+      attachmentError: "",
+    });
+    addHistory({ role: "agent", text: `${reason.message}\n\n${flowCopy.paused}` });
+    navigate(reason.route, {
+      state: {
+        routeError: reason.message,
+      },
+    });
+  };
+
+  const runApplicationMaterialFlow = async (flow) => {
+    const missing = await missingFlowPrerequisite();
+    if (missing) {
+      pauseFlow(flow, missing);
+      return null;
+    }
+
+    const pages = [];
+    let resumeData = null;
+    let coverLetterData = null;
+    let applicationHint = null;
+    if (flow.outputs.resume) {
+      resumeData = await api.tailorResume(true, true, false, true);
+      applicationHint = resumeData?.application_hint || applicationHint;
+      pages.push(language === "zh" ? "简历" : "Resume");
+    }
+    if (flow.outputs.coverLetter) {
+      coverLetterData = await api.generateCoverLetter({
+        use_tailored_resume: Boolean(flow.outputs.resume || resumeData),
+        use_github_context: false,
+        style: "concise",
+        include_application_hint: !applicationHint,
+      });
+      applicationHint = coverLetterData?.application_hint || applicationHint;
+      pages.push(language === "zh" ? "求职信" : "Cover Letter");
+    }
+
+    await api.createApplication({
+      company: applicationHint?.company?.trim() || (language === "zh" ? "未知公司" : "Unknown company"),
+      role: applicationHint?.role?.trim() || (language === "zh" ? "未知岗位" : "Unknown role"),
+      link: applicationHint?.link?.trim() || "",
+      status: "Interested",
+      applied_date: "",
+      resume_version: resumeData?.output_path || resumeData?.path || "",
+      cover_letter_version: coverLetterData?.output_path || coverLetterData?.path || "",
+      notes: language === "zh" ? "由 Agent Chat 自动添加。" : "Added automatically from Agent Chat.",
+    });
+
+    const pageText = formatPageList(pages, language);
+    addHistory({
+      role: "agent",
+      text: flowCopy.savedWithApplication.replace("{pages}", pageText),
+    });
+    clearPendingFlow();
+    return { saved: true };
+  };
+
   const send = () =>
     run(async () => {
       const trimmed = message.trim();
@@ -104,11 +309,31 @@ export default function Chat({ session, setSession }) {
         attachmentError: "",
       }));
 
+      const requestedOutputs = detectApplicationMaterialRequest(trimmed);
+      if (requestedOutputs && attachedImages.length === 0) {
+        return runApplicationMaterialFlow({
+          message: trimmed,
+          outputs: requestedOutputs,
+          userEntry,
+        });
+      }
+
       const data = await api.askAgent(trimmed, attachedImages);
       const agentEntry = { role: "agent", text: data.answer || "" };
       updateSession((current) => ({ history: [...current.history, agentEntry] }));
       return data;
     });
+
+  const continueFlow = () =>
+    run(async () => {
+      if (!pendingFlow) return null;
+      return runApplicationMaterialFlow(pendingFlow);
+    });
+
+  const cancelFlow = () => {
+    addHistory({ role: "agent", text: flowCopy.canceled });
+    clearPendingFlow();
+  };
 
   return (
     <div className="chat-page">
@@ -147,69 +372,85 @@ export default function Chat({ session, setSession }) {
       </section>
 
       <section className="card chat-composer">
-        <div className="field">
-          <label>{copy.message}</label>
-          <textarea
-            className="short"
-            value={message}
-            onChange={(e) => updateSession({ message: e.target.value })}
-            placeholder={copy.placeholder}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send();
-            }}
-          />
-        </div>
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/gif,image/webp"
-          multiple
-          hidden
-          disabled={!supportsImages}
-          onChange={addImages}
-        />
-        {images.length > 0 && (
-          <div className="chat-attachment-list">
-            {images.map((image, index) => (
-              <div className="chat-attachment" key={`${image.name}-${index}`}>
-                <img src={image.data_url} alt={image.name || copy.attachedImage} />
-                <span title={image.name}>{image.name}</span>
-                <button type="button" aria-label={copy.removeImage} onClick={() => updateSession((current) => ({ images: current.images.filter((_, itemIndex) => itemIndex !== index) }))}>
-                  x
-                </button>
+        {pendingFlow ? (
+          <>
+            <p className="chat-flow-paused">{flowCopy.paused}</p>
+            <div className="btn-row">
+              <button type="button" className="btn btn-secondary" onClick={cancelFlow} disabled={loading}>
+                {flowCopy.cancel}
+              </button>
+              <button type="button" className="btn btn-primary" onClick={continueFlow} disabled={loading}>
+                {loading ? flowCopy.generating : flowCopy.continue}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <label>{copy.message}</label>
+              <textarea
+                className="short"
+                value={message}
+                onChange={(e) => updateSession({ message: e.target.value })}
+                placeholder={copy.placeholder}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send();
+                }}
+              />
+            </div>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              hidden
+              disabled={!supportsImages}
+              onChange={addImages}
+            />
+            {images.length > 0 && (
+              <div className="chat-attachment-list">
+                {images.map((image, index) => (
+                  <div className="chat-attachment" key={`${image.name}-${index}`}>
+                    <img src={image.data_url} alt={image.name || copy.attachedImage} />
+                    <span title={image.name}>{image.name}</span>
+                    <button type="button" aria-label={copy.removeImage} onClick={() => updateSession((current) => ({ images: current.images.filter((_, itemIndex) => itemIndex !== index) }))}>
+                      x
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )}
+            {attachmentError && <p className="warning-line">{attachmentError}</p>}
+            {!supportsImages && (
+              <p className="meta-line">{copy.imagesNotSupported}</p>
+            )}
+            <div className="btn-row">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                title={!supportsImages ? copy.imageUploadDisabled : undefined}
+                onClick={() => {
+                  if (!supportsImages) {
+                    updateSession({ attachmentError: copy.imagesNotSupported });
+                    return;
+                  }
+                  imageInputRef.current?.click();
+                }}
+                disabled={loading || !supportsImages || images.length >= 4}
+              >
+                {supportsImages ? copy.addImage : copy.imageUploadDisabled}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={send}
+                disabled={loading || (!message.trim() && (!supportsImages || images.length === 0))}
+              >
+                {loading ? copy.thinking : copy.send}
+              </button>
+            </div>
+          </>
         )}
-        {attachmentError && <p className="warning-line">{attachmentError}</p>}
-        {!supportsImages && (
-          <p className="meta-line">{copy.imagesNotSupported}</p>
-        )}
-        <div className="btn-row">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            title={!supportsImages ? copy.imageUploadDisabled : undefined}
-            onClick={() => {
-              if (!supportsImages) {
-                updateSession({ attachmentError: copy.imagesNotSupported });
-                return;
-              }
-              imageInputRef.current?.click();
-            }}
-            disabled={loading || !supportsImages || images.length >= 4}
-          >
-            {supportsImages ? copy.addImage : copy.imageUploadDisabled}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={send}
-            disabled={loading || (!message.trim() && (!supportsImages || images.length === 0))}
-          >
-            {loading ? copy.thinking : copy.send}
-          </button>
-        </div>
       </section>
     </div>
   );

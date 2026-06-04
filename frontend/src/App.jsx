@@ -20,6 +20,7 @@ import {
 
 const NAV_ITEMS = [
   { to: "/", key: "dashboard", end: true },
+  { to: "/chat", key: "chat" },
   { to: "/resume", key: "resume" },
   { to: "/job", key: "job" },
   { to: "/cover-letter", key: "coverLetter" },
@@ -27,7 +28,6 @@ const NAV_ITEMS = [
   { to: "/interview", key: "interview" },
   { to: "/github", key: "github" },
   { to: "/prompt", key: "prompt" },
-  { to: "/chat", key: "chat" },
 ];
 
 export default function App() {
@@ -39,6 +39,7 @@ export default function App() {
     images: [],
     attachmentError: "",
     history: [],
+    pendingFlow: null,
   }));
   const chatSessionRef = useRef(chatSession);
   const t = text[language];
