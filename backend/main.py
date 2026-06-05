@@ -26,6 +26,7 @@ load_dotenv(INFORMATION_DIR / ".env")
 PROMPT_PATH = BACKGROUND_DIR / "prompt.txt"
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
 MEMORY_PATH = INFORMATION_DIR / "memory.json"
+PROJECT_MEMORY_PATH = INFORMATION_DIR / "project_memory.json"
 CHROMA_DB_PATH = INFORMATION_DIR / "chroma"
 RESUME_PATH = INFORMATION_DIR / "resume.txt"
 JOB_DESCRIPTION_PATH = INFORMATION_DIR / "job_description.txt"
@@ -783,6 +784,32 @@ def read_memory(query=""):
     return json.dumps(memory, ensure_ascii=False, indent=2)
 
 
+def write_project_memory_file(memory):
+    PROJECT_MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROJECT_MEMORY_PATH.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def read_project_memory(query=""):
+    if file_is_ready(PROJECT_MEMORY_PATH):
+        return PROJECT_MEMORY_PATH.read_text(encoding="utf-8").strip()
+    return json.dumps(
+        {
+            "version": 1,
+            "source": "missing-project-memory",
+            "purpose": (
+                "Project Memory is generated from repository analysis during GitHub extraction. "
+                "Run GitHub extraction to populate this file."
+            ),
+            "projects": [],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def replace_profile_memory(memory, source="profile-update"):
     if not isinstance(memory, dict):
         raise ValueError("Profile memory must be a JSON object.")
@@ -799,6 +826,71 @@ def delete_profile_memory(section, item_index=None, delete_section=False):
 
 def read_stored_github_context(query=""):
     return MEMORY_STORE.read_github_contexts(query=query)
+
+
+def project_queries_from_memory(project_memory):
+    if not isinstance(project_memory, dict):
+        return []
+    projects = project_memory.get("projects", [])
+    if isinstance(projects, dict):
+        projects = [projects]
+    if not isinstance(projects, list):
+        return []
+
+    queries = []
+    for index, project in enumerate(projects):
+        if not isinstance(project, dict):
+            continue
+        identity = project.get("identity") if isinstance(project.get("identity"), dict) else {}
+        rag_refs = project.get("rag_refs") if isinstance(project.get("rag_refs"), dict) else {}
+        rag_filter = rag_refs.get("filter") if isinstance(rag_refs.get("filter"), dict) else {}
+        values = [
+            project.get("project_id"),
+            project.get("project_name"),
+            project.get("name"),
+            rag_filter.get("project_id"),
+            identity.get("positioning"),
+            identity.get("core_problem"),
+            identity.get("core_value"),
+            " ".join(project.get("tech_stack", []) if isinstance(project.get("tech_stack"), list) else []),
+            " ".join(project.get("workflows", []) if isinstance(project.get("workflows"), list) else []),
+        ]
+        query = " ".join(str(value).strip() for value in values if value).strip()
+        queries.append(
+            {
+                "index": index,
+                "project_id": str(project.get("project_id") or rag_filter.get("project_id") or "").strip(),
+                "project_name": str(project.get("project_name") or project.get("name") or "").strip(),
+                "query": query,
+            }
+        )
+    return queries
+
+
+def read_project_evidence_map(limit_per_project=4):
+    try:
+        project_memory = json.loads(read_project_memory())
+    except json.JSONDecodeError:
+        project_memory = {}
+
+    evidence_map = []
+    for project_query in project_queries_from_memory(project_memory):
+        query = project_query["query"]
+        evidence = MEMORY_STORE.read_github_contexts(query=query, limit=limit_per_project) if query else []
+        evidence_map.append({**project_query, "evidence": evidence})
+
+    return json.dumps(
+        {
+            "source": "project_memory_to_chroma_github_evidence",
+            "rule": (
+                "Use project_memory.json for project background and scope. Use this map only for "
+                "per-project implementation details, files, commits, diffs, and proof."
+            ),
+            "projects": evidence_map,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def read_resume():
@@ -1793,6 +1885,45 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "read_project_memory",
+        "description": (
+            "Read project_memory.json, the structured project-truth document generated "
+            "from repository README, repository metadata, and code/file summaries. "
+            "Use this as the primary project source for resume bullets."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional project or job query; currently used only for fallback profile retrieval.",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_project_evidence_map",
+        "description": (
+            "Map each project in project_memory.json to related Chroma github_evidence records. "
+            "Use this after read_project_memory to get per-project code, file, commit, diff, and proof details."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit_per_project": {
+                    "type": "integer",
+                    "description": "Maximum Chroma github_evidence records to retrieve for each project.",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_resume",
         "description": "Read the user's current resume LaTeX code from resume.txt.",
         "parameters": {
@@ -1995,6 +2126,8 @@ def read_github_context(query=""):
 
 TOOL_FUNCTIONS = {
     "read_memory": read_memory,
+    "read_project_memory": read_project_memory,
+    "read_project_evidence_map": read_project_evidence_map,
     "delete_profile_memory": delete_profile_memory,
     "read_resume": read_resume,
     "read_tailored_resume": read_tailored_resume,
@@ -2034,12 +2167,15 @@ def ask_agent(user_input, adapter, model, images=None):
 User request:
 {user_input}
 
-You have tools for reading and deleting specific Chroma profile memory facts, reading resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+You have tools for reading and deleting specific Chroma profile memory facts, reading project_memory.json, reading resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
 When the user asks to forget or delete profile memory, call read_memory first, then use delete_profile_memory for only the requested fact. Set delete_section=true only when the user explicitly asks to remove the whole section. Report what was deleted.
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
-When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals to infer implementation work conservatively.
-When tailoring a resume, compare the current resume projects with factual projects retrieved from Chroma profile memory. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching memory project. Memory project repository links are candidates for approved GitHub evidence, not permission to invent claims.
+Project Memory is the primary source of project truth. GitHub context is an evidence library only.
+Resume tailoring order for projects: first call read_project_memory to understand each project's background, purpose, scope, tech stack, workflows, confirmed features, and metrics; then call read_project_evidence_map to map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details; then modify the resume.
+Do not write resume bullets directly from retrieved GitHub evidence. Use Project Memory to decide which projects and claims are valid, and use the per-project evidence map only to add implementation details and proof.
+When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals only as supporting evidence for facts already represented in Project Memory.
+When tailoring a resume, compare the current resume projects with factual projects from project_memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching Project Memory project. Project Memory rag_refs are candidates for Chroma evidence lookup, not permission to invent claims.
 When tailoring resume Experience entries, you may reorder factual bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. Preserve each existing Experience entry unless the user explicitly allows removing an entire entry. Never invent or change employers, roles, dates, responsibilities, technologies, or metrics.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.

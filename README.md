@@ -124,7 +124,16 @@ The backend writes:
 
 After saving GitHub settings, scan the tailored resume, base resume, and vector-memory projects, confirm access, and WorkAgent will fetch repository context for use in resume tailoring, cover letters, and interview prep. The combined source is selected by default, ignores a missing tailored resume, and deduplicates repository links. Memory projects can therefore be considered before they appear in a tailored resume.
 
-Approved repository metadata, verified identities, matched commits, changed files, diff patches, and extracted diff signals are written to the `github_evidence` Chroma collection. GitHub evidence remains separate from durable profile facts.
+Approved repository metadata, verified identities, matched commits, changed files, diff patches, and extracted diff signals are written to the `github_evidence` Chroma collection. In the same GitHub extraction flow, WorkAgent also analyzes repository metadata, README content, languages, root files, and lightweight code/file signals to write the separate `information/project_memory.json` file. GitHub evidence remains separate from durable profile facts and from Project Memory.
+
+```text
+GitHub extraction
+-> evidence branch: commit diff / files / README / metadata -> Chroma github_evidence
+-> project branch: README / repository metadata / languages / root files / code-file summary -> project_memory.json
+-> resume generation: JD + original resume + project_memory.json
+-> map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details
+-> resume bullets
+```
 
 ## Vector Memory
 
@@ -134,7 +143,7 @@ WorkAgent stores durable profile memory and approved GitHub evidence in separate
 information/chroma/
 ```
 
-The `profile_facts` collection stores durable user facts. The `github_evidence` collection stores approved repository and commit evidence.
+The `profile_facts` collection stores durable user and profile facts. The `github_evidence` collection stores approved repository and commit evidence. The `information/project_memory.json` file is a separate project-truth file generated from repository analysis, and resume tailoring uses it as the primary source before consulting Chroma evidence for supporting details.
 
 New facts are embedded locally, compared with similar stored records, and then inserted, updated, or deduplicated. Retrieval also uses vector search when the agent provides a task, skill, or project query. The local embedder is deterministic and works offline without downloading an embedding model or sending private profile data to an external embedding API.
 
@@ -534,7 +543,16 @@ GitHub Evidence 页面可以配置：
 
 保存后，扫描定制简历、基础简历和向量记忆中的仓库链接并确认授权，即可读取仓库上下文，用于简历定制、求职信和面试准备。页面默认选择这个完整组合；定制简历尚不存在时会自动忽略，并对仓库链接去重。记忆中的项目即使还没有出现在当前简历里，也可以进入候选范围。
 
-已授权的仓库元数据、已验证身份、匹配到的 commits、文件变更、diff patch 和提取出的 diff 信号会写入 Chroma 的 `github_evidence` collection。GitHub 证据与长期画像事实分开存储。
+已授权的仓库元数据、已验证身份、匹配到的 commits、文件变更、diff patch 和提取出的 diff 信号会写入 Chroma 的 `github_evidence` collection。同一次 GitHub 提取流程中，WorkAgent 也会分析仓库元数据、README、语言、根目录文件和轻量代码/文件信号，并写入单独的 `information/project_memory.json` 文件。GitHub 证据与长期画像事实、Project Memory 分开存储。
+
+```text
+GitHub extraction
+-> evidence branch: commit diff / files / README / metadata -> Chroma github_evidence
+-> project branch: README / repository metadata / languages / root files / code-file summary -> project_memory.json
+-> resume generation: JD + original resume + project_memory.json
+-> map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details
+-> resume bullets
+```
 
 ## 向量记忆
 
@@ -544,7 +562,7 @@ WorkAgent 使用本地 Chroma 向量数据库保存长期画像记忆和已授�
 information/chroma/
 ```
 
-`profile_facts` collection 保存稳定的个人画像事实。`github_evidence` collection 保存已授权的仓库和 commit 证据。
+`profile_facts` collection 保存稳定的个人画像事实。`github_evidence` collection 保存已授权的仓库和 commit 证据。`information/project_memory.json` 是由仓库分析生成的独立项目事实文件，简历定制会先把它作为主来源，再读取 Chroma 证据补充代码、文件、commit 和 diff 细节。
 
 新增信息会先在本地完成向量化，再与已有记录进行相似度对比，最后决定新增、更新或去重。提取信息时，agent 也可以根据任务、技能或项目关键词进行语义检索。内置向量化器是确定性的本地实现，不会下载 embedding 模型，也不会把个人资料发送给外部 embedding API。
 

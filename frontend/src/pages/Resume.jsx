@@ -74,7 +74,18 @@ export default function Resume() {
   const [applicationPrompt, setApplicationPrompt] = useState(null);
   const [applicationForm, setApplicationForm] = useState(EMPTY_APPLICATION_FORM);
   const pdfInputRef = useRef(null);
+  const loadingRef = useRef(false);
   const { loading, error, success, run } = useAsyncAction();
+  const [activeAction, setActiveAction] = useState("");
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  const runResumeAction = (actionName, action, successMessage = "") => {
+    setActiveAction(actionName);
+    return run(action, successMessage).finally(() => setActiveAction(""));
+  };
 
   const loadFiles = useCallback(() =>
     run(async () => {
@@ -111,7 +122,9 @@ export default function Resume() {
   }, [location.pathname, loadFiles]);
 
   useEffect(() => {
-    const refreshOnFocus = () => loadFiles();
+    const refreshOnFocus = () => {
+      if (!loadingRef.current) loadFiles();
+    };
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
   }, [loadFiles]);
@@ -135,7 +148,7 @@ export default function Resume() {
   }, [allowExperienceRemoval]);
 
   const saveResume = () =>
-    run(async () => {
+    runResumeAction("saveResume", async () => {
       await api.saveFile("resume", resume);
     }, copy.originalSaved);
 
@@ -148,7 +161,7 @@ export default function Resume() {
     event.target.value = "";
     if (!file) return;
 
-    run(async () => {
+    runResumeAction("pdfToLatex", async () => {
       if (file.type && file.type !== "application/pdf") {
         throw new Error(copy.pdfInvalidType || "Please choose a PDF file.");
       }
@@ -169,7 +182,7 @@ export default function Resume() {
   };
 
   const updateMemory = () =>
-    run(async () => {
+    runResumeAction("memory", async () => {
       await api.saveFile("resume", resume);
       const data = await api.updateMemoryFromResume("resume");
       const additions = data.additions || [];
@@ -182,21 +195,21 @@ export default function Resume() {
     }, copy.memoryChecked);
 
   const saveTailored = () =>
-    run(async () => {
+    runResumeAction("saveTailored", async () => {
       await api.saveFile("tailored_resume", tailored);
       const status = await api.getStatus();
       setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
     }, copy.tailoredSaved);
 
   const exportTailoredPdf = () =>
-    run(async () => {
+    runResumeAction("exportPdf", async () => {
       const data = await api.exportTailoredResumePdf(tailored);
       setOutputPath(data.output_path || data.path || "");
       return data;
     }, copy.tailoredPdfExported || "Tailored resume PDF exported");
 
   const generate = () =>
-    run(async () => {
+    runResumeAction("generate", async () => {
       const jobData = await api.getFile("job_description");
       const jobFingerprint = fingerprint(jobData.content || "");
       const needsApplicationHint = Boolean(
@@ -256,7 +269,8 @@ export default function Resume() {
         value={resume}
         onChange={setResume}
         onSave={saveResume}
-        saving={loading}
+        saving={activeAction === "saveResume"}
+        disabled={loading}
         placeholder={copy.originalPlaceholder}
         extraActions={
           <>
@@ -268,7 +282,7 @@ export default function Resume() {
               onChange={convertPdfToLatex}
             />
             <button type="button" className="btn btn-secondary" onClick={openPdfPicker} disabled={loading}>
-              {loading ? copy.pdfConverting || "Converting..." : copy.pdfToLatex || "PDF to LaTeX"}
+              {activeAction === "pdfToLatex" ? copy.pdfConverting || "Converting..." : copy.pdfToLatex || "PDF to LaTeX"}
             </button>
           </>
         }
@@ -279,7 +293,7 @@ export default function Resume() {
         <p className="helper-paragraph">{copy.memoryDescription}</p>
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={updateMemory} disabled={loading}>
-            {loading ? copy.memoryUpdating : copy.memoryUpdate}
+            {activeAction === "memory" ? copy.memoryUpdating : copy.memoryUpdate}
           </button>
         </div>
         {memorySummary && (
@@ -314,7 +328,7 @@ export default function Resume() {
         <p className="helper-text">{copy.experienceTailoringHint}</p>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
-            {loading ? copy.generating : copy.generate}
+            {activeAction === "generate" ? copy.generating : copy.generate}
           </button>
         </div>
         {outputPath && (
@@ -329,11 +343,12 @@ export default function Resume() {
         value={tailored}
         onChange={setTailored}
         onSave={saveTailored}
-        saving={loading}
+        saving={activeAction === "saveTailored"}
+        disabled={loading}
         placeholder={copy.tailoredPlaceholder}
         extraActions={
           <button type="button" className="btn btn-secondary" onClick={exportTailoredPdf} disabled={loading}>
-            {loading ? copy.tailoredPdfExporting || "Exporting..." : copy.exportTailoredPdf || "Export PDF"}
+            {activeAction === "exportPdf" ? copy.tailoredPdfExporting || "Exporting..." : copy.exportTailoredPdf || "Export PDF"}
           </button>
         }
       />

@@ -31,6 +31,22 @@ function formatMemoryUpdatedAt(value, language) {
   }).format(new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`));
 }
 
+function formatUnixUpdatedAt(value, language) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat(language === "en" ? "en" : "zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(value * 1000));
+}
+
+function resolveProjectMemoryUpdatedAt(githubConfig, status) {
+  return (
+    githubConfig?.project_memory_updated_at ||
+    status?.file_metadata?.project_memory?.mtime ||
+    null
+  );
+}
+
 export default function GitHubContext() {
   const { language } = useLanguage();
   const copy = text[language].github;
@@ -46,11 +62,12 @@ export default function GitHubContext() {
   });
   const [tokenConfigured, setTokenConfigured] = useState(false);
   const [memoryRepositories, setMemoryRepositories] = useState([]);
+  const [projectMemoryUpdatedAt, setProjectMemoryUpdatedAt] = useState(null);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadGithubConfig = () =>
     run(async () => {
-      const data = await api.getGithubConfig();
+      const [data, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
       setGithubForm((current) => ({
         usernames: listToText(data.identities?.usernames),
         author_names: listToText(data.identities?.author_names),
@@ -59,6 +76,7 @@ export default function GitHubContext() {
       }));
       setTokenConfigured(data.token_configured);
       setMemoryRepositories(data.memory_repositories || []);
+      setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(data, status));
       return data;
     });
 
@@ -77,6 +95,8 @@ export default function GitHubContext() {
       setGithubForm((current) => ({ ...current, token: "" }));
       setTokenConfigured(data.token_configured);
       setMemoryRepositories(data.memory_repositories || []);
+      const status = await api.getStatus();
+      setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(data, status));
       setScan((current) =>
         current
           ? { ...current, identities: data.identities, token_configured: data.token_configured }
@@ -97,9 +117,10 @@ export default function GitHubContext() {
   const approveFetchContext = () =>
     run(async () => {
       const data = await api.fetchGithubContext(true, source);
-      const githubConfig = await api.getGithubConfig();
+      const [githubConfig, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
       setContext(data);
       setMemoryRepositories(githubConfig.memory_repositories || []);
+      setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(githubConfig, status));
       setConfirmOpen(false);
       return data;
     }, copy.fetched);
@@ -114,6 +135,18 @@ export default function GitHubContext() {
     ...(identities.author_names || []).map((value) => `Commit author name: ${value}`),
     ...(identities.author_emails || []).map((value) => `Commit author email: ${value}`),
   ];
+  const repositoryEvidenceTitle =
+    language === "en" ? (copy.memoryRepositories || "Repositories in Chroma Evidence DB") : "Chroma 证据库中的仓库";
+  const repositoryEvidenceHint =
+    language === "en"
+      ? (copy.memoryRepositoriesHint || "These repositories already have local Chroma evidence records. Reading this list does not access GitHub.")
+      : "这些仓库已经有本地 Chroma 证据库记录。读取列表不会访问 GitHub 云端。";
+  const chromaEvidenceUpdatedAt =
+    language === "en" ? (copy.chromaEvidenceUpdatedAt || "Chroma evidence DB updated: ") : "Chroma 证据库更新：";
+  const projectMemoryUpdatedAtLabel =
+    language === "en" ? (copy.projectMemoryUpdatedAt || "Project Memory JSON updated: ") : "Project Memory JSON 更新：";
+  const noRepositoryEvidence =
+    language === "en" ? (copy.noMemoryRepositories || "No Chroma repository evidence yet") : "暂无 Chroma 仓库证据";
 
   return (
     <>
@@ -201,21 +234,24 @@ export default function GitHubContext() {
       </section>
 
       <section className="card">
-        <h2 className="card-title">{copy.memoryRepositories}</h2>
-        <p className="helper-text">{copy.memoryRepositoriesHint}</p>
+        <h2 className="card-title">{repositoryEvidenceTitle}</h2>
+        <p className="helper-text">{repositoryEvidenceHint}</p>
+        <p className="status-line">
+          {projectMemoryUpdatedAtLabel}{formatUnixUpdatedAt(projectMemoryUpdatedAt, language)}
+        </p>
         {memoryRepositories.length ? (
           <div className="repo-list">
             {memoryRepositories.map((repo) => (
               <div key={repo.repository} className="repo-item">
                 <span>{repo.repository}</span>
                 <span className="status-line">
-                  {copy.memoryUpdatedAt}{formatMemoryUpdatedAt(repo.updated_at, language)}
+                  {chromaEvidenceUpdatedAt}{formatMemoryUpdatedAt(repo.updated_at, language)}
                 </span>
               </div>
             ))}
           </div>
         ) : (
-          <p className="empty-state">{copy.noMemoryRepositories}</p>
+          <p className="empty-state">{noRepositoryEvidence}</p>
         )}
       </section>
 

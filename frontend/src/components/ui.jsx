@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { text, useLanguage } from "../i18n.jsx";
 
 export function PageHeader({ title, description }) {
@@ -62,8 +62,10 @@ export function useAsyncAction() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const pendingCountRef = useRef(0);
 
   const run = useCallback(async (action, successMessage = "") => {
+    pendingCountRef.current += 1;
     setLoading(true);
     setError("");
     setSuccess("");
@@ -75,7 +77,8 @@ export function useAsyncAction() {
       setError(err.message || "Operation failed");
       return null;
     } finally {
-      setLoading(false);
+      pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
+      if (pendingCountRef.current === 0) setLoading(false);
     }
   }, []);
 
@@ -99,6 +102,7 @@ export function EditorCard({
   onChange,
   onSave,
   saving,
+  disabled = false,
   placeholder,
   short = false,
   extraActions = null,
@@ -123,7 +127,7 @@ export function EditorCard({
             type="button"
             className="btn btn-primary"
             onClick={onSave}
-            disabled={saving}
+            disabled={disabled || saving}
           >
             {saving ? common.saving : common.save}
           </button>

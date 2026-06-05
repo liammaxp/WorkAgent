@@ -53,6 +53,7 @@ FILE_MAP = {
     "cover_letter": agent.COVER_LETTER_PATH,
     "interview_prep": agent.INTERVIEW_PREP_PATH,
     "memory": agent.MEMORY_PATH,
+    "project_memory": agent.PROJECT_MEMORY_PATH,
     "github_accounts": agent.GITHUB_ACCOUNTS_PATH,
 }
 
@@ -67,19 +68,133 @@ Requirements:
 """
 
 RESUME_TAILOR_PROMPT = """
-Based on the saved job_description.txt, Chroma profile memory, resume.txt, and approved GitHub context if useful,
+Based on the saved job_description.txt, project_memory.json, resume.txt, and approved GitHub context if useful,
 generate the modified complete LaTeX resume code.
-Compare the projects currently listed in resume.txt with the factual projects available in Chroma profile memory.
+Hard source hierarchy:
+1. Project Memory is the primary source of project truth.
+2. RAG GitHub evidence is an evidence library only.
+3. Do not write resume bullets directly from retrieved GitHub evidence.
+4. First use project_memory.json to decide what each project is, what problem it solves,
+   the technical stack, core workflow, confirmed implemented features, and real metrics.
+5. For each relevant Project Memory project, map it one-to-one to Chroma github_evidence via project_id,
+   project_name, repository, rag_refs, and semantic query.
+6. Use mapped GitHub evidence only for per-project code details, files, commits, diffs, and proof.
+Compare the projects currently listed in resume.txt with the factual projects available in Project Memory.
 Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
 update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
+If WorkAgent is relevant to the saved job description, treat it as a high-priority project because Project Memory
+identifies it as a local AI job application workspace connecting job analysis, tailored resumes, cover letters,
+interview preparation, memory, GitHub evidence, model configuration, and application tracking.
 Tailor the Experience section for the saved job description: you may reorder factual bullets, rewrite bullets
 for relevance and clarity, and remove weaker or redundant bullets. Preserve the factual meaning of the source resume.
 Keep every existing Experience entry unless the user explicitly allows removing entire Experience entries.
 Repository links in Chroma profile memory may be used only as candidates for approved GitHub evidence.
 Do not invent claims, technologies, metrics, responsibilities, employers, roles, dates, or repository facts.
+
+Resume Bullet Writing Rules:
+- Before writing any project bullet, read the selected project's Project Memory fields in this order:
+  1. identity.positioning
+  2. identity.core_problem
+  3. identity.core_value
+  4. workflows
+  5. tech_stack and confirmed_features as supporting details
+- The first bullet for each selected project must explain what the project is and what workflow or problem it addresses.
+- Bullets should follow this order of importance:
+  1. problem / purpose
+  2. workflow or system behavior
+  3. technical implementation
+  4. metrics, only if explicitly provided
+- Do not write bullets that only describe storage, CRUD, file handling, framework usage, or generic implementation.
+- Prefer strong verbs such as Built, Designed, Developed, Implemented, Integrated, Automated, Refactored, Optimized.
+- Avoid vague verbs such as leveraged, utilized, facilitated, enabled, supported unless necessary.
+- Technology names should support the story, not become the whole story.
+- Each project should have 3-4 bullets maximum.
+- Each bullet should be concise, factual, and ATS-friendly.
+- Never invent metrics, technologies, deployment, users, business impact, ownership, or performance claims.
+
+Resume bullet examples:
+Bad:
+- Used SQLite to organize application records.
+- Implemented file-based resume and job-description handling.
+- Developed a FastAPI backend.
+
+Good:
+- Built a local AI-assisted job application workspace that automates resume tailoring, application preparation, and job tracking workflows.
+- Designed a workflow to analyze job descriptions, select relevant project experience, and generate role-specific application materials while preserving factual accuracy.
+- Developed a full-stack architecture using React, FastAPI, SQLite, and vector memory to manage resumes, application history, interview preparation, and GitHub-backed project evidence.
+
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
 """
+
+PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT = """
+Update project_memory.json from repository analysis.
+
+Architecture rule:
+- Project Memory is the primary source of project truth.
+- RAG GitHub evidence is an evidence library only.
+- Resume bullets must not be written directly from GitHub evidence.
+
+During GitHub extraction, the repository data splits into two outputs:
+- Chroma github_evidence keeps the existing evidence records unchanged.
+- project_memory.json receives a separate project analysis written from README, repository metadata,
+  root files, languages, dependency/config filenames, and lightweight code/file summaries.
+
+Do not summarize Chroma retrieval results into Project Memory. Use the repository analysis payload provided here.
+
+Project Memory must answer, per project:
+- What is this project?
+- What background or user problem motivated it?
+- What problem does it solve?
+- What technical stack is confirmed?
+- What is the core workflow?
+- Which features are confirmed implemented?
+- Which real metrics are confirmed?
+
+GitHub evidence should answer only:
+- Which commits, files, README sections, or diffs prove those facts?
+- What changed recently?
+- Whether a specific technical point has evidence.
+
+Rules:
+- Only add or update durable project facts supported by README, repository metadata, languages,
+  root files, dependency/config filenames, and code/file summaries in the repository analysis payload.
+- Commit messages and diff details may be referenced as evidence_notes or recent_changes, but they are not the source
+  for resume bullet wording.
+- Preserve existing Project Memory unless the repository analysis provides a clearer or more complete version of the same project fact.
+- Keep unsupported metrics empty or omitted. Never invent product impact, scale, users, performance, or business results.
+- Store project facts in project_memory["projects"] as objects using this schema when possible:
+  {
+    "project_id": stable lowercase id such as "workagent",
+    "project_name": display name,
+    "identity": {
+      "project_type": confirmed category,
+      "positioning": concise positioning,
+      "target_user": confirmed or clearly implied user,
+      "background": why the project exists, if supported,
+      "core_problem": user/problem statement,
+      "core_value": value delivered by the project
+    },
+    "tech_stack": array of confirmed technologies,
+    "workflows": array of confirmed workflows,
+    "confirmed_features": array of implemented features,
+    "real_metrics": object or array of metrics only when evidence explicitly supports them,
+    "recent_changes": array of recent evidence-backed changes,
+    "rag_refs": {
+      "collection": "github_evidence",
+      "filter": {"project_id": same stable project id}
+    },
+    "evidence_notes": compact pointers to repositories, commits, files, README, or diffs
+  }
+- Keep the result compact and useful for future resume, cover letter, and interview prep tasks.
+- Return only valid JSON with exactly these keys:
+  "changed": boolean,
+  "additions": array of short strings describing newly added or strengthened project facts,
+  "project_memory": object
+"""
+
+MAX_STAGED_PROJECTS = 3
+MAX_STAGED_TEXT_CHARS = 12000
 
 
 class ProviderBody(BaseModel):
@@ -398,10 +513,16 @@ def write_github_identities(
 
 
 def build_github_config_status() -> dict[str, Any]:
+    project_memory_mtime = (
+        agent.PROJECT_MEMORY_PATH.stat().st_mtime
+        if agent.PROJECT_MEMORY_PATH.exists()
+        else None
+    )
     return {
         "identities": agent.read_github_identities(),
         "token_configured": agent.github_token_is_configured(),
         "memory_repositories": agent.MEMORY_STORE.list_github_repositories(),
+        "project_memory_updated_at": project_memory_mtime,
     }
 
 
@@ -543,6 +664,10 @@ def read_file_content(name: str) -> tuple[bool, str]:
         content = agent.read_memory()
         return bool(agent.MEMORY_STORE.profile_count()), content
 
+    if name == "project_memory":
+        content = agent.read_project_memory()
+        return agent.file_is_ready(agent.PROJECT_MEMORY_PATH), content
+
     if name == "tailored_resume" and not agent.file_is_ready(agent.OUTPUT_RESUME_PATH):
         if not agent.LEGACY_OUTPUT_RESUME_PATH.exists():
             return False, ""
@@ -561,6 +686,8 @@ def read_file_content(name: str) -> tuple[bool, str]:
 def file_ready(name: str, path: Path) -> bool:
     if name == "memory":
         return bool(agent.MEMORY_STORE.profile_count())
+    if name == "project_memory":
+        return agent.file_is_ready(path)
     if name == "tailored_resume":
         return agent.file_is_ready(path) or agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
     return agent.file_is_ready(path)
@@ -575,6 +702,23 @@ def save_file_content(name: str, content: str) -> None:
         if not isinstance(memory, dict):
             raise ValueError("Memory must be a valid JSON object.")
         agent.replace_profile_memory(memory, source="web-memory-editor")
+        return
+    if name == "project_memory":
+        try:
+            project_memory = json.loads(content)
+        except json.JSONDecodeError as error:
+            raise ValueError("Project Memory must be a valid JSON object.") from error
+        if not isinstance(project_memory, dict):
+            raise ValueError("Project Memory must be a valid JSON object.")
+        if "projects" not in project_memory and not project_memory.get("project_id"):
+            raise ValueError("Project Memory must include a projects array or one project object.")
+        if project_memory.get("project_id"):
+            project_memory = {
+                "version": 1,
+                "source": "manual-project-memory-editor",
+                "projects": [project_memory],
+            }
+        agent.write_project_memory_file(project_memory)
         return
     if name == "tailored_resume":
         agent.save_tailored_resume(content)
@@ -1347,6 +1491,103 @@ Resume:
         "additions": [str(item) for item in additions if str(item).strip()],
         "memory": merged_memory,
         "path": str(agent.CHROMA_DB_PATH),
+        "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+    }
+
+
+def build_project_analysis_payload(repo_contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    payload = []
+    for context in repo_contexts:
+        commits = []
+        for evidence in context.get("contribution_evidence", []):
+            for commit in evidence.get("commits", [])[:5]:
+                commits.append(
+                    {
+                        "sha": commit.get("sha"),
+                        "message": commit.get("message"),
+                        "date": commit.get("date"),
+                        "files": commit.get("files", [])[:12],
+                        "diff_analysis": commit.get("diff_analysis", {}),
+                    }
+                )
+        payload.append(
+            {
+                "url": context.get("url"),
+                "repository": context.get("repository"),
+                "description": context.get("description"),
+                "homepage": context.get("homepage"),
+                "topics": context.get("topics", []),
+                "default_branch": context.get("default_branch"),
+                "languages": context.get("languages", []),
+                "root_files": context.get("root_files", []),
+                "readme": context.get("readme", ""),
+                "recent_commit_evidence": commits,
+            }
+        )
+    return payload
+
+
+def read_current_project_memory() -> dict[str, Any]:
+    try:
+        current = json.loads(agent.read_project_memory())
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="Existing project_memory.json is not valid JSON.") from error
+    if not isinstance(current, dict):
+        raise HTTPException(status_code=500, detail="Existing project_memory.json must be a JSON object.")
+    return current
+
+
+def update_project_memory_from_repo_analysis(repo_contexts: list[dict[str, Any]]) -> dict[str, Any]:
+    if not repo_contexts:
+        return {
+            "updated": False,
+            "source": "repo-analysis",
+            "additions": [],
+            "project_memory": read_current_project_memory(),
+            "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+            "message": "No repository analysis payload is available.",
+        }
+    if not agent.has_usable_repo_context(repo_contexts):
+        return {
+            "updated": False,
+            "source": "repo-analysis",
+            "additions": [],
+            "project_memory": read_current_project_memory(),
+            "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+            "message": "Repository analysis payload is not usable.",
+        }
+
+    current_project_memory = read_current_project_memory()
+    repo_analysis = build_project_analysis_payload(repo_contexts)
+    prompt = f"""
+{PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT}
+
+Current project_memory.json:
+{json.dumps(current_project_memory, ensure_ascii=False, indent=2)}
+
+Repository analysis payload:
+{json.dumps(repo_analysis, ensure_ascii=False, indent=2)}
+"""
+    response = run_text_task(prompt)
+    payload = extract_json_object(response)
+    project_memory = payload.get("project_memory")
+    if not isinstance(project_memory, dict):
+        raise HTTPException(status_code=500, detail="Agent JSON response must include a project_memory object.")
+
+    changed = normalized_json(project_memory) != normalized_json(current_project_memory)
+    if changed:
+        agent.write_project_memory_file(project_memory)
+
+    additions = payload.get("additions", [])
+    if not isinstance(additions, list):
+        additions = []
+
+    return {
+        "updated": changed,
+        "source": "repo-analysis",
+        "additions": [str(item) for item in additions if str(item).strip()],
+        "project_memory": project_memory,
+        "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
     }
 
 
@@ -1475,10 +1716,455 @@ def read_approved_github_context(query: str = "") -> str:
     if not agent.has_usable_repo_context(context):
         return "No usable approved GitHub context is available."
 
-    return json.dumps(context, ensure_ascii=False, indent=2)
+    return (
+        "Supporting GitHub evidence only. Do not write resume bullets directly from this evidence; "
+        "use project_memory.json as the primary source.\n"
+        + json.dumps(context, ensure_ascii=False, indent=2)
+    )
 
 
 agent.TOOL_FUNCTIONS["read_github_context"] = read_approved_github_context
+
+
+def read_project_evidence_map_context() -> str:
+    try:
+        return agent.read_project_evidence_map(limit_per_project=4)
+    except RuntimeError as error:
+        return json.dumps({"error": str(error)}, ensure_ascii=False)
+
+
+agent.TOOL_FUNCTIONS["read_project_evidence_map"] = lambda limit_per_project=4: agent.read_project_evidence_map(
+    limit_per_project=limit_per_project
+)
+
+
+def truncate_text(value: Any, max_chars: int = MAX_STAGED_TEXT_CHARS) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n... [truncated]"
+
+
+def project_list_from_memory(project_memory: dict[str, Any]) -> list[dict[str, Any]]:
+    projects = project_memory.get("projects", []) if isinstance(project_memory, dict) else []
+    if isinstance(projects, dict):
+        projects = [projects]
+    return [project for project in projects if isinstance(project, dict)]
+
+
+def compact_project_for_prompt(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "project_id": project.get("project_id"),
+        "project_name": project.get("project_name") or project.get("name"),
+        "identity": project.get("identity", {}),
+        "tech_stack": project.get("tech_stack", []),
+        "workflows": project.get("workflows", []),
+        "confirmed_features": project.get("confirmed_features", []),
+        "real_metrics": project.get("real_metrics", {}),
+        "recent_changes": project.get("recent_changes", []),
+        "rag_refs": project.get("rag_refs", {}),
+    }
+
+
+def project_query(project: dict[str, Any]) -> str:
+    queries = agent.project_queries_from_memory({"projects": [project]})
+    if queries:
+        return queries[0].get("query", "")
+    return str(project.get("project_name") or project.get("name") or project.get("project_id") or "")
+
+
+def retrieve_evidence_for_project(project: dict[str, Any]) -> list[dict[str, Any]]:
+    query = project_query(project)
+    if not query:
+        return []
+    return agent.MEMORY_STORE.read_github_contexts(query=query)
+
+
+def select_staged_projects(
+    job_description: str,
+    resume: str,
+    project_memory: dict[str, Any],
+    allow_project_selection: bool,
+) -> list[dict[str, Any]]:
+    projects = project_list_from_memory(project_memory)
+    if not projects:
+        return []
+    if not allow_project_selection:
+        return projects[:MAX_STAGED_PROJECTS]
+
+    compact_projects = [{"index": index, **compact_project_for_prompt(project)} for index, project in enumerate(projects)]
+    prompt = f"""
+Select the strongest Project Memory projects for this job application.
+
+Rules:
+- Use only the job description, original resume, and Project Memory project summaries.
+- Select at most {MAX_STAGED_PROJECTS} projects.
+- Prefer projects already in the resume unless another Project Memory project is clearly stronger.
+- Return ONLY valid JSON with exactly this shape:
+  {{"selected_indices": [0], "reason": "short explanation"}}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 18000)}
+
+Project Memory projects:
+{json.dumps(compact_projects, ensure_ascii=False, indent=2)}
+"""
+    try:
+        payload = extract_json_object(run_text_task(prompt))
+    except HTTPException:
+        return projects[:MAX_STAGED_PROJECTS]
+
+    indices = payload.get("selected_indices", [])
+    if not isinstance(indices, list):
+        return projects[:MAX_STAGED_PROJECTS]
+
+    selected = []
+    for value in indices:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < len(projects) and projects[index] not in selected:
+            selected.append(projects[index])
+        if len(selected) >= MAX_STAGED_PROJECTS:
+            break
+    return selected or projects[:MAX_STAGED_PROJECTS]
+
+
+def build_project_resume_candidate(
+    job_description: str,
+    resume: str,
+    project: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    language: str,
+) -> dict[str, Any]:
+    prompt = f"""
+Generate structured resume tailoring candidates for ONE project.
+
+Rules:
+- Project Memory is the primary source of truth.
+- Chroma evidence is supporting proof only.
+- Do not output a full resume.
+- Do not invent metrics, technologies, files, commits, dates, ownership, or impact.
+- If evidence is weak, lower confidence or leave risk notes.
+- Return ONLY valid JSON with exactly these keys:
+  "project_id": string,
+  "project_name": string,
+  "fit": "high" | "medium" | "low",
+  "keep_or_replace": "keep" | "update" | "add" | "remove",
+  "fit_reason": string,
+  "recommended_bullets": array of objects with keys "bullet", "evidence", "confidence",
+  "skills_to_emphasize": array of strings,
+  "risks": array of strings
+
+Output language requirement:
+{output_language_instruction(language)}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 18000)}
+
+Project Memory project:
+{json.dumps(compact_project_for_prompt(project), ensure_ascii=False, indent=2)}
+
+Mapped Chroma evidence for this project, passed in its original stored form:
+{json.dumps(evidence, ensure_ascii=False, indent=2)}
+"""
+    payload = extract_json_object(run_text_task(prompt))
+    for key in ["recommended_bullets", "skills_to_emphasize", "risks"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    return payload
+
+
+def build_skills_resume_candidate(
+    job_description: str,
+    resume: str,
+    project_memory: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+    language: str,
+) -> dict[str, Any]:
+    prompt = f"""
+Generate structured Skills-section tailoring recommendations.
+
+Rules:
+- Do not output a full resume.
+- Use only the job description, original resume, Project Memory, and staged project candidates.
+- Skills may be reordered, grouped, emphasized, or removed when weakly relevant.
+- Add a skill only if it is supported by the original resume, Project Memory, or staged project candidates.
+- Do not invent tools, frameworks, platforms, databases, languages, certifications, or proficiency levels.
+- Return ONLY valid JSON with exactly these keys:
+  "skills_strategy": string,
+  "skills_to_emphasize": array of strings,
+  "skills_to_deemphasize": array of strings,
+  "skills_to_add_if_supported": array of objects with keys "skill", "supporting_source", "confidence",
+  "skills_to_remove_or_avoid": array of strings,
+  "recommended_skills_section": string,
+  "risks": array of strings
+
+Output language requirement:
+{output_language_instruction(language)}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 22000)}
+
+Project Memory:
+{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+
+Staged project candidates:
+{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+"""
+    payload = extract_json_object(run_text_task(prompt))
+    for key in ["skills_to_emphasize", "skills_to_deemphasize", "skills_to_add_if_supported", "skills_to_remove_or_avoid", "risks"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    return payload
+
+
+def build_experience_resume_candidate(
+    job_description: str,
+    resume: str,
+    project_memory: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+    skills_candidate: dict[str, Any],
+    allow_experience_removal: bool,
+    language: str,
+) -> dict[str, Any]:
+    prompt = f"""
+Generate structured Experience-section tailoring recommendations.
+
+Rules:
+- Do not output a full resume.
+- Use only the job description, original resume, Project Memory, staged project candidates, and staged Skills candidate.
+- You may reorder factual Experience bullets and rewrite them for relevance and clarity.
+- You may remove weak or redundant Experience bullets.
+- Preserve every existing Experience entry unless allow_experience_removal is true.
+- If allow_experience_removal is false, do not recommend removing an entire employer/role entry.
+- Do not invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership.
+- Add a technology or responsibility only if supported by the original resume or staged candidates.
+- Return ONLY valid JSON with exactly these keys:
+  "experience_strategy": string,
+  "entry_recommendations": array of objects with keys "entry_name", "action", "reason", "recommended_bullets", "remove_bullets", "risks",
+  "bullets_to_emphasize": array of strings,
+  "bullets_to_deemphasize": array of strings,
+  "unsupported_claims_to_avoid": array of strings,
+  "risks": array of strings
+
+Output language requirement:
+{output_language_instruction(language)}
+
+allow_experience_removal:
+{allow_experience_removal}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 26000)}
+
+Project Memory:
+{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+
+Staged project candidates:
+{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+
+Staged Skills candidate:
+{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
+"""
+    payload = extract_json_object(run_text_task(prompt))
+    for key in ["entry_recommendations", "bullets_to_emphasize", "bullets_to_deemphasize", "unsupported_claims_to_avoid", "risks"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    return payload
+
+
+def build_summary_resume_candidate(
+    job_description: str,
+    resume: str,
+    project_memory: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+    skills_candidate: dict[str, Any],
+    experience_candidate: dict[str, Any],
+    language: str,
+) -> dict[str, Any]:
+    prompt = f"""
+Generate structured resume Summary/Profile tailoring recommendations.
+
+Rules:
+- Do not output a full resume.
+- Use only the job description, original resume, Project Memory, staged project candidates,
+  staged Skills candidate, and staged Experience candidate.
+- The summary must be concise, factual, and aligned to the target job.
+- Do not invent years of experience, job titles, domains, achievements, metrics, seniority, or technologies.
+- Do not overclaim ownership or production impact unless supported by the staged candidates or original resume.
+- If the original resume has no Summary/Profile section, recommend whether to add one only if it improves ATS/relevance.
+- Return ONLY valid JSON with exactly these keys:
+  "summary_strategy": string,
+  "recommended_summary": string,
+  "keywords_to_include": array of strings,
+  "claims_to_avoid": array of strings,
+  "evidence_basis": array of strings,
+  "risks": array of strings
+
+Output language requirement:
+{output_language_instruction(language)}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 26000)}
+
+Project Memory:
+{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+
+Staged project candidates:
+{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+
+Staged Skills candidate:
+{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
+
+Staged Experience candidate:
+{json.dumps(experience_candidate, ensure_ascii=False, indent=2)}
+"""
+    payload = extract_json_object(run_text_task(prompt))
+    for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    return payload
+
+
+def merge_staged_resume(
+    job_description: str,
+    resume: str,
+    project_candidates: list[dict[str, Any]],
+    skills_candidate: dict[str, Any],
+    experience_candidate: dict[str, Any],
+    summary_candidate: dict[str, Any],
+    body: TailorBody,
+) -> str:
+    prompt = (
+        RESUME_TAILOR_PROMPT
+        + output_language_instruction(body.language)
+        + original_resume_language_instruction("tailored_resume")
+        + f"""
+
+Use these staged project candidate results as the only GitHub-supported project evidence.
+Do not request or infer raw Chroma evidence in this final merge step.
+
+Rules:
+- Produce the complete modified LaTeX resume.
+- Keep factual meaning from the original resume.
+- Use staged candidates to update, add, remove, or reorder projects only when allowed.
+- Use the staged Skills-section candidate to rewrite or reorder the Skills section when factual and relevant.
+- Use the staged Experience-section candidate to rewrite, reorder, or remove Experience bullets within the user's permissions.
+- Use the staged Summary/Profile candidate to rewrite or add a concise summary only when it improves the resume.
+- Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
+- Return only LaTeX code with no Markdown fences and no analysis text.
+
+Project selection allowed: {body.allow_project_selection}
+Entire Experience entry removal allowed: {body.allow_experience_removal}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 30000)}
+
+Staged project candidates:
+{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+
+Staged Skills-section candidate:
+{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
+
+Staged Experience-section candidate:
+{json.dumps(experience_candidate, ensure_ascii=False, indent=2)}
+
+Staged Summary/Profile candidate:
+{json.dumps(summary_candidate, ensure_ascii=False, indent=2)}
+"""
+    )
+    if not body.allow_project_selection:
+        prompt += "\nKeep the existing resume project list; only update factual wording."
+    if body.allow_experience_removal:
+        prompt += "\nThe user explicitly allows removing entire Experience entries if weakly relevant."
+    return run_text_task(prompt)
+
+
+def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
+    try:
+        job_description = agent.read_job_description()
+        resume = agent.read_resume()
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
+        project_memory = json.loads(agent.read_project_memory())
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="project_memory.json is not valid JSON.") from error
+
+    selected_projects = select_staged_projects(job_description, resume, project_memory, body.allow_project_selection)
+    if not selected_projects:
+        raise HTTPException(
+            status_code=400,
+            detail="Project Memory has no projects. Run GitHub extraction to populate project_memory.json first.",
+        )
+
+    candidates = []
+    for project in selected_projects:
+        evidence = retrieve_evidence_for_project(project)
+        candidates.append(build_project_resume_candidate(job_description, resume, project, evidence, body.language))
+
+    skills_candidate = build_skills_resume_candidate(job_description, resume, project_memory, candidates, body.language)
+    experience_candidate = build_experience_resume_candidate(
+        job_description,
+        resume,
+        project_memory,
+        candidates,
+        skills_candidate,
+        body.allow_experience_removal,
+        body.language,
+    )
+    summary_candidate = build_summary_resume_candidate(
+        job_description,
+        resume,
+        project_memory,
+        candidates,
+        skills_candidate,
+        experience_candidate,
+        body.language,
+    )
+
+    answer = merge_staged_resume(job_description, resume, candidates, skills_candidate, experience_candidate, summary_candidate, body)
+    if not agent.looks_like_latex_resume(answer):
+        raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+
+    agent.save_tailored_resume(answer)
+    tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
+    response: dict[str, Any] = {
+        "saved": True,
+        "path": str(agent.OUTPUT_RESUME_PATH),
+        "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
+        "content": agent.read_tailored_resume(),
+        "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+        "staged": True,
+        "staged_project_count": len(candidates),
+        "staged_project_candidates": candidates,
+        "staged_skills_candidate": skills_candidate,
+        "staged_experience_candidate": experience_candidate,
+        "staged_summary_candidate": summary_candidate,
+    }
+    if body.include_application_hint:
+        response["application_hint"] = resolve_application_hint(job_description)
+    return response
 
 
 def read_github_memory_repo_source() -> str:
@@ -1553,9 +2239,11 @@ def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> d
         repo_contexts.append(repo_context)
 
     path = agent.save_github_context_output(repo_contexts)
+    project_memory_update = update_project_memory_from_repo_analysis(repo_contexts)
     return {
         "saved": agent.has_usable_repo_context(repo_contexts),
         "path": str(path),
+        "project_memory_update": project_memory_update,
         "context": repo_contexts,
     }
 
@@ -1863,10 +2551,19 @@ Rules for this response:
 
 @app.post("/api/resume/tailor")
 def tailor_resume(body: TailorBody):
+    if body.use_github_context:
+        return tailor_resume_staged(body)
+
+    project_memory_context = agent.read_project_memory()
     prompt = (
         RESUME_TAILOR_PROMPT
         + output_language_instruction(body.language)
         + original_resume_language_instruction("tailored_resume")
+        + f"""
+
+Project Memory, read first and use as the primary project source:
+{project_memory_context}
+"""
     )
     if not body.allow_project_selection:
         prompt += (
@@ -1879,8 +2576,7 @@ def tailor_resume(body: TailorBody):
             "job description and removing it improves the tailored resume. Keep stronger relevant Experience entries. "
             "Never remove an entry merely to invent or substitute unsupported experience."
         )
-    if body.use_github_context:
-        prompt += "\nUse read_github_context if needed, but only with user approval via the web UI."
+    prompt += "\nGitHub evidence is not requested for this generation; use Project Memory, resume.txt, and job_description.txt."
     answer = run_agent_task(prompt)
     if agent.looks_like_latex_resume(answer):
         agent.save_tailored_resume(answer)
@@ -1892,6 +2588,7 @@ def tailor_resume(body: TailorBody):
         "path": str(agent.OUTPUT_RESUME_PATH),
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
+        "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
     }
     if body.include_application_hint:
         job_description = (
