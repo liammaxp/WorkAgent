@@ -18,6 +18,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
 - Delete a specific Chroma profile-memory fact through Agent Chat.
 - Attach JPG, PNG, GIF, or WebP images in Agent Chat for supported vision models to inspect and act on.
+- Ask Agent Chat to prepare application materials; it can generate the tailored resume and/or cover letter, pause for missing fresh JD or base resume input, and create an application record automatically.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
@@ -105,6 +106,8 @@ The backend writes provider settings into `information/.env`, including variable
 - `GEMINI_MODEL`
 - `MODEL_PROVIDER`
 
+Changing the active provider or model from the Web UI also updates `MODEL_PROVIDER` and the provider-specific model variable immediately, so the selection survives backend restarts.
+
 ## GitHub Evidence Setup
 
 The GitHub Evidence page lets you configure:
@@ -147,6 +150,8 @@ Agent Chat keeps conversation history, unsent text, and selected images while th
 
 Agent Chat also saves readable transcript files to `outputs/backend/chat_sessions/`. The frontend autosaves after chat changes and sends a final snapshot when the page closes. Each `.txt` file contains the conversation history and unsent draft text in chronological order; attached images are saved in the matching session assets directory and referenced by path in the transcript.
 
+Agent Chat can detect requests such as preparing a resume, cover letter, or full application material package. For text-only material requests it checks that the current app session has a saved job description and that a base resume exists. If either prerequisite is missing or stale, it pauses the flow and routes you to the needed page. After you save the missing material, return to Agent Chat and continue; WorkAgent will generate the requested documents and add a local application record using company, role, link, and notes extracted from the job description when possible.
+
 Example Agent Chat requests:
 
 ```text
@@ -155,6 +160,7 @@ Delete the WorkAgent project from my profile memory.
 Delete the entire target_roles memory section.
 Inspect the attached job-posting screenshot and summarize the role requirements.
 Read the attached resume screenshot and suggest factual improvements.
+Prepare a tailored resume and cover letter for this application.
 ```
 
 The delete tool requires an exact section plus either a zero-based list-item index or an explicit whole-section deletion flag. Legacy `information/memory.json` migration is marked after its first attempt so deleted facts are not restored from the old JSON source after a restart.
@@ -185,10 +191,10 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, edit the tailored resume, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
-- Cover Letter: choose a writing style, generate a cover letter, and edit the saved draft.
+- Resume: edit the base resume, edit the tailored resume, update Chroma vector memory, generate a tailored LaTeX resume with optional JD-based project selection, and remember generation toggles locally.
+- Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
-- Interview Prep: generate and edit interview preparation notes.
+- Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
 - GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, and fetch approved context into Chroma.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
@@ -244,7 +250,11 @@ Agent Chat image requests use data URLs:
 
 `POST /api/agent/ask` accepts up to 4 images per request and validates that each image is JPG, PNG, GIF, or WebP and no larger than 10 MB.
 
-`POST /api/resume/tailor` accepts `allow_project_selection` and `allow_experience_removal`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it.
+`GET /api/status` includes `file_metadata` timestamps for local working files. The frontend uses those timestamps to avoid showing stale generated resume, cover letter, and interview prep outputs from before the current app session.
+
+`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+
+`POST /api/cover-letter/generate` also accepts `include_application_hint` and can return the same extracted application fields.
 
 ## Local Files And Privacy
 
@@ -400,7 +410,7 @@ Production frontend output is written to `outputs/frontend/`.
 
 ## Roadmap
 
-- Add a one-click application package flow: analysis, tailored resume, cover letter, interview prep, and application record.
+- Expand the Agent Chat application-material flow to include job analysis and interview prep.
 - Add task queues, progress updates, cancellation, and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
 - Add application dashboards, statistics, batch actions, and richer search.
@@ -421,6 +431,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 根据简历材料更新 Chroma 向量记忆；新增或更新前会先检索并对比相似记录。
 - 通过 Agent Chat 删除指定的 Chroma 画像记忆。
 - 在 Agent Chat 中上传 JPG、PNG、GIF 或 WebP 图片，让支持视觉输入的模型识别图片并执行任务。
+- 在 Agent Chat 中请求生成求职材料；它可以生成定制简历和/或求职信，在缺少本次会话内保存的 JD 或基础简历时暂停，并自动创建投递记录。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
 - 生成和编辑面试准备笔记。
 - 直接在 Web UI 中配置模型供应商、模型、Base URL 和 API Key。
@@ -508,6 +519,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - `GEMINI_MODEL`
 - `MODEL_PROVIDER`
 
+在 Web UI 中切换当前供应商或模型时，后端也会立即更新 `MODEL_PROVIDER` 和对应供应商的模型变量，因此重启后端后仍会保留当前选择。
+
 ## GitHub 证据配置
 
 GitHub Evidence 页面可以配置：
@@ -547,6 +560,8 @@ Agent Chat 也支持上传图片。每条消息最多选择 4 张 JPG、PNG、GI
 
 Agent Chat 也会把可直接阅读的转录文件保存到 `outputs/backend/chat_sessions/`。前端会在对话变化后自动保存，并在网页关闭时提交最后一次快照。每个 `.txt` 文件按时间顺序包含对话记录和未发送草稿；附件图片保存在对应的会话资源目录中，并在转录文本里标注路径。
 
+Agent Chat 可以识别“准备简历”“生成求职信”或“准备申请材料”这类请求。对于不带图片的材料生成请求，它会先检查当前应用会话中是否保存了新的职位描述，以及基础简历是否存在。如果任一前置材料缺失或过期，流程会暂停并跳转到对应页面。补齐材料后回到 Agent Chat 继续，WorkAgent 会生成所需文档，并尽量从职位描述中提取公司、岗位、链接和备注来自动新增本地投递记录。
+
 示例：
 
 ```text
@@ -555,6 +570,7 @@ Agent Chat 也会把可直接阅读的转录文件保存到 `outputs/backend/cha
 删除整个 target_roles 记忆 section。
 分析我上传的职位截图，总结岗位要求。
 阅读我上传的简历截图，并给出基于事实的改进建议。
+为这个岗位准备定制简历和求职信。
 ```
 
 删除工具必须接收准确的 section，并且需要列表项的从零开始索引，或显式的整段删除标记。旧版 `information/memory.json` 首次尝试迁移后会写入标记，避免已删除的记忆在重启后从旧 JSON 来源恢复。
@@ -585,10 +601,10 @@ background/prompt.example.txt
 
 - Dashboard：查看 provider/model 状态、配置 API Key、检查文件状态、查看最近输出和快速入口。
 - Job Description：编辑、保存并分析当前职位描述。
-- Resume：编辑基础简历和定制简历，更新 Chroma 向量记忆，生成定制版 LaTeX 简历。
-- Cover Letter：选择写作风格，生成求职信，并编辑保存草稿。
+- Resume：编辑基础简历和定制简历，更新 Chroma 向量记忆，生成定制版 LaTeX 简历，并在本地记住生成选项。
+- Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
-- Interview Prep：生成并编辑面试准备笔记。
+- Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
 - GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，并把已确认的上下文写入 Chroma。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话，可以上传图片，也可以删除指定的画像记忆。
@@ -644,7 +660,11 @@ Agent Chat 图片请求使用 data URL：
 
 `POST /api/agent/ask` 每次最多接受 4 张图片，并校验每张图片是否为 JPG、PNG、GIF 或 WebP 格式且不超过 10 MB。
 
-`POST /api/resume/tailor` 接受 `allow_project_selection` 和 `allow_experience_removal`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。
+`GET /api/status` 会返回本地工作文件的 `file_metadata` 时间戳。前端用这些时间戳避免展示当前应用会话之前生成的旧版简历、求职信和面试准备内容。
+
+`POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
+
+`POST /api/cover-letter/generate` 也接受 `include_application_hint`，并可以返回同样的投递记录字段。
 
 ## 本地文件与隐私
 
@@ -800,7 +820,7 @@ npm run build
 
 ## Roadmap
 
-- 增加一键求职材料包流程：职位分析、定制简历、求职信、面试准备和投递记录。
+- 扩展 Agent Chat 求职材料流程，加入职位分析和面试准备。
 - 增加任务队列、进度更新、取消功能和 WebSocket/SSE 流式输出。
 - 增加结构化 GitHub 证据可视化。
 - 增加投递统计、批量操作和更丰富的搜索。
