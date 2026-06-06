@@ -50,8 +50,10 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- backend/             # Generated analysis, letters, resumes, and legacy GitHub JSON
 |   `-- frontend/            # Frontend production build output
 |-- install_workagent.bat    # Windows one-click dependency installer
+|-- install_workagent.sh     # Ubuntu/Linux dependency installation script
 |-- install_workagent.ps1    # Windows dependency installation script
 |-- uninstall_workagent.bat  # Windows one-click environment uninstaller
+|-- uninstall_workagent.sh   # Ubuntu/Linux environment uninstall script
 |-- uninstall_workagent.ps1  # Windows environment uninstall script
 |-- start_workagent.bat      # Windows one-click launcher
 |-- start_workagent.ps1      # Windows launcher script
@@ -318,6 +320,18 @@ install_workagent.bat
 
 It checks that Python and npm are available, installs the backend and frontend dependencies, then installs MiKTeX and Strawberry Perl through `winget` when needed for tailored-resume PDF export. It also runs a small LaTeX warmup compile in `outputs/latex_install_warmup/` so MiKTeX can download common resume packages during installation instead of waiting until the first PDF export.
 
+### Dependency Installation On Ubuntu/Linux
+
+On Ubuntu or another `apt`-based Linux distribution, run:
+
+```bash
+chmod +x install_workagent.sh
+./install_workagent.sh
+```
+
+The script installs backend and frontend dependencies, then installs the LaTeX and Perl packages needed for tailored-resume PDF export when they are missing. On Ubuntu it uses `apt-get` with `sudo` when required, and it runs the same LaTeX warmup compile in `outputs/latex_install_warmup/` so the common resume packages are ready before the first PDF export.
+Activate your own Python environment before running it; the script does not install or manage Python itself and uses the active interpreter's `python -m pip`.
+
 ### One-Click Environment Uninstall On Windows
 
 To remove the installed WorkAgent environment, double-click:
@@ -327,6 +341,17 @@ uninstall_workagent.bat
 ```
 
 The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment and before uninstalling MiKTeX or Strawberry Perl, because those may be shared with other projects.
+
+### Environment Uninstall On Ubuntu/Linux
+
+On Ubuntu or another `apt`-based Linux distribution, run:
+
+```bash
+chmod +x uninstall_workagent.sh
+./uninstall_workagent.sh
+```
+
+The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment and before removing Ubuntu LaTeX or Perl packages, because those may be shared with other projects.
 
 ### One-Click Start On Windows
 
@@ -473,8 +498,10 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- backend/             # 生成的分析、求职信、简历和旧版 GitHub JSON
 |   `-- frontend/            # 前端生产构建输出
 |-- install_workagent.bat    # Windows 一键安装依赖入口
+|-- install_workagent.sh     # Ubuntu/Linux 依赖安装脚本
 |-- install_workagent.ps1    # Windows 依赖安装脚本
 |-- uninstall_workagent.bat  # Windows 一键卸载环境入口
+|-- uninstall_workagent.sh   # Ubuntu/Linux 环境卸载脚本
 |-- uninstall_workagent.ps1  # Windows 环境卸载脚本
 |-- start_workagent.bat      # Windows 一键启动入口
 |-- start_workagent.ps1      # Windows 启动脚本
@@ -738,6 +765,18 @@ install_workagent.bat
 
 脚本会检查 Python 和 npm 是否可用，安装后端与前端依赖，并在需要时通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl，用于定制简历 PDF 导出。脚本还会在 `outputs/latex_install_warmup/` 执行一次小型 LaTeX 预热编译，让 MiKTeX 在安装阶段下载常用简历宏包，而不是等到第一次导出 PDF 时再下载。
 
+### Ubuntu/Linux 安装依赖
+
+在 Ubuntu 或其他基于 `apt` 的 Linux 发行版中运行：
+
+```bash
+chmod +x install_workagent.sh
+./install_workagent.sh
+```
+
+脚本会安装后端与前端依赖，并在缺少定制简历 PDF 导出所需组件时自动安装 LaTeX 和 Perl 相关包。在 Ubuntu 上它会在需要时通过 `sudo apt-get` 安装系统依赖，并同样在 `outputs/latex_install_warmup/` 执行 LaTeX 预热编译，让常用简历宏包在首次导出 PDF 之前就准备完成。
+运行前请先激活你自己的 Python 环境；脚本不会再自动安装或管理 Python，而是使用当前解释器对应的 `python -m pip`。
+
 ### Windows 一键卸载环境
 
 如需移除 WorkAgent 安装的环境，双击：
@@ -747,6 +786,17 @@ uninstall_workagent.bat
 ```
 
 脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖、MiKTeX 或 Strawberry Perl 前会先询问确认，因为它们可能被其他项目共用。
+
+### Ubuntu/Linux 卸载环境
+
+在 Ubuntu 或其他基于 `apt` 的 Linux 发行版中运行：
+
+```bash
+chmod +x uninstall_workagent.sh
+./uninstall_workagent.sh
+```
+
+脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖，以及 Ubuntu 上用于 PDF 导出的 LaTeX 或 Perl 系统包之前，会先询问确认，因为它们可能被其他项目共用。
 
 ### Windows 一键启动
 
