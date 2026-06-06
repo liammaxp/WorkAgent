@@ -810,18 +810,138 @@ def read_project_memory(query=""):
     )
 
 
+def project_matches(project, project_id="", project_name=""):
+    expected_id = str(project_id or "").strip().casefold()
+    expected_name = str(project_name or "").strip().casefold()
+    if not isinstance(project, dict):
+        return bool(expected_name and str(project or "").strip().casefold() == expected_name)
+
+    actual_id = str(project.get("project_id") or "").strip().casefold()
+    actual_name = str(project.get("project_name") or project.get("name") or "").strip().casefold()
+    return bool(
+        (expected_id and actual_id == expected_id)
+        or (expected_name and actual_name == expected_name)
+    )
+
+
+def delete_project_memory(item_index=None, delete_section=False, project_id="", project_name=""):
+    if item_index is not None and item_index < 0:
+        raise ValueError("Project memory item_index must be zero or greater.")
+    if not delete_section and item_index is None and not project_id and not project_name:
+        raise ValueError(
+            "Specify item_index, project_id, or project_name to delete one project, "
+            "or set delete_section=true to delete all projects."
+        )
+
+    if not file_is_ready(PROJECT_MEMORY_PATH):
+        return {
+            "deleted": 0,
+            "item_index": item_index,
+            "project_id": project_id or None,
+            "project_name": project_name or None,
+            "deleted_values": [],
+        }
+
+    try:
+        project_memory = json.loads(PROJECT_MEMORY_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError("project_memory.json is not valid JSON.") from error
+    if not isinstance(project_memory, dict):
+        raise ValueError("project_memory.json must contain a JSON object.")
+
+    raw_projects = project_memory.get("projects", [])
+    projects = [raw_projects] if isinstance(raw_projects, dict) else raw_projects
+    if not isinstance(projects, list):
+        raise ValueError("project_memory.json field 'projects' must be a list or object.")
+
+    deleted_values = []
+    retained_projects = []
+    has_project_identifier = bool(project_id or project_name)
+    for index, project in enumerate(projects):
+        should_delete = (
+            delete_section
+            or (
+                has_project_identifier
+                and project_matches(project, project_id=project_id, project_name=project_name)
+            )
+            or (not has_project_identifier and item_index is not None and index == item_index)
+        )
+        if should_delete:
+            deleted_values.append(project)
+        else:
+            retained_projects.append(project)
+
+    if deleted_values:
+        project_memory["projects"] = retained_projects
+        write_project_memory_file(project_memory)
+
+    return {
+        "deleted": len(deleted_values),
+        "item_index": item_index,
+        "project_id": project_id or None,
+        "project_name": project_name or None,
+        "deleted_values": deleted_values,
+    }
+
+
 def replace_profile_memory(memory, source="profile-update"):
     if not isinstance(memory, dict):
         raise ValueError("Profile memory must be a JSON object.")
     return MEMORY_STORE.replace_profile(memory, source=source)
 
 
-def delete_profile_memory(section, item_index=None, delete_section=False):
-    return MEMORY_STORE.delete_profile(
-        section=section,
-        item_index=item_index,
-        delete_section=delete_section,
-    )
+def delete_profile_memory(
+    section,
+    item_index=None,
+    delete_section=False,
+    project_id="",
+    project_name="",
+):
+    normalized_section = str(section or "").strip()
+    is_project_section = normalized_section.casefold() == "projects"
+    vector_item_index = item_index
+
+    if is_project_section and item_index is None and not delete_section and (project_id or project_name):
+        profile_projects = MEMORY_STORE.read_profile().get("projects", [])
+        if isinstance(profile_projects, dict):
+            profile_projects = [profile_projects]
+        vector_item_index = next(
+            (
+                index
+                for index, project in enumerate(profile_projects)
+                if project_matches(project, project_id=project_id, project_name=project_name)
+            ),
+            None,
+        )
+
+    if is_project_section and vector_item_index is None and not delete_section:
+        vector_result = {
+            "deleted": 0,
+            "section": normalized_section,
+            "item_index": None,
+            "deleted_values": [],
+        }
+    else:
+        vector_result = MEMORY_STORE.delete_profile(
+            section=normalized_section,
+            item_index=vector_item_index,
+            delete_section=delete_section,
+        )
+
+    project_result = None
+    if is_project_section:
+        project_result = delete_project_memory(
+            item_index=item_index,
+            delete_section=delete_section,
+            project_id=project_id,
+            project_name=project_name,
+        )
+
+    return {
+        "deleted": vector_result["deleted"] + (project_result["deleted"] if project_result else 0),
+        "vector_memory": vector_result,
+        "project_memory": project_result,
+    }
 
 
 def read_stored_github_context(query=""):
@@ -1937,8 +2057,10 @@ TOOLS = [
         "type": "function",
         "name": "delete_profile_memory",
         "description": (
-            "Delete a specific fact from the user's Chroma profile memory. "
-            "Read memory first. To delete one item from a list section, provide its zero-based item_index. "
+            "Delete a specific fact from the user's durable memory. "
+            "For the projects section, this deletes the matching project from both Chroma profile memory "
+            "and project_memory.json. Read both memory sources first. To delete one item from a list section, "
+            "provide its zero-based item_index. For projects, prefer project_id or project_name for precise matching. "
             "Set delete_section=true only when the user explicitly asks to delete the whole section."
         ),
         "parameters": {
@@ -1955,6 +2077,14 @@ TOOLS = [
                 "delete_section": {
                     "type": "boolean",
                     "description": "Whether to delete every fact in the section. Use only when explicitly requested.",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Exact project_id from project_memory.json when deleting one project.",
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Exact project_name from project_memory.json when deleting one project.",
                 },
             },
             "required": ["section"],
@@ -2167,9 +2297,9 @@ def ask_agent(user_input, adapter, model, images=None):
 User request:
 {user_input}
 
-You have tools for reading and deleting specific Chroma profile memory facts, reading project_memory.json, reading resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
+You have tools for reading and deleting durable memory facts, reading project_memory.json, reading resume.txt, tailored_resume.txt, job_description.txt, approved GitHub project context, saving generated files, and managing application records.
 For resume tailoring, cover letters, interview prep, job matching, and application tracking, call the tools you need instead of assuming local file contents.
-When the user asks to forget or delete profile memory, call read_memory first, then use delete_profile_memory for only the requested fact. Set delete_section=true only when the user explicitly asks to remove the whole section. Report what was deleted.
+When the user asks to forget or delete memory, call read_memory and read_project_memory first, then use delete_profile_memory for only the requested fact. For a project, pass section="projects" and prefer its exact project_id or project_name; the tool will delete it from both Chroma profile memory and project_memory.json. Set delete_section=true only when the user explicitly asks to remove the whole section. Report what was deleted from each memory source.
 For cover letters, read tailored_resume.txt first and use resume.txt only as a fallback if the tailored resume is missing or unusable.
 Project Memory is the primary source of project truth. GitHub context is an evidence library only.
 Resume tailoring order for projects: first call read_project_memory to understand each project's background, purpose, scope, tech stack, workflows, confirmed features, and metrics; then call read_project_evidence_map to map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details; then modify the resume.
