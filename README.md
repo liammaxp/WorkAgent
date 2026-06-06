@@ -16,7 +16,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory.
 - Let the agent tailor Experience bullets for the job description by reordering, rewriting, or removing weak and redundant bullets while preserving factual meaning. Removing an entire Experience entry requires explicit user approval.
 - Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
-- Delete a specific Chroma profile-memory fact through Agent Chat.
+- Delete a specific durable-memory fact through Agent Chat; project deletion is synchronized across Chroma profile memory and Project Memory.
 - Attach JPG, PNG, GIF, or WebP images in Agent Chat for supported vision models to inspect and act on.
 - Ask Agent Chat to prepare application materials; it can generate the tailored resume and/or cover letter, pause for missing fresh JD or base resume input, and create an application record automatically.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
@@ -151,7 +151,7 @@ Existing `information/memory.json` and older `outputs/backend/github_context/*.j
 
 The Resume page can merge durable facts from the base resume into Chroma. The backend also supports merging from the tailored resume through `POST /api/resume/update-memory`. Chroma records are reconstructed as JSON when profile memory is read through the backend.
 
-Agent Chat can also delete a requested profile-memory fact. The agent reads the stored profile first, then deletes either one indexed item from a list section or an explicitly requested whole section.
+Agent Chat can also delete a requested durable-memory fact. The agent reads both Chroma profile memory and Project Memory first. For projects, it prefers an exact `project_id` or `project_name` and removes the matching project from both Chroma profile memory and `information/project_memory.json`; other list facts can be deleted by index, and a whole section is removed only when explicitly requested.
 
 Agent Chat also accepts image attachments. Select up to 4 JPG, PNG, GIF, or WebP images per message, with a maximum size of 10 MB per image. You can add a text instruction or send images alone. The selected provider and model must support vision input; text-only models will reject image requests.
 
@@ -172,7 +172,7 @@ Read the attached resume screenshot and suggest factual improvements.
 Prepare a tailored resume and cover letter for this application.
 ```
 
-The delete tool requires an exact section plus either a zero-based list-item index or an explicit whole-section deletion flag. Legacy `information/memory.json` migration is marked after its first attempt so deleted facts are not restored from the old JSON source after a restart.
+The delete tool requires an exact section plus a zero-based list-item index, an exact project identifier for project deletion, or an explicit whole-section deletion flag. Legacy `information/memory.json` migration is marked after its first attempt so deleted facts are not restored from the old JSON source after a restart.
 
 ## Prompt Customization
 
@@ -276,6 +276,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/cover_letter.txt`
 - `information/interview_prep.txt`
 - `information/memory.json`
+- `information/project_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -414,7 +415,7 @@ Production frontend output is written to `outputs/frontend/`.
 
 - Generation tasks are synchronous; there is no streaming output or cancellation yet.
 - GitHub evidence is still displayed mostly as JSON rather than a polished visual report.
-- Resume and cover letter editing is plain text; there is no built-in PDF/DOCX preview or export.
+- Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
 ## Roadmap
@@ -423,7 +424,7 @@ Production frontend output is written to `outputs/frontend/`.
 - Add task queues, progress updates, cancellation, and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
 - Add application dashboards, statistics, batch actions, and richer search.
-- Add PDF/DOCX preview and export.
+- Add document preview and DOCX export.
 - Improve mobile layout and add dark mode.
 
 ## 中文
@@ -438,7 +439,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 编辑基础简历，并为当前岗位生成定制版 LaTeX 简历。
 - 允许 Agent 根据职位描述重排、改写或删除 Experience 中较弱和重复的 bullet，同时保持事实含义不变。删除整段 Experience 经历需要用户显式授权。
 - 根据简历材料更新 Chroma 向量记忆；新增或更新前会先检索并对比相似记录。
-- 通过 Agent Chat 删除指定的 Chroma 画像记忆。
+- 通过 Agent Chat 删除指定的长期记忆；删除项目时会同步清理 Chroma 画像记忆和 Project Memory。
 - 在 Agent Chat 中上传 JPG、PNG、GIF 或 WebP 图片，让支持视觉输入的模型识别图片并执行任务。
 - 在 Agent Chat 中请求生成求职材料；它可以生成定制简历和/或求职信，在缺少本次会话内保存的 JD 或基础简历时暂停，并自动创建投递记录。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
@@ -570,7 +571,7 @@ information/chroma/
 
 Resume 页面可以把基础简历中的长期事实合并到 Chroma。后端也支持通过 `POST /api/resume/update-memory` 从定制简历合并长期事实。通过后端读取画像记忆时，Chroma 记录会重新组织为 JSON。
 
-Agent Chat 也可以删除指定的画像记忆。agent 会先读取已存储的画像，再删除列表 section 中指定索引的一项，或删除用户明确要求移除的整个 section。
+Agent Chat 也可以删除指定的长期记忆。agent 会先读取 Chroma 画像记忆和 Project Memory。删除项目时优先使用准确的 `project_id` 或 `project_name`，并同时从 Chroma 画像记忆和 `information/project_memory.json` 中移除匹配项目；其他列表事实可以按索引删除，只有用户明确要求时才删除整个 section。
 
 Agent Chat 也支持上传图片。每条消息最多选择 4 张 JPG、PNG、GIF 或 WebP 图片，单张最大 10 MB。可以附带文字指令，也可以仅发送图片。当前选择的 provider 和模型必须支持视觉输入；纯文本模型会拒绝图片请求。
 
@@ -591,7 +592,7 @@ Agent Chat 可以识别“准备简历”“生成求职信”或“准备申请
 为这个岗位准备定制简历和求职信。
 ```
 
-删除工具必须接收准确的 section，并且需要列表项的从零开始索引，或显式的整段删除标记。旧版 `information/memory.json` 首次尝试迁移后会写入标记，避免已删除的记忆在重启后从旧 JSON 来源恢复。
+删除工具必须接收准确的 section，并且需要列表项的从零开始索引、用于删除项目的准确项目标识，或显式的整段删除标记。旧版 `information/memory.json` 首次尝试迁移后会写入标记，避免已删除的记忆在重启后从旧 JSON 来源恢复。
 
 ## Prompt 个性化
 
@@ -695,6 +696,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/cover_letter.txt`
 - `information/interview_prep.txt`
 - `information/memory.json`
+- `information/project_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -833,7 +835,7 @@ npm run build
 
 - 生成任务仍是同步请求，暂时没有流式输出或取消功能。
 - GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
-- 简历和求职信目前是纯文本编辑，没有内置 PDF/DOCX 预览或导出。
+- 简历和求职信没有内置文档预览或 DOCX 导出；安装 LaTeX 工具链后可以把定制简历导出为 PDF。
 - 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。
 
 ## Roadmap
@@ -842,5 +844,5 @@ npm run build
 - 增加任务队列、进度更新、取消功能和 WebSocket/SSE 流式输出。
 - 增加结构化 GitHub 证据可视化。
 - 增加投递统计、批量操作和更丰富的搜索。
-- 增加 PDF/DOCX 预览和导出。
+- 增加文档预览和 DOCX 导出。
 - 改进移动端布局并增加深色模式。

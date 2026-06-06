@@ -24,6 +24,26 @@ INFORMATION_DIR = ROOT_DIR / "information"
 load_dotenv(INFORMATION_DIR / ".env")
 
 PROMPT_PATH = BACKGROUND_DIR / "prompt.txt"
+PROMPT_EXAMPLE_PATH = BACKGROUND_DIR / "prompt.example.txt"
+
+
+def initialize_prompt_file() -> None:
+    if PROMPT_PATH.exists():
+        return
+    if not PROMPT_EXAMPLE_PATH.exists():
+        raise FileNotFoundError(
+            "System prompt is missing. Expected either "
+            f"{PROMPT_PATH} or {PROMPT_EXAMPLE_PATH}."
+        )
+
+    BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+    PROMPT_PATH.write_text(
+        PROMPT_EXAMPLE_PATH.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
+initialize_prompt_file()
 SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8").strip()
 MEMORY_PATH = INFORMATION_DIR / "memory.json"
 PROJECT_MEMORY_PATH = INFORMATION_DIR / "project_memory.json"
