@@ -290,13 +290,13 @@ Do not commit API keys, resumes, job descriptions, GitHub identities, generated 
 
 ## Minimum Environment Requirements
 
-The following baseline is the minimum supported environment for the included Windows one-click installation and startup scripts:
+The following baseline is the minimum supported environment for the included local setup scripts:
 
 | Item | Minimum requirement | Notes |
 | --- | --- | --- |
-| Operating system | 64-bit Windows 10 or Windows 11 | The included `.bat` and `.ps1` scripts are designed for Windows. Manual startup may work on other operating systems, but it is not the documented baseline. |
-| PowerShell | Windows PowerShell 5.1 | Required by the one-click scripts and Windows process management. |
-| Python | Python 3.12 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python` and `pip` are available in `PATH`. |
+| Operating system | 64-bit Windows 10 or Windows 11, or a Linux distribution with a supported package manager | The `.bat` and `.ps1` scripts are designed for Windows. The `.sh` installer supports common Linux package managers including `apt-get`, `dnf`, `yum`, `pacman`, and `zypper`; it can also use Homebrew when available. |
+| PowerShell | Windows PowerShell 5.1 | Required by the Windows one-click scripts and Windows process management. |
+| Python | Python 3.12 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python3` or `python` is available in `PATH` and can run `-m pip`. |
 | Node.js | Node.js 18 or newer | Required by the React + Vite frontend. |
 | npm | A version bundled with Node.js 18 or newer | Make sure `npm` is available in `PATH`. |
 | Memory | 4 GB RAM | 8 GB or more is recommended when other development tools are open. |
@@ -322,15 +322,15 @@ It checks that Python and npm are available, installs the backend and frontend d
 
 ### Dependency Installation On Ubuntu/Linux
 
-On Ubuntu or another `apt`-based Linux distribution, run:
+On Ubuntu or another Linux distribution, run:
 
 ```bash
 chmod +x install_workagent.sh
 ./install_workagent.sh
 ```
 
-The script installs backend and frontend dependencies, then installs the LaTeX and Perl packages needed for tailored-resume PDF export when they are missing. On Ubuntu it uses `apt-get` with `sudo` when required, and it runs the same LaTeX warmup compile in `outputs/latex_install_warmup/` so the common resume packages are ready before the first PDF export.
-Activate your own Python environment before running it; the script does not install or manage Python itself and uses the active interpreter's `python -m pip`.
+The script installs backend and frontend dependencies, then installs the LaTeX and Perl packages needed for tailored-resume PDF export when they are missing. It uses `sudo` when required for system package managers and supports `apt-get`, `dnf`, `yum`, `pacman`, `zypper`, and Homebrew. It also runs the same LaTeX warmup compile in `outputs/latex_install_warmup/` so the common resume packages are ready before the first PDF export.
+Activate your own Python environment before running it if you do not want packages installed into the system Python; the script does not install or manage Python itself and uses the first available `python3` or `python` interpreter with `python -m pip`.
 
 ### One-Click Environment Uninstall On Windows
 
@@ -344,14 +344,14 @@ The script removes the local `frontend/node_modules` directory and LaTeX warmup 
 
 ### Environment Uninstall On Ubuntu/Linux
 
-On Ubuntu or another `apt`-based Linux distribution, run:
+On Ubuntu or another Linux distribution, run:
 
 ```bash
 chmod +x uninstall_workagent.sh
 ./uninstall_workagent.sh
 ```
 
-The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment and before removing Ubuntu LaTeX or Perl packages, because those may be shared with other projects.
+The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment. On Ubuntu-like systems it can also remove the LaTeX or Perl packages used for PDF export, after confirmation, because those packages may be shared with other projects.
 
 ### One-Click Start On Windows
 
@@ -735,13 +735,13 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 
 ## 最低环境配置要求
 
-以下配置是仓库内 Windows 一键安装和启动脚本支持的最低运行基线：
+以下配置是仓库内本地安装和启动脚本支持的最低运行基线：
 
 | 项目 | 最低要求 | 说明 |
 | --- | --- | --- |
-| 操作系统 | 64 位 Windows 10 或 Windows 11 | 仓库内的 `.bat` 和 `.ps1` 脚本面向 Windows。其他操作系统可能可以手动启动，但不属于文档约定的最低支持基线。 |
-| PowerShell | Windows PowerShell 5.1 | 一键脚本和 Windows 进程管理功能需要使用。 |
-| Python | Python 3.12 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python` 和 `pip` 已加入 `PATH`。 |
+| 操作系统 | 64 位 Windows 10 或 Windows 11，或带有受支持包管理器的 Linux 发行版 | 仓库内的 `.bat` 和 `.ps1` 脚本面向 Windows。`.sh` 安装脚本支持常见 Linux 包管理器，包括 `apt-get`、`dnf`、`yum`、`pacman` 和 `zypper`；可用时也可以使用 Homebrew。 |
+| PowerShell | Windows PowerShell 5.1 | Windows 一键脚本和 Windows 进程管理功能需要使用。 |
+| Python | Python 3.12 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python3` 或 `python` 已加入 `PATH`，并且可以执行 `-m pip`。 |
 | Node.js | Node.js 18 或更高版本 | React + Vite 前端需要使用。 |
 | npm | Node.js 18 或更高版本附带的 npm | 请确保 `npm` 已加入 `PATH`。 |
 | 内存 | 4 GB RAM | 如果同时开启其他开发工具，建议使用 8 GB 或更多内存。 |
@@ -767,15 +767,15 @@ install_workagent.bat
 
 ### Ubuntu/Linux 安装依赖
 
-在 Ubuntu 或其他基于 `apt` 的 Linux 发行版中运行：
+在 Ubuntu 或其他 Linux 发行版中运行：
 
 ```bash
 chmod +x install_workagent.sh
 ./install_workagent.sh
 ```
 
-脚本会安装后端与前端依赖，并在缺少定制简历 PDF 导出所需组件时自动安装 LaTeX 和 Perl 相关包。在 Ubuntu 上它会在需要时通过 `sudo apt-get` 安装系统依赖，并同样在 `outputs/latex_install_warmup/` 执行 LaTeX 预热编译，让常用简历宏包在首次导出 PDF 之前就准备完成。
-运行前请先激活你自己的 Python 环境；脚本不会再自动安装或管理 Python，而是使用当前解释器对应的 `python -m pip`。
+脚本会安装后端与前端依赖，并在缺少定制简历 PDF 导出所需组件时自动安装 LaTeX 和 Perl 相关包。它会在需要安装系统依赖时使用 `sudo`，并支持 `apt-get`、`dnf`、`yum`、`pacman`、`zypper` 和 Homebrew。脚本同样会在 `outputs/latex_install_warmup/` 执行 LaTeX 预热编译，让常用简历宏包在首次导出 PDF 之前就准备完成。
+如果不希望依赖安装到系统 Python，请先激活你自己的 Python 环境；脚本不会再自动安装或管理 Python，而是使用第一个可用的 `python3` 或 `python` 解释器执行 `python -m pip`。
 
 ### Windows 一键卸载环境
 
@@ -789,14 +789,14 @@ uninstall_workagent.bat
 
 ### Ubuntu/Linux 卸载环境
 
-在 Ubuntu 或其他基于 `apt` 的 Linux 发行版中运行：
+在 Ubuntu 或其他 Linux 发行版中运行：
 
 ```bash
 chmod +x uninstall_workagent.sh
 ./uninstall_workagent.sh
 ```
 
-脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖，以及 Ubuntu 上用于 PDF 导出的 LaTeX 或 Perl 系统包之前，会先询问确认，因为它们可能被其他项目共用。
+脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖前会先询问确认。在 Ubuntu-like 系统上，它也可以在确认后移除用于 PDF 导出的 LaTeX 或 Perl 系统包，因为它们可能被其他项目共用。
 
 ### Windows 一键启动
 

@@ -42,8 +42,7 @@ export default function JobDescription() {
       const jobData = await api.getFile("job_description");
       setContent(jobData.content || "");
       if (
-        cachedAnalysis?.jobDescription === jobData.content &&
-        cachedAnalysis?.language === language
+        cachedAnalysis?.jobDescription === jobData.content
       ) {
         setAnalysis(cachedAnalysis.content);
       } else if (!cachedAnalysis) {
@@ -52,15 +51,14 @@ export default function JobDescription() {
         setAnalysis("");
       }
     });
-  }, [language, run]);
+  }, [run]);
 
   const save = () =>
     run(async () => {
       const result = await api.saveJobDescription(content);
       notifyJobDescriptionSaved(result);
       if (
-        cachedAnalysis?.jobDescription !== content ||
-        cachedAnalysis?.language !== language
+        cachedAnalysis?.jobDescription !== content
       ) {
         cachedAnalysis = null;
         setAnalysis("");
@@ -78,7 +76,6 @@ export default function JobDescription() {
       cachedAnalysis = {
         content: data.analysis || "",
         jobDescription: content,
-        language,
       };
       return data;
     }, copy.analyzed);

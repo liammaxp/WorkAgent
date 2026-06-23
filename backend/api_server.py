@@ -900,8 +900,11 @@ def normalize_language(language: str) -> str:
 
 
 def output_language_instruction(language: str) -> str:
+    job_language_requirement = agent.job_description_output_language_instruction()
+    if job_language_requirement:
+        return job_language_requirement
     if normalize_language(language) != "en":
-        return ""
+        return "\n\nOutput language requirement: respond entirely in Chinese."
     return (
         "\n\nOutput language requirement: respond entirely in English. "
         "All user-facing headings, analysis, recommendations, cover letters, "
@@ -910,6 +913,9 @@ def output_language_instruction(language: str) -> str:
 
 
 def original_resume_language_instruction(output_type: str) -> str:
+    # The job-description language takes precedence for application artifacts.
+    if agent.job_description_output_language_instruction():
+        return ""
     try:
         resume = agent.read_resume()
     except FileNotFoundError:
@@ -943,34 +949,11 @@ def original_resume_language_instruction_for_request(message: str) -> str:
 
 
 def job_analysis_language_instruction(language: str) -> str:
-    if normalize_language(language) == "en":
-        return (
-            "\n\nOutput language requirement: respond entirely in English. "
-            "Use English section headings and English explanations for the full job analysis."
-        )
-    return (
-        "\n\n输出语言要求：请完全使用中文输出职位分析。"
-        "所有标题、匹配分数说明、技能分析、项目建议和简历修改建议都必须使用中文。"
-    )
+    return output_language_instruction(language)
 
 
 def interview_prep_language_instruction(language: str) -> str:
-    if normalize_language(language) == "en":
-        return (
-            "\n\nOutput language requirement: respond entirely in English. "
-            "Use English section headings and English notes only."
-        )
-    return (
-        "\n\nOutput language requirement: produce parallel Chinese-English interview preparation notes. "
-        "Every Chinese sentence or bullet must be followed immediately by its matching English translation "
-        "on the next line. Keep the pairs one-to-one: do not group all Chinese together and then all English, "
-        "and do not put Chinese and English in the same sentence. Use this pattern throughout:\n"
-        "中文句子。\n"
-        "English sentence.\n"
-        "- 中文要点。\n"
-        "- English bullet.\n"
-        "Section headings must also be paired on adjacent lines."
-    )
+    return output_language_instruction(language)
 
 
 MAX_AGENT_IMAGES = 4
@@ -1062,7 +1045,8 @@ def build_pdf_to_latex_prompt(filename: str, extracted: dict[str, Any], language
     links_text = "\n".join(
         f"- Page {link['page']}: {link['url']}" for link in extracted["links"]
     ) or "- None detected"
-    language_requirement = (
+    job_language_requirement = agent.job_description_output_language_instruction()
+    language_requirement = job_language_requirement or (
         "Write user-facing resume content in English."
         if normalize_language(language) == "en"
         else (
@@ -1616,26 +1600,12 @@ def build_interview_prep_prompt(use_github_context: bool, language: str = "zh") 
         else "\nApproved GitHub context: Not requested for this generation.\n"
     )
 
-    if normalize_language(language) == "en":
-        section_outline = """  1. Role Focus
-  2. Technical Questions
-  3. Project Talking Points
-  4. Behavioral / STAR Material
-  5. Preparation Gaps or Facts to Verify
-  6. Questions to Ask the Interviewer"""
-    else:
-        section_outline = """  1. 职位重点
-     Role Focus
-  2. 技术问题准备
-     Technical Questions
-  3. 项目讲述要点
-     Project Talking Points
-  4. 行为面试 / STAR 素材
-     Behavioral / STAR Material
-  5. 需要补强或确认的内容
-     Preparation Gaps or Facts to Verify
-  6. 反问面试官的问题
-     Questions to Ask the Interviewer"""
+    section_outline = """  1. Role focus
+  2. Technical questions
+  3. Project talking points
+  4. Behavioral / STAR material
+  5. Preparation gaps or facts to verify
+  6. Questions to ask the interviewer"""
 
     prompt = f"""
 Create complete interview preparation notes for the job application below.
@@ -1645,16 +1615,8 @@ Rules:
 - Do not invent projects, employers, degrees, technologies, metrics, or repository facts.
 - If evidence is weak or missing, say what to prepare or verify instead of fabricating.
 - Return only the notes content. Do not say that you saved a file. Do not include placeholders.
-- Follow the output language requirement below exactly, regardless of the job description language.
-- Include these sections:
-  1. 职位重点
-  2. 技术问题准备
-  3. 项目讲述要点
-  4. 行为面试 / STAR 素材
-  5. 需要补强或确认的内容
-  6. 反问面试官的问题
-
-If any earlier section labels conflict with this outline, use this exact section outline for the final notes:
+- Follow the output language requirement below exactly.
+- Include the following six concepts, translating every section heading into the job description's language:
 {section_outline}
 
 Job description:
@@ -1705,7 +1667,8 @@ def looks_like_interview_prep(content: str) -> bool:
         ]
         if marker in text
     )
-    return section_hits >= 3
+    structural_hits = len(re.findall(r"(?m)^\s*(?:#{1,6}\s+|\d+[.)]\s+)", text))
+    return section_hits >= 3 or structural_hits >= 3
 
 
 def read_approved_github_context(query: str = "") -> str:
