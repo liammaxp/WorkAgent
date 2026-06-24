@@ -5,6 +5,7 @@ import {
   Alert,
   EditorCard,
   LoadingBar,
+  OutputFileSelect,
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
@@ -17,6 +18,7 @@ export default function InterviewPrep() {
   const [content, setContent] = useState("");
   const [useGithub, setUseGithub] = useState(() => readStoredBoolean("workagent-interview-use-github", true));
   const [outputPath, setOutputPath] = useState("");
+  const [outputFiles, setOutputFiles] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
 
   const refreshOutput = useCallback(() => {
@@ -25,12 +27,14 @@ export default function InterviewPrep() {
       if (!fileChangedSinceAppOpened(status, "interview_prep")) {
         setContent("");
         setOutputPath("");
+        setOutputFiles(status.outputs?.interview_prep || []);
         return null;
       }
       const data = await api.getFile("interview_prep");
       const latestContent = data.ready ? data.content || "" : "";
       setContent(latestContent);
       setOutputPath(latestContent.trim() ? status.outputs?.interview_prep?.[0]?.path || "" : "");
+      setOutputFiles(status.outputs?.interview_prep || []);
       return data;
     });
   }, [run]);
@@ -59,8 +63,10 @@ export default function InterviewPrep() {
     setOutputPath("");
     return run(async () => {
       const data = await api.generateInterviewPrep(useGithub);
+      const status = await api.getStatus();
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
+      setOutputFiles(status.outputs?.interview_prep || []);
       return data;
     }, copy.generated);
   };
@@ -83,7 +89,24 @@ export default function InterviewPrep() {
             {loading ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && <p className="meta-line">{common.recentOutput}{outputPath}</p>}
+        <OutputFileSelect
+          files={outputFiles}
+          value={outputPath}
+          disabled={loading}
+          onSelect={(path) => run(async () => {
+            const data = await api.getOutputFile(path);
+            setContent(data.content || "");
+            setOutputPath(path);
+          })}
+          onDelete={(path) => run(async () => {
+            await api.deleteOutputFile(path);
+            setOutputFiles((files) => files.filter((file) => file.path !== path));
+            if (outputPath === path) {
+              setContent("");
+              setOutputPath("");
+            }
+          }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+        />
       </section>
 
       <EditorCard

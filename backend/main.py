@@ -9,6 +9,7 @@ import requests
 import socket
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime
 import urllib.error
 import urllib.parse
@@ -1099,24 +1100,25 @@ def save_interview_prep(content):
 
 
 def initialize_application_db():
-    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS applications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                company TEXT NOT NULL,
-                role TEXT NOT NULL,
-                link TEXT,
-                status TEXT,
-                applied_date TEXT,
-                resume_version TEXT,
-                cover_letter_version TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
+        with connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS applications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    link TEXT,
+                    status TEXT,
+                    applied_date TEXT,
+                    resume_version TEXT,
+                    cover_letter_version TEXT,
+                    notes TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
-        )
 
 
 def add_application_record(
@@ -1130,37 +1132,39 @@ def add_application_record(
     notes="",
 ):
     initialize_application_db()
-    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
-        cursor = connection.execute(
-            """
-            INSERT INTO applications (
-                company,
-                role,
-                link,
-                status,
-                applied_date,
-                resume_version,
-                cover_letter_version,
-                notes
+    with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
+        with connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO applications (
+                    company,
+                    role,
+                    link,
+                    status,
+                    applied_date,
+                    resume_version,
+                    cover_letter_version,
+                    notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    company,
+                    role,
+                    link,
+                    status,
+                    applied_date,
+                    resume_version,
+                    cover_letter_version,
+                    notes,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                company,
-                role,
-                link,
-                status,
-                applied_date,
-                resume_version,
-                cover_letter_version,
-                notes,
-            ),
-        )
+            record_id = cursor.lastrowid
 
     return json.dumps(
         {
             "saved": True,
-            "id": cursor.lastrowid,
+            "id": record_id,
             "database": str(APPLICATION_DB_PATH),
         },
         ensure_ascii=False,
@@ -1192,7 +1196,7 @@ def list_application_records(status="", limit=20):
     query += " ORDER BY updated_at DESC, id DESC LIMIT ?"
     params.append(limit)
 
-    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
+    with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(query, params).fetchall()
 
@@ -1229,19 +1233,21 @@ def update_application_record(
     values = [value for _, value in fields]
     values.append(record_id)
 
-    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
-        cursor = connection.execute(
-            f"""
-            UPDATE applications
-            SET {assignments}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            values,
-        )
+    with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
+        with connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE applications
+                SET {assignments}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                values,
+            )
+            updated = cursor.rowcount > 0
 
     return json.dumps(
         {
-            "updated": cursor.rowcount > 0,
+            "updated": updated,
             "id": record_id,
         },
         ensure_ascii=False,
@@ -1250,15 +1256,17 @@ def update_application_record(
 
 def delete_application_record(record_id):
     initialize_application_db()
-    with sqlite3.connect(APPLICATION_DB_PATH) as connection:
-        cursor = connection.execute(
-            "DELETE FROM applications WHERE id = ?",
-            (record_id,),
-        )
+    with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
+        with connection:
+            cursor = connection.execute(
+                "DELETE FROM applications WHERE id = ?",
+                (record_id,),
+            )
+            deleted = cursor.rowcount > 0
 
     return json.dumps(
         {
-            "deleted": cursor.rowcount > 0,
+            "deleted": deleted,
             "id": record_id,
         },
         ensure_ascii=False,
@@ -1326,10 +1334,6 @@ def read_github_identities():
         identities[key].append(value)
 
     return identities
-
-
-def read_github_accounts():
-    return read_github_identities()["usernames"]
 
 
 def identity_has_values(github_identities):

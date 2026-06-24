@@ -7,6 +7,7 @@ import {
   ConfirmDialog,
   EditorCard,
   LoadingBar,
+  OutputFileSelect,
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
@@ -69,6 +70,9 @@ export default function Resume() {
     readStoredBoolean("workagent-resume-allow-experience-removal", false),
   );
   const [outputPath, setOutputPath] = useState("");
+  const [outputFiles, setOutputFiles] = useState([]);
+  const [pdfPath, setPdfPath] = useState("");
+  const [pdfFiles, setPdfFiles] = useState([]);
   const [memorySummary, setMemorySummary] = useState("");
   const [routeError, setRouteError] = useState("");
   const [applicationPrompt, setApplicationPrompt] = useState(null);
@@ -94,6 +98,10 @@ export default function Resume() {
         api.getStatus(),
       ]);
       setResume(base.content || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       if (!fileChangedSinceAppOpened(status, "tailored_resume")) {
         setTailored("");
         setOutputPath("");
@@ -199,12 +207,21 @@ export default function Resume() {
       await api.saveFile("tailored_resume", tailored);
       const status = await api.getStatus();
       setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
     }, copy.tailoredSaved);
 
   const exportTailoredPdf = () =>
     runResumeAction("exportPdf", async () => {
       const data = await api.exportTailoredResumePdf(tailored);
-      setOutputPath(data.output_path || data.path || "");
+      const status = await api.getStatus();
+      setPdfPath(data.output_path || data.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       return data;
     }, copy.tailoredPdfExported || "Tailored resume PDF exported");
 
@@ -221,8 +238,13 @@ export default function Resume() {
         allowExperienceRemoval,
         needsApplicationHint,
       );
+      const status = await api.getStatus();
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       if (needsApplicationHint) {
         setApplicationForm({ ...EMPTY_APPLICATION_FORM, ...(data.application_hint || {}) });
         setApplicationPrompt({
@@ -331,11 +353,39 @@ export default function Resume() {
             {activeAction === "generate" ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && (
-          <p className="meta-line">
-            {common.recentOutput}{outputPath}
-          </p>
-        )}
+        <OutputFileSelect
+          files={pdfFiles}
+          value={pdfPath}
+          disabled={loading}
+          showWhenEmpty
+          label={language === "zh" ? "PDF 历史输出" : "PDF output history"}
+          placeholder={language === "zh" ? "选择 PDF 生成时间" : "Choose a generated PDF"}
+          onSelect={setPdfPath}
+          onOpen={(path) => runResumeAction("openPdf", () => api.launchOutputFile(path))}
+          onDelete={(path) => runResumeAction("deletePdf", async () => {
+            await api.deleteOutputFile(path);
+            setPdfFiles((files) => files.filter((file) => file.path !== path));
+            if (pdfPath === path) setPdfPath("");
+          }, language === "zh" ? "PDF 文件已删除" : "PDF file deleted")}
+        />
+        <OutputFileSelect
+          files={outputFiles}
+          value={outputPath}
+          disabled={loading}
+          onSelect={(path) => runResumeAction("loadOutput", async () => {
+            const data = await api.getOutputFile(path);
+            setTailored(data.content || "");
+            setOutputPath(path);
+          })}
+          onDelete={(path) => runResumeAction("deleteOutput", async () => {
+            await api.deleteOutputFile(path);
+            setOutputFiles((files) => files.filter((file) => file.path !== path));
+            if (outputPath === path) {
+              setTailored("");
+              setOutputPath("");
+            }
+          }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+        />
       </section>
 
       <EditorCard

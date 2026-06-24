@@ -5,6 +5,7 @@ import {
   Alert,
   EditorCard,
   LoadingBar,
+  OutputFileSelect,
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
@@ -27,6 +28,8 @@ export default function JobDescription() {
   const copy = text[language].job;
   const [content, setContent] = useState("");
   const [analysis, setAnalysis] = useState("");
+  const [outputFiles, setOutputFiles] = useState([]);
+  const [outputPath, setOutputPath] = useState("");
   const [routeError, setRouteError] = useState("");
   const { loading, error, success, run } = useAsyncAction();
 
@@ -39,8 +42,12 @@ export default function JobDescription() {
 
   useEffect(() => {
     run(async () => {
-      const jobData = await api.getFile("job_description");
+      const [jobData, status] = await Promise.all([
+        api.getFile("job_description"),
+        api.getStatus(),
+      ]);
       setContent(jobData.content || "");
+      setOutputFiles(status.outputs?.analysis || []);
       if (
         cachedAnalysis?.jobDescription === jobData.content
       ) {
@@ -72,7 +79,10 @@ export default function JobDescription() {
         notifyJobDescriptionSaved(result);
       }
       const data = await api.analyzeJob(false);
+      const status = await api.getStatus();
       setAnalysis(data.analysis || "");
+      setOutputPath(data.analysis_path || "");
+      setOutputFiles(status.outputs?.analysis || []);
       cachedAnalysis = {
         content: data.analysis || "",
         jobDescription: content,
@@ -104,6 +114,25 @@ export default function JobDescription() {
             {loading ? copy.analyzing : copy.analyze}
           </button>
         </div>
+        <OutputFileSelect
+          files={outputFiles}
+          value={outputPath}
+          disabled={loading}
+          onSelect={(path) => run(async () => {
+            const data = await api.getOutputFile(path);
+            setAnalysis(data.content || "");
+            setOutputPath(path);
+          })}
+          onDelete={(path) => run(async () => {
+            await api.deleteOutputFile(path);
+            setOutputFiles((files) => files.filter((file) => file.path !== path));
+            if (outputPath === path) {
+              setAnalysis("");
+              setOutputPath("");
+              cachedAnalysis = null;
+            }
+          }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+        />
       </section>
 
       {analysis && (

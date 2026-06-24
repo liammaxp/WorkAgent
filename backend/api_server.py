@@ -12,6 +12,7 @@ import re
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -553,11 +554,45 @@ def get_adapter(provider: Optional[str] = None):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-def list_output_files(directory: Path, suffix: str, limit: int = 5) -> list[dict[str, str]]:
+def list_output_files(directory: Path, suffix: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
     if not directory.exists():
         return []
-    files = sorted(directory.glob(f"*{suffix}"), key=lambda path: path.stat().st_mtime, reverse=True)
-    return [{"name": path.name, "path": str(path)} for path in files[:limit]]
+    files = sorted(
+        (path for path in directory.glob(f"*{suffix}") if path.stat().st_size > 0),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return [
+        {
+            "name": path.name,
+            "path": str(path),
+            "generated_at": datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds"),
+            "generated_at_ms": int(path.stat().st_mtime * 1000),
+        }
+        for path in (files[:limit] if limit is not None else files)
+    ]
+
+
+def resolve_output_file(raw_path: str) -> Path:
+    try:
+        path = Path(raw_path).expanduser().resolve(strict=True)
+        output_root = agent.OUTPUT_DIR.resolve(strict=True)
+        path.relative_to(output_root)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=404, detail="Output file not found.") from error
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Output file not found.")
+    return path
+
+
+def remove_analysis_history_path(path: Path) -> None:
+    resolved_path = str(path.resolve())
+    entries = [
+        entry
+        for entry in read_job_analysis_history()
+        if str(Path(str(entry.get("analysis_path", ""))).resolve()) != resolved_path
+    ]
+    write_job_analysis_history(entries)
 
 
 def clean_history_text(value: Any, fallback: str) -> str:
@@ -646,7 +681,7 @@ def update_job_analysis_history(
     return entry
 
 
-def list_job_analysis_history(limit: int = 5) -> list[dict[str, str]]:
+def list_job_analysis_history(limit: int = MAX_JOB_ANALYSIS_HISTORY) -> list[dict[str, str]]:
     return [
         {
             "name": job_history_display_name(entry),
@@ -1689,13 +1724,6 @@ def read_approved_github_context(query: str = "") -> str:
 agent.TOOL_FUNCTIONS["read_github_context"] = read_approved_github_context
 
 
-def read_project_evidence_map_context() -> str:
-    try:
-        return agent.read_project_evidence_map(limit_per_project=4)
-    except RuntimeError as error:
-        return json.dumps({"error": str(error)}, ensure_ascii=False)
-
-
 agent.TOOL_FUNCTIONS["read_project_evidence_map"] = lambda limit_per_project=4: agent.read_project_evidence_map(
     limit_per_project=limit_per_project
 )
@@ -2362,6 +2390,66 @@ def get_file(name: str):
         raise HTTPException(status_code=404, detail=f"Unknown file: {name}")
     ready, content = read_file_content(name)
     return {"name": name, "ready": ready, "content": content}
+
+
+@app.get("/api/output-file")
+def get_output_file(path: str = Query(..., min_length=1)):
+    output_file = resolve_output_file(path)
+    if output_file.suffix.lower() not in {".txt", ".md", ".json", ".tex"}:
+        raise HTTPException(status_code=400, detail="This output file cannot be displayed as text.")
+    try:
+        content = output_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=400, detail="This output file is not UTF-8 text.") from error
+    return {"path": str(output_file), "content": content}
+
+
+@app.post("/api/output-file/launch")
+def launch_output_file(path: str = Query(..., min_length=1)):
+    output_file = resolve_output_file(path)
+    if output_file.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Only PDF output files can be opened here.")
+    try:
+        if sys.platform == "win32":
+            try:
+                os.startfile(str(output_file))
+            except OSError:
+                subprocess.Popen(
+                    ["rundll32.exe", "shell32.dll,OpenAs_RunDLL", str(output_file)],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(output_file)])
+        else:
+            launch_command = None
+            for candidate in (
+                ("xdg-open",),
+                ("gio", "open"),
+                ("gnome-open",),
+                ("kde-open5",),
+                ("kde-open",),
+            ):
+                if shutil.which(candidate[0]):
+                    launch_command = [*candidate, str(output_file)]
+                    break
+            if launch_command is None:
+                raise OSError("No desktop file opener was found.")
+            subprocess.Popen(launch_command)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Could not launch the system PDF viewer.") from error
+    return {"opened": True, "path": str(output_file)}
+
+
+@app.delete("/api/output-file")
+def delete_output_file(path: str = Query(..., min_length=1)):
+    output_file = resolve_output_file(path)
+    try:
+        output_file.unlink()
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Could not delete output file.") from error
+    if output_file.parent == agent.ANALYSIS_OUTPUT_DIR.resolve():
+        remove_analysis_history_path(output_file)
+    return {"deleted": True, "path": str(output_file)}
 
 
 @app.put("/api/files/{name}")

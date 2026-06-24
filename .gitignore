@@ -11,6 +11,7 @@ information/memory.json
 information/project_memory.json
 information/chroma/
 information/applications.sqlite3
+information/job_analysis_history.json
 information/*.sqlite3
 information/*.db
 
@@ -28,12 +29,16 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyde/
-.ruff_cach
+.ruff_cache/
 .pytest_cache/
 .mypy_cache/
 .cache/
+.venv/
 
 outputs/
 
 frontend/node_modules/
 frontend/dist/
+
+# Local automated regression test (generated from README and feature logs)
+local_automation_test.py

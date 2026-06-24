@@ -2,12 +2,13 @@
 
 set -Eeuo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 REQUIREMENTS_FILE="$BACKEND_DIR/requirements.txt"
 PACKAGE_FILE="$FRONTEND_DIR/package.json"
 LATEX_WARMUP_DIR="$ROOT/outputs/latex_install_warmup"
+VENV_DIR="$ROOT/.venv"
 
 fail() {
     printf 'Error: %s\n' "$*" >&2
@@ -38,6 +39,30 @@ find_python() {
     else
         fail "Python 3 is required. Install it and make python3 available in PATH."
     fi
+}
+
+create_virtualenv() {
+    local system_python="$1"
+
+    if [[ -x "$VENV_DIR/bin/python" ]]; then
+        printf 'WorkAgent virtual environment already available.\n'
+        return
+    fi
+
+    printf 'Creating WorkAgent virtual environment...\n'
+    if "$system_python" -m venv "$VENV_DIR"; then
+        return
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        printf 'Python venv support is missing. Installing python3-venv...\n'
+        run_as_root apt-get update
+        run_as_root apt-get install -y python3-venv
+        "$system_python" -m venv "$VENV_DIR"
+        return
+    fi
+
+    fail "Could not create .venv. Install the Python venv module for your platform, then rerun this script."
 }
 
 has_latex_compiler() {
@@ -156,11 +181,13 @@ EOF
 [[ -f "$REQUIREMENTS_FILE" ]] || fail "Backend requirements file not found: $REQUIREMENTS_FILE"
 [[ -f "$PACKAGE_FILE" ]] || fail "Frontend package file not found: $PACKAGE_FILE"
 
-PYTHON="$(find_python)"
+SYSTEM_PYTHON="$(find_python)"
 require_command npm "Install Node.js and npm, then rerun this script."
+create_virtualenv "$SYSTEM_PYTHON"
+PYTHON="$VENV_DIR/bin/python"
 
 printf 'Installing WorkAgent backend dependencies...\n'
-(cd "$BACKEND_DIR" && "$PYTHON" -m pip install -r requirements.txt)
+(cd "$BACKEND_DIR" && "$PYTHON" -m pip install --upgrade pip && "$PYTHON" -m pip install -r requirements.txt)
 
 printf '\nInstalling WorkAgent frontend dependencies...\n'
 (cd "$FRONTEND_DIR" && npm install)

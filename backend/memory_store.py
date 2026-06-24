@@ -30,10 +30,6 @@ def normalized_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
 
 
-def compact_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
 def timestamp_slug() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 

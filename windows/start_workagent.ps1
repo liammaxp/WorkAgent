@@ -1,8 +1,11 @@
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
+$venvPython = Join-Path $root ".venv\Scripts\python.exe"
+$pythonCommand = if (Test-Path $venvPython) { $venvPython } else { "python" }
 $url = "http://localhost:5173"
 $backendUrl = "http://127.0.0.1:8001/api/status"
 
@@ -40,7 +43,7 @@ else {
     Start-Process powershell -ArgumentList @(
         "-NoExit",
         "-Command",
-        "Set-Location '$backendDir'; python -m uvicorn api_server:app --host 127.0.0.1 --port 8001"
+        "Set-Location '$backendDir'; & '$pythonCommand' -m uvicorn api_server:app --host 127.0.0.1 --port 8001"
     )
 
     Write-Host "Waiting for backend on http://127.0.0.1:8001 ..."

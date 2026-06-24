@@ -21,6 +21,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Ask Agent Chat to prepare application materials; it can generate the tailored resume and/or cover letter, pause for missing fresh JD or base resume input, and create an application record automatically.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
+- Use the saved job description's predominant language for all generated application content and Agent Chat responses, independently of the Web UI language.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
 - Configure GitHub usernames, commit author names, commit emails, and GitHub token from the Web UI.
 - Start from an example system prompt and customize the agent prompt from the Web UI.
@@ -49,14 +50,13 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- outputs/
 |   |-- backend/             # Generated analysis, letters, resumes, and legacy GitHub JSON
 |   `-- frontend/            # Frontend production build output
-|-- install_workagent.bat    # Windows one-click dependency installer
-|-- install_workagent.sh     # Ubuntu/Linux dependency installation script
-|-- install_workagent.ps1    # Windows dependency installation script
-|-- uninstall_workagent.bat  # Windows one-click environment uninstaller
-|-- uninstall_workagent.sh   # Ubuntu/Linux environment uninstall script
-|-- uninstall_workagent.ps1  # Windows environment uninstall script
-|-- start_workagent.bat      # Windows one-click launcher
-|-- start_workagent.ps1      # Windows launcher script
+|-- script/                  # Shared Linux/macOS Bash implementations
+|   |-- install_workagent.sh
+|   |-- uninstall_workagent.sh
+|   `-- start_workagent.sh
+|-- windows/                 # Windows .bat and PowerShell entry points
+|-- linux/                   # Linux .sh entry points
+|-- macos/                   # macOS double-click .command entry points
 `-- README.md
 ```
 
@@ -202,14 +202,14 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, edit the tailored resume, update Chroma vector memory, generate a tailored LaTeX resume with optional JD-based project selection, and remember generation toggles locally.
+- Resume: edit the base resume, switch or delete text-output versions by generation time, export and manage PDF versions, open PDFs with the desktop default application, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
 - GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, and fetch approved context into Chroma.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
-- Language Switch: change the Web UI between Chinese and English.
+- Language Switch: change the Web UI between Chinese and English. This affects interface text only; generated content follows the saved job description's predominant language.
 
 ## API Endpoints
 
@@ -224,6 +224,9 @@ Main FastAPI endpoints:
 - `POST /api/model`
 - `GET /api/files/{name}`
 - `PUT /api/files/{name}`
+- `GET /api/output-file`
+- `POST /api/output-file/launch`
+- `DELETE /api/output-file`
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
@@ -294,15 +297,15 @@ The following baseline is the minimum supported environment for the included loc
 
 | Item | Minimum requirement | Notes |
 | --- | --- | --- |
-| Operating system | 64-bit Windows 10 or Windows 11, or a Linux distribution with a supported package manager | The `.bat` and `.ps1` scripts are designed for Windows. The `.sh` installer supports common Linux package managers including `apt-get`, `dnf`, `yum`, `pacman`, and `zypper`; it can also use Homebrew when available. |
-| PowerShell | Windows PowerShell 5.1 | Required by the Windows one-click scripts and Windows process management. |
+| Operating system | 64-bit Windows 10/11, a current Linux desktop distribution, or macOS 12 or newer | Windows uses `.bat`/`.ps1`; Linux and macOS use the portable `.sh` scripts; macOS also includes double-clickable `.command` launchers. Linux package-manager support includes `apt-get`, `dnf`, `yum`, `pacman`, and `zypper`; macOS uses Homebrew for optional LaTeX installation. |
+| PowerShell | Windows PowerShell 5.1 | Required only by the Windows one-click scripts. |
 | Python | Python 3.12 or newer | Required by the backend code and the packages in `backend/requirements.txt`. Make sure `python3` or `python` is available in `PATH` and can run `-m pip`. |
 | Node.js | Node.js 18 or newer | Required by the React + Vite frontend. |
 | npm | A version bundled with Node.js 18 or newer | Make sure `npm` is available in `PATH`. |
 | Memory | 4 GB RAM | 8 GB or more is recommended when other development tools are open. |
 | Free disk space | 2 GB | Used by Python packages, `node_modules`, local Chroma data, logs, and generated files. |
 | Browser | A current version of Edge, Chrome, or Firefox | Required for the local Web UI. |
-| LaTeX toolchain | MiKTeX or TeX Live, plus Strawberry Perl for `latexmk` | Optional for normal use, but required for one-click PDF export of tailored resumes. The installer can install MiKTeX and Strawberry Perl automatically through `winget`; otherwise make sure `xelatex` or `pdflatex` is available in `PATH`, and make sure `perl` is available if using `latexmk`. |
+| LaTeX toolchain | MiKTeX on Windows or TeX Live/MacTeX on Linux and macOS | Optional for normal use, but required for tailored-resume PDF export. Installers use `winget` on Windows, the detected Linux package manager on Linux, and Homebrew `mactex-no-gui` on macOS. |
 
 Backend packages installed from `backend/requirements.txt` include `openai`, `python-dotenv`, `requests`, `fastapi`, `uvicorn[standard]`, and `chromadb`. Frontend packages are installed from `frontend/package.json`.
 
@@ -315,50 +318,76 @@ An internet connection is required when installing dependencies and when calling
 Before the first start, double-click:
 
 ```text
-install_workagent.bat
+windows\install_workagent.bat
 ```
 
-It checks that Python and npm are available, installs the backend and frontend dependencies, then installs MiKTeX and Strawberry Perl through `winget` when needed for tailored-resume PDF export. It also runs a small LaTeX warmup compile in `outputs/latex_install_warmup/` so MiKTeX can download common resume packages during installation instead of waiting until the first PDF export.
+It checks that Python and npm are available, creates a project-local `.venv`, installs the backend and frontend dependencies, then installs MiKTeX and Strawberry Perl through `winget` when needed for tailored-resume PDF export. It also runs a small LaTeX warmup compile in `outputs/latex_install_warmup/` so MiKTeX can download common resume packages during installation instead of waiting until the first PDF export.
 
-### Dependency Installation On Ubuntu/Linux
+### One-Click Dependency Installation On Linux
 
-On Ubuntu or another Linux distribution, run:
+Run:
 
 ```bash
-chmod +x install_workagent.sh
-./install_workagent.sh
+chmod +x linux/install_workagent.sh
+./linux/install_workagent.sh
 ```
 
-The script installs backend and frontend dependencies, then installs the LaTeX and Perl packages needed for tailored-resume PDF export when they are missing. It uses `sudo` when required for system package managers and supports `apt-get`, `dnf`, `yum`, `pacman`, `zypper`, and Homebrew. It also runs the same LaTeX warmup compile in `outputs/latex_install_warmup/` so the common resume packages are ready before the first PDF export.
-Activate your own Python environment before running it if you do not want packages installed into the system Python; the script does not install or manage Python itself and uses the first available `python3` or `python` interpreter with `python -m pip`.
+The script installs backend and frontend dependencies into the project-local `.venv`, then installs the LaTeX and Perl packages needed for PDF export through `apt-get`, `dnf`, `yum`, `pacman`, or `zypper` when missing.
+
+### One-Click Dependency Installation On macOS
+
+Double-click `macos/install_workagent.command`, or run it from Terminal:
+
+```bash
+chmod +x macos/install_workagent.command *.sh
+./macos/install_workagent.command
+```
+
+The macOS entry uses the shared implementation in `script/`, installs Python packages into `.venv`, and uses Homebrew `mactex-no-gui` when a LaTeX toolchain is missing. If macOS blocks the first launch, Control-click the file, choose **Open**, and approve it once.
+
+After a ZIP download or a checkout that does not preserve executable bits, run this once before using the macOS double-click launchers:
+
+```bash
+chmod +x linux/*.sh script/*.sh macos/*.command
+```
 
 ### One-Click Environment Uninstall On Windows
 
 To remove the installed WorkAgent environment, double-click:
 
 ```text
-uninstall_workagent.bat
+windows\uninstall_workagent.bat
 ```
 
-The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment and before uninstalling MiKTeX or Strawberry Perl, because those may be shared with other projects.
+The script removes the local `frontend/node_modules`, `.venv`, and LaTeX warmup files, then asks before uninstalling MiKTeX or Strawberry Perl because those system tools may be shared with other projects.
 
-### Environment Uninstall On Ubuntu/Linux
+### One-Click Environment Uninstall On Linux
 
-On Ubuntu or another Linux distribution, run:
+Run:
 
 ```bash
-chmod +x uninstall_workagent.sh
-./uninstall_workagent.sh
+chmod +x linux/uninstall_workagent.sh
+./linux/uninstall_workagent.sh
 ```
 
-The script removes the local `frontend/node_modules` directory and LaTeX warmup files, then asks before uninstalling Python packages from the current Python environment. On Ubuntu-like systems it can also remove the LaTeX or Perl packages used for PDF export, after confirmation, because those packages may be shared with other projects.
+The script removes `frontend/node_modules`, `.venv`, and LaTeX warmup files. After confirmation it can remove the Linux LaTeX/Perl packages used for PDF export.
+
+### One-Click Environment Uninstall On macOS
+
+Double-click `macos/uninstall_workagent.command`, or run:
+
+```bash
+./macos/uninstall_workagent.command
+```
+
+Removing Homebrew MacTeX is optional because it may be shared by other projects.
 
 ### One-Click Start On Windows
 
 Double-click:
 
 ```text
-start_workagent.bat
+windows\start_workagent.bat
 ```
 
 It starts the backend API, starts the frontend dev server, waits for both to become ready, and opens:
@@ -368,6 +397,29 @@ http://localhost:5173
 ```
 
 The Web UI opens a local session when loaded and notifies the backend when the page closes.
+
+### One-Click Start On Linux
+
+Run:
+
+```bash
+chmod +x linux/start_workagent.sh
+./linux/start_workagent.sh
+```
+
+The script selects the project `.venv`, starts both services in the background, writes logs and PID files under `logs/`, and opens the Web UI with the available Linux desktop opener.
+
+### One-Click Start On macOS
+
+Double-click `macos/start_workagent.command`, or run:
+
+```bash
+./macos/start_workagent.command
+```
+
+It starts both services and opens the Web UI through macOS `open`.
+
+The PDF **Open** button follows the desktop operating system: Windows uses the Shell file association, macOS uses Launch Services through `open`, and Linux tries `xdg-open`, `gio open`, and common GNOME/KDE openers. The configured default PDF application is used, matching normal desktop file opening behavior.
 
 ### Manual Backend Start
 
@@ -469,6 +521,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 在 Agent Chat 中请求生成求职材料；它可以生成定制简历和/或求职信，在缺少本次会话内保存的 JD 或基础简历时暂停，并自动创建投递记录。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
 - 生成和编辑面试准备笔记。
+- 所有生成的求职材料和 Agent Chat 回复均使用已保存职位描述的主要语言，不受 Web UI 界面语言影响。
 - 直接在 Web UI 中配置模型供应商、模型、Base URL 和 API Key。
 - 直接在 Web UI 中配置 GitHub 用户名、提交作者名、提交邮箱和 GitHub Token。
 - 提供可直接试用的示例系统 Prompt，并支持在 Web UI 中编辑个性化 Prompt。
@@ -497,14 +550,13 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- outputs/
 |   |-- backend/             # 生成的分析、求职信、简历和旧版 GitHub JSON
 |   `-- frontend/            # 前端生产构建输出
-|-- install_workagent.bat    # Windows 一键安装依赖入口
-|-- install_workagent.sh     # Ubuntu/Linux 依赖安装脚本
-|-- install_workagent.ps1    # Windows 依赖安装脚本
-|-- uninstall_workagent.bat  # Windows 一键卸载环境入口
-|-- uninstall_workagent.sh   # Ubuntu/Linux 环境卸载脚本
-|-- uninstall_workagent.ps1  # Windows 环境卸载脚本
-|-- start_workagent.bat      # Windows 一键启动入口
-|-- start_workagent.ps1      # Windows 启动脚本
+|-- script/                  # Linux/macOS 共用 Bash 实现
+|   |-- install_workagent.sh
+|   |-- uninstall_workagent.sh
+|   `-- start_workagent.sh
+|-- windows/                 # Windows .bat 与 PowerShell 入口
+|-- linux/                   # Linux .sh 入口
+|-- macos/                   # macOS 可双击的 .command 入口
 `-- README.md
 ```
 
@@ -647,14 +699,14 @@ background/prompt.example.txt
 
 - Dashboard：查看 provider/model 状态、配置 API Key、检查文件状态、查看最近输出和快速入口。
 - Job Description：编辑、保存并分析当前职位描述。
-- Resume：编辑基础简历和定制简历，更新 Chroma 向量记忆，生成定制版 LaTeX 简历，并在本地记住生成选项。
+- Resume：编辑基础简历，按生成时间切换或删除文本输出版本，导出和管理 PDF 版本，使用桌面默认应用打开 PDF，更新 Chroma 向量记忆，并生成定制版 LaTeX 简历。
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
 - GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，并把已确认的上下文写入 Chroma。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话，可以上传图片，也可以删除指定的画像记忆。
-- 语言切换：在中文和英文界面之间切换。
+- 语言切换：在中文和英文界面之间切换。该设置只影响界面文字；生成内容使用已保存职位描述的主要语言。
 
 ## API 接口
 
@@ -669,6 +721,9 @@ background/prompt.example.txt
 - `POST /api/model`
 - `GET /api/files/{name}`
 - `PUT /api/files/{name}`
+- `GET /api/output-file`
+- `POST /api/output-file/launch`
+- `DELETE /api/output-file`
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
@@ -739,15 +794,15 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 
 | 项目 | 最低要求 | 说明 |
 | --- | --- | --- |
-| 操作系统 | 64 位 Windows 10 或 Windows 11，或带有受支持包管理器的 Linux 发行版 | 仓库内的 `.bat` 和 `.ps1` 脚本面向 Windows。`.sh` 安装脚本支持常见 Linux 包管理器，包括 `apt-get`、`dnf`、`yum`、`pacman` 和 `zypper`；可用时也可以使用 Homebrew。 |
-| PowerShell | Windows PowerShell 5.1 | Windows 一键脚本和 Windows 进程管理功能需要使用。 |
+| 操作系统 | 64 位 Windows 10/11、当前仍受支持的 Linux 桌面发行版，或 macOS 12 及以上版本 | Windows 使用 `.bat`/`.ps1`；Linux 与 macOS 使用 `.sh`；macOS 还提供可双击的 `.command` 入口。Linux 支持 `apt-get`、`dnf`、`yum`、`pacman` 和 `zypper`，macOS 的可选 LaTeX 安装使用 Homebrew。 |
+| PowerShell | Windows PowerShell 5.1 | 仅 Windows 一键脚本需要使用。 |
 | Python | Python 3.12 或更高版本 | 后端代码以及 `backend/requirements.txt` 中的依赖需要使用。请确保 `python3` 或 `python` 已加入 `PATH`，并且可以执行 `-m pip`。 |
 | Node.js | Node.js 18 或更高版本 | React + Vite 前端需要使用。 |
 | npm | Node.js 18 或更高版本附带的 npm | 请确保 `npm` 已加入 `PATH`。 |
 | 内存 | 4 GB RAM | 如果同时开启其他开发工具，建议使用 8 GB 或更多内存。 |
 | 可用磁盘空间 | 2 GB | 用于 Python 依赖、`node_modules`、本地 Chroma 数据、日志和生成文件。 |
 | 浏览器 | 当前版本的 Edge、Chrome 或 Firefox | 用于访问本地 Web UI。 |
-| LaTeX 工具链 | MiKTeX 或 TeX Live，以及 `latexmk` 所需的 Strawberry Perl | 普通使用可不安装；如果要使用定制简历的一键导出 PDF 功能，则必须安装。安装脚本可通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl；否则请确保 `xelatex` 或 `pdflatex` 已加入 `PATH`，如果使用 `latexmk` 还需确保 `perl` 已加入 `PATH`。 |
+| LaTeX 工具链 | Windows 使用 MiKTeX，Linux 使用 TeX Live，macOS 使用 MacTeX | 普通使用可不安装；导出定制简历 PDF 时需要。安装脚本分别使用 `winget`、检测到的 Linux 包管理器和 Homebrew `mactex-no-gui`。 |
 
 后端会根据 `backend/requirements.txt` 安装 `openai`、`python-dotenv`、`requests`、`fastapi`、`uvicorn[standard]` 和 `chromadb`。前端依赖根据 `frontend/package.json` 安装。
 
@@ -760,50 +815,76 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 首次启动前，双击：
 
 ```text
-install_workagent.bat
+windows\install_workagent.bat
 ```
 
-脚本会检查 Python 和 npm 是否可用，安装后端与前端依赖，并在需要时通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl，用于定制简历 PDF 导出。脚本还会在 `outputs/latex_install_warmup/` 执行一次小型 LaTeX 预热编译，让 MiKTeX 在安装阶段下载常用简历宏包，而不是等到第一次导出 PDF 时再下载。
+脚本会检查 Python 和 npm 是否可用，创建项目本地 `.venv`，安装后端与前端依赖，并在需要时通过 `winget` 自动安装 MiKTeX 和 Strawberry Perl，用于定制简历 PDF 导出。脚本还会在 `outputs/latex_install_warmup/` 执行一次小型 LaTeX 预热编译，让 MiKTeX 在安装阶段下载常用简历宏包，而不是等到第一次导出 PDF 时再下载。
 
-### Ubuntu/Linux 安装依赖
+### Linux 一键安装依赖
 
-在 Ubuntu 或其他 Linux 发行版中运行：
+运行：
 
 ```bash
-chmod +x install_workagent.sh
-./install_workagent.sh
+chmod +x linux/install_workagent.sh
+./linux/install_workagent.sh
 ```
 
-脚本会安装后端与前端依赖，并在缺少定制简历 PDF 导出所需组件时自动安装 LaTeX 和 Perl 相关包。它会在需要安装系统依赖时使用 `sudo`，并支持 `apt-get`、`dnf`、`yum`、`pacman`、`zypper` 和 Homebrew。脚本同样会在 `outputs/latex_install_warmup/` 执行 LaTeX 预热编译，让常用简历宏包在首次导出 PDF 之前就准备完成。
-如果不希望依赖安装到系统 Python，请先激活你自己的 Python 环境；脚本不会再自动安装或管理 Python，而是使用第一个可用的 `python3` 或 `python` 解释器执行 `python -m pip`。
+脚本会把后端依赖安装到项目本地 `.venv`，并在缺少 PDF 导出组件时通过 `apt-get`、`dnf`、`yum`、`pacman` 或 `zypper` 安装 LaTeX/Perl。
+
+### macOS 一键安装依赖
+
+在 Finder 中双击 `macos/install_workagent.command`，或在终端运行：
+
+```bash
+chmod +x macos/install_workagent.command *.sh
+./macos/install_workagent.command
+```
+
+macOS 入口会调用 `script/` 中的共用实现，把 Python 依赖安装到 `.venv`，并在缺少 LaTeX 时使用 Homebrew `mactex-no-gui`。若首次被系统拦截，可按住 Control 点击文件，选择“打开”并确认一次。
+
+如果通过 ZIP 下载，或 Git 检出时没有保留可执行权限，请先执行一次：
+
+```bash
+chmod +x linux/*.sh script/*.sh macos/*.command
+```
 
 ### Windows 一键卸载环境
 
 如需移除 WorkAgent 安装的环境，双击：
 
 ```text
-uninstall_workagent.bat
+windows\uninstall_workagent.bat
 ```
 
-脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖、MiKTeX 或 Strawberry Perl 前会先询问确认，因为它们可能被其他项目共用。
+脚本会删除项目本地的 `frontend/node_modules`、`.venv` 和 LaTeX 预热文件；卸载 MiKTeX 或 Strawberry Perl 前会先询问确认，因为这些系统工具可能被其他项目共用。
 
-### Ubuntu/Linux 卸载环境
+### Linux 一键卸载环境
 
-在 Ubuntu 或其他 Linux 发行版中运行：
+运行：
 
 ```bash
-chmod +x uninstall_workagent.sh
-./uninstall_workagent.sh
+chmod +x linux/uninstall_workagent.sh
+./linux/uninstall_workagent.sh
 ```
 
-脚本会删除项目本地的 `frontend/node_modules` 目录和 LaTeX 预热文件；卸载当前 Python 环境中的后端依赖前会先询问确认。在 Ubuntu-like 系统上，它也可以在确认后移除用于 PDF 导出的 LaTeX 或 Perl 系统包，因为它们可能被其他项目共用。
+脚本会删除项目本地的 `frontend/node_modules`、`.venv` 和 LaTeX 预热文件；确认后也可以卸载 Linux 中用于 PDF 导出的 LaTeX/Perl 系统包。
+
+### macOS 一键卸载环境
+
+在 Finder 中双击 `macos/uninstall_workagent.command`，或运行：
+
+```bash
+./macos/uninstall_workagent.command
+```
+
+是否卸载 Homebrew MacTeX 会单独询问，因为它可能被其他项目共用。
 
 ### Windows 一键启动
 
 双击：
 
 ```text
-start_workagent.bat
+windows\start_workagent.bat
 ```
 
 脚本会启动后端、启动前端、等待服务就绪，并打开：
@@ -813,6 +894,29 @@ http://localhost:5173
 ```
 
 Web UI 加载时会打开本地会话，页面关闭时会通知后端。
+
+### Linux 一键启动
+
+运行：
+
+```bash
+chmod +x linux/start_workagent.sh
+./linux/start_workagent.sh
+```
+
+脚本会使用项目 `.venv`，在后台启动后端和前端，把日志及 PID 文件写入 `logs/`，并使用 Linux 桌面打开器打开 Web UI。
+
+### macOS 一键启动
+
+在 Finder 中双击 `macos/start_workagent.command`，或运行：
+
+```bash
+./macos/start_workagent.command
+```
+
+脚本会启动前后端，并通过 macOS `open` 打开 Web UI。
+
+PDF 的“打开”按钮会遵循桌面系统默认行为：Windows 使用 Shell 文件关联，macOS 通过 Launch Services 的 `open` 打开，Linux 依次尝试 `xdg-open`、`gio open` 以及常见 GNOME/KDE 打开器，并使用系统配置的默认 PDF 应用。
 
 ### 手动启动后端
 

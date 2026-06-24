@@ -1,11 +1,14 @@
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
 $requirementsFile = Join-Path $backendDir "requirements.txt"
 $packageFile = Join-Path $frontendDir "package.json"
 $latexWarmupDir = Join-Path $root "outputs\latex_install_warmup"
+$venvDir = Join-Path $root ".venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
 
 function Assert-Command {
     param(
@@ -220,9 +223,14 @@ Assert-Command "python" "Install Python 3 and make sure python is available in P
 Assert-Command "npm" "Install Node.js and make sure npm is available in PATH."
 
 Write-Host "Installing WorkAgent backend dependencies..."
+if (-not (Test-Path $venvPython)) {
+    Write-Host "Creating WorkAgent virtual environment..."
+    Invoke-CheckedCommand { python -m venv $venvDir } "Python virtual environment creation failed."
+}
 Push-Location $backendDir
 try {
-    Invoke-CheckedCommand { python -m pip install -r requirements.txt } "Backend dependency installation failed."
+    Invoke-CheckedCommand { & $venvPython -m pip install --upgrade pip } "pip upgrade failed."
+    Invoke-CheckedCommand { & $venvPython -m pip install -r requirements.txt } "Backend dependency installation failed."
 }
 finally {
     Pop-Location

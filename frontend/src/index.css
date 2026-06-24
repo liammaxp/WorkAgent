@@ -470,6 +470,17 @@ textarea {
   overflow: auto;
 }
 
+.output-file-select {
+  margin-top: 22px;
+}
+
+.output-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
 .alert.error {
   background: #fef2f2;
   color: var(--danger);

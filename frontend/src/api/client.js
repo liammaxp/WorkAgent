@@ -52,6 +52,11 @@ async function request(path, options = {}) {
 
 export const api = {
   getStatus: () => request("/status"),
+  getOutputFile: (path) => request(`/output-file?${new URLSearchParams({ path })}`),
+  launchOutputFile: (path) =>
+    request(`/output-file/launch?${new URLSearchParams({ path })}`, { method: "POST" }),
+  deleteOutputFile: (path) =>
+    request(`/output-file?${new URLSearchParams({ path })}`, { method: "DELETE" }),
   openSession: () => request("/session/open", { method: "POST" }),
   shutdown: () => request("/shutdown", { method: "POST", keepalive: true }),
   saveChatSession: (session) =>
