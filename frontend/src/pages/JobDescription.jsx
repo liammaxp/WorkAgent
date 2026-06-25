@@ -113,26 +113,28 @@ export default function JobDescription() {
           <button type="button" className="btn btn-primary" onClick={analyze} disabled={loading}>
             {loading ? copy.analyzing : copy.analyze}
           </button>
+          <OutputFileSelect
+            files={outputFiles}
+            value={outputPath}
+            disabled={loading}
+            inline
+            onSelect={(path) => run(async () => {
+              const data = await api.getOutputFile(path);
+              setAnalysis(data.content || "");
+              setOutputPath(path);
+            })}
+            onDelete={(path) => run(async () => {
+              await api.deleteOutputFile(path);
+              setOutputFiles((files) => files.filter((file) => file.path !== path));
+              if (outputPath === path) {
+                setAnalysis("");
+                setOutputPath("");
+                cachedAnalysis = null;
+              }
+            }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+          />
         </div>
-        <OutputFileSelect
-          files={outputFiles}
-          value={outputPath}
-          disabled={loading}
-          onSelect={(path) => run(async () => {
-            const data = await api.getOutputFile(path);
-            setAnalysis(data.content || "");
-            setOutputPath(path);
-          })}
-          onDelete={(path) => run(async () => {
-            await api.deleteOutputFile(path);
-            setOutputFiles((files) => files.filter((file) => file.path !== path));
-            if (outputPath === path) {
-              setAnalysis("");
-              setOutputPath("");
-              cachedAnalysis = null;
-            }
-          }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
-        />
+
       </section>
 
       {analysis && (

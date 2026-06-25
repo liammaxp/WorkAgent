@@ -134,10 +134,10 @@ export const api = {
         language: currentLanguage(),
       }),
     }),
-  updateMemoryFromResume: (resume_source = "resume") =>
+  updateMemoryFromResume: (resume_source = "resume", options = {}) =>
     request("/resume/update-memory", {
       method: "POST",
-      body: JSON.stringify({ resume_source }),
+      body: JSON.stringify({ resume_source, ...options }),
     }),
   convertResumePdfToLatex: (payload) =>
     request("/resume/pdf-to-latex", {
@@ -165,10 +165,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ use_github_context, language: currentLanguage() }),
     }),
-  scanGithub: (resume_source = "resume") =>
+  scanGithub: (resume_source = "resume", options = {}) =>
     request("/github/scan", {
       method: "POST",
-      body: JSON.stringify({ resume_source }),
+      body: JSON.stringify({ resume_source, ...options }),
     }),
   getGithubConfig: () => request("/github/config"),
   saveGithubConfig: (payload) =>
@@ -176,10 +176,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  fetchGithubContext: (approved = true, resume_source = "resume") =>
+  fetchGithubContext: (approved = true, resume_source = "resume", options = {}) =>
     request("/github/context", {
       method: "POST",
-      body: JSON.stringify({ approved, resume_source }),
+      body: JSON.stringify({ approved, resume_source, ...options }),
     }),
   getApplications: (status = "", limit = 50) => {
     const params = new URLSearchParams();

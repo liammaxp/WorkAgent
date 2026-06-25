@@ -274,6 +274,8 @@ class TailorBody(BaseModel):
 
 class ResumeMemoryBody(BaseModel):
     resume_source: str = "resume"
+    project_name: str = ""
+    project_id: str = ""
 
 
 class ResumePdfToLatexBody(BaseModel):
@@ -301,11 +303,15 @@ class InterviewPrepBody(BaseModel):
 
 class GitHubScanBody(BaseModel):
     resume_source: str = "resume"
+    project_name: str = ""
+    project_id: str = ""
 
 
 class GitHubContextBody(BaseModel):
     approved: bool = True
     resume_source: str = "resume"
+    project_name: str = ""
+    project_id: str = ""
 
 
 class GitHubConfigBody(BaseModel):
@@ -756,13 +762,16 @@ def save_file_content(name: str, content: str) -> None:
         agent.write_project_memory_file(project_memory)
         return
     if name == "tailored_resume":
-        agent.save_tailored_resume(content)
+        hint = resolve_saved_application_hint()
+        agent.save_tailored_resume(content, company=hint["company"], role=hint["role"])
         return
     if name == "cover_letter":
-        agent.save_cover_letter(content)
+        hint = resolve_saved_application_hint()
+        agent.save_cover_letter(content, company=hint["company"], role=hint["role"])
         return
     if name == "interview_prep":
-        agent.save_interview_prep(content)
+        hint = resolve_saved_application_hint()
+        agent.save_interview_prep(content, company=hint["company"], role=hint["role"])
         return
     agent.write_text_file(FILE_MAP[name], content)
 
@@ -1171,14 +1180,21 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
     )
 
 
-def compile_tailored_resume_pdf(latex: str) -> Path:
+def compile_tailored_resume_pdf(latex: str, company: str = "", role: str = "") -> Path:
     document = agent.extract_latex_document(latex)
     if not document:
         raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
 
     TAILORED_RESUME_PDF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     LATEX_BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"tailored_resume_{agent.timestamp_slug()}"
+    output_pdf = agent.unique_application_output_path(
+        TAILORED_RESUME_PDF_OUTPUT_DIR,
+        company=company,
+        role=role,
+        suffix=".pdf",
+        fallback_prefix="tailored_resume",
+    )
+    stem = output_pdf.stem
     tex_path = LATEX_BUILD_DIR / f"{stem}.tex"
     tex_path.write_text(document + "\n", encoding="utf-8")
 
@@ -1215,7 +1231,6 @@ def compile_tailored_resume_pdf(latex: str) -> Path:
     if not built_pdf.exists():
         raise HTTPException(status_code=500, detail="LaTeX compiler finished but no PDF was produced.")
 
-    output_pdf = TAILORED_RESUME_PDF_OUTPUT_DIR / f"{stem}.pdf"
     shutil.copyfile(built_pdf, output_pdf)
     return output_pdf
 
@@ -1428,6 +1443,21 @@ def resolve_application_hint(job_description: str) -> dict[str, str]:
     }
 
 
+def resolve_saved_application_hint(job_description: str = "") -> dict[str, str]:
+    if not job_description:
+        try:
+            job_description = (
+                agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
+                if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
+                else ""
+            )
+        except (FileNotFoundError, ValueError):
+            job_description = ""
+    hint = resolve_application_hint(job_description)
+    agent.set_application_output_metadata(company=hint["company"], role=hint["role"])
+    return hint
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -1459,7 +1489,115 @@ def normalized_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
 
 
-def update_memory_from_resume_source(resume_source: str) -> dict[str, Any]:
+def normalize_match_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"https?://(?:www\.)?github\.com/", "", text)
+    if "/" in text:
+        text = text.rsplit("/", 1)[-1]
+    text = text.removesuffix(".git")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def compact_match_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", normalize_match_text(value))
+
+
+def list_memory_projects(memory: dict[str, Any]) -> list[Any]:
+    projects = memory.get("projects", [])
+    if isinstance(projects, dict):
+        return [projects]
+    if isinstance(projects, list):
+        return projects
+    return []
+
+
+def project_field_values(project: Any) -> list[str]:
+    if not isinstance(project, dict):
+        return [str(project)]
+    values = [
+        project.get("project_id"),
+        project.get("project_name"),
+        project.get("name"),
+        project.get("title"),
+        project.get("repository"),
+    ]
+    identity = project.get("identity")
+    if isinstance(identity, dict):
+        values.extend(
+            [
+                identity.get("project_id"),
+                identity.get("project_name"),
+                identity.get("name"),
+                identity.get("positioning"),
+            ]
+        )
+    return [str(value) for value in values if str(value or "").strip()]
+
+
+def project_matches(project: Any, project_name: str = "", project_id: str = "") -> bool:
+    target_id = normalize_match_text(project_id)
+    target_name = normalize_match_text(project_name)
+    compact_target_id = compact_match_text(project_id)
+    compact_target_name = compact_match_text(project_name)
+    field_values = [normalize_match_text(value) for value in project_field_values(project)]
+    compact_field_values = [compact_match_text(value) for value in project_field_values(project)]
+    if target_id and any(value == target_id for value in field_values):
+        return True
+    if compact_target_id and any(value == compact_target_id for value in compact_field_values):
+        return True
+    if not target_name:
+        return False
+    if any(value == target_name or target_name in value or value in target_name for value in field_values):
+        return True
+    return any(
+        value == compact_target_name or compact_target_name in value or value in compact_target_name
+        for value in compact_field_values
+    )
+
+
+def scoped_project_memory(current_memory: dict[str, Any], project_name: str = "", project_id: str = "") -> dict[str, Any]:
+    projects = [
+        project
+        for project in list_memory_projects(current_memory)
+        if project_matches(project, project_name=project_name, project_id=project_id)
+    ]
+    return {"projects": projects}
+
+
+def merge_scoped_project_memory(
+    current_memory: dict[str, Any],
+    scoped_memory: dict[str, Any],
+    project_name: str = "",
+    project_id: str = "",
+) -> dict[str, Any]:
+    scoped_projects = list_memory_projects(scoped_memory)
+    if not scoped_projects:
+        return current_memory
+
+    merged_memory = dict(current_memory)
+    current_projects = list_memory_projects(current_memory)
+    retained_projects = [
+        project
+        for project in current_projects
+        if not project_matches(project, project_name=project_name, project_id=project_id)
+    ]
+
+    seen = set()
+    merged_projects = []
+    for project in retained_projects + scoped_projects:
+        key_values = project_field_values(project)
+        key = normalize_match_text(key_values[0] if key_values else normalized_json(project))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_projects.append(project)
+
+    merged_memory["projects"] = merged_projects
+    return merged_memory
+
+
+def update_memory_from_resume_source(resume_source: str, project_name: str = "", project_id: str = "") -> dict[str, Any]:
     if resume_source == "tailored_resume":
         resume = agent.read_tailored_resume()
         source_label = "tailored_resume.txt"
@@ -1470,6 +1608,26 @@ def update_memory_from_resume_source(resume_source: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="resume_source must be 'resume' or 'tailored_resume'.")
 
     current_memory = load_memory_for_merge()
+    scoped_update = bool(project_name.strip() or project_id.strip())
+    memory_for_prompt = (
+        scoped_project_memory(current_memory, project_name=project_name, project_id=project_id)
+        if scoped_update and isinstance(current_memory, dict)
+        else current_memory
+    )
+    target_project_text = ""
+    if scoped_update:
+        requested = project_name.strip() or project_id.strip()
+        target_project_text = f"""
+Target project:
+- project_name: {project_name.strip() or "(not specified)"}
+- project_id: {project_id.strip() or "(not specified)"}
+
+Scoped update rules:
+- Update only the requested project's item inside memory["projects"].
+- If the current scoped memory has no matching project but the resume clearly contains the requested project, add one compact project item.
+- Do not add, modify, summarize, or remove unrelated projects or non-project memory sections.
+- Return only the scoped memory object containing the requested project's projects list.
+"""
     prompt = f"""
 Update the user's long-term memory JSON from the resume below.
 
@@ -1483,8 +1641,9 @@ Rules:
   "additions": array of short strings describing newly added facts,
   "memory": object
 
+{target_project_text}
 Current memory JSON:
-{json.dumps(current_memory, ensure_ascii=False, indent=2)}
+{json.dumps(memory_for_prompt, ensure_ascii=False, indent=2)}
 
 Resume source: {source_label}
 Resume:
@@ -1496,9 +1655,18 @@ Resume:
     if not isinstance(merged_memory, dict):
         raise HTTPException(status_code=500, detail="Agent JSON response must include a memory object.")
 
+    if scoped_update:
+        merged_memory = merge_scoped_project_memory(
+            current_memory,
+            merged_memory,
+            project_name=project_name,
+            project_id=project_id,
+        )
+
     changed = normalized_json(merged_memory) != normalized_json(current_memory)
     if changed:
-        agent.replace_profile_memory(merged_memory, source=f"resume-merge:{source_label}")
+        source_suffix = f":project:{project_name.strip() or project_id.strip()}" if scoped_update else ""
+        agent.replace_profile_memory(merged_memory, source=f"resume-merge:{source_label}{source_suffix}")
 
     additions = payload.get("additions", [])
     if not isinstance(additions, list):
@@ -1507,6 +1675,8 @@ Resume:
     return {
         "updated": changed,
         "source": source_label,
+        "project_name": project_name.strip(),
+        "project_id": project_id.strip(),
         "additions": [str(item) for item in additions if str(item).strip()],
         "memory": merged_memory,
         "path": str(agent.CHROMA_DB_PATH),
@@ -2102,6 +2272,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     except json.JSONDecodeError as error:
         raise HTTPException(status_code=400, detail="project_memory.json is not valid JSON.") from error
 
+    application_hint = resolve_saved_application_hint(job_description)
     selected_projects = select_staged_projects(job_description, resume, project_memory, body.allow_project_selection)
     if not selected_projects:
         raise HTTPException(
@@ -2138,7 +2309,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
 
-    agent.save_tailored_resume(answer)
+    agent.save_tailored_resume(answer, company=application_hint["company"], role=application_hint["role"])
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
         "saved": True,
@@ -2154,7 +2325,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         "staged_summary_candidate": summary_candidate,
     }
     if body.include_application_hint:
-        response["application_hint"] = resolve_application_hint(job_description)
+        response["application_hint"] = application_hint
     return response
 
 
@@ -2167,7 +2338,73 @@ def read_github_memory_repo_source() -> str:
     )
 
 
-def read_github_repo_source(resume_source: str) -> str:
+def project_scope_to_github_url(project_name: str = "", project_id: str = "") -> str:
+    scope = (project_name or project_id or "").strip()
+    if not scope:
+        return ""
+
+    url_match = re.search(
+        r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)",
+        scope,
+    )
+    if url_match:
+        owner, repo = url_match.groups()
+        return f"https://github.com/{owner}/{repo.removesuffix('.git')}"
+
+    repo_match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", scope)
+    if repo_match:
+        owner, repo = repo_match.groups()
+        return f"https://github.com/{owner}/{repo.removesuffix('.git')}"
+
+    return ""
+
+
+def scoped_project_github_source(project_name: str = "", project_id: str = "") -> str:
+    direct_url = project_scope_to_github_url(project_name=project_name, project_id=project_id)
+    if direct_url:
+        return f"Direct GitHub repository from project scope:\n{direct_url}"
+
+    current_memory = load_memory_for_merge()
+    profile_scope = (
+        scoped_project_memory(current_memory, project_name=project_name, project_id=project_id)
+        if isinstance(current_memory, dict)
+        else {"projects": []}
+    )
+
+    project_memory_scope: dict[str, Any] = {"projects": []}
+    try:
+        project_memory = read_current_project_memory()
+    except HTTPException:
+        project_memory = {}
+    if isinstance(project_memory, dict):
+        project_memory_scope = scoped_project_memory(project_memory, project_name=project_name, project_id=project_id)
+
+    scoped_text = (
+        f"Profile project memory:\n{json.dumps(profile_scope, ensure_ascii=False, indent=2)}\n\n"
+        f"Project Memory JSON scope:\n{json.dumps(project_memory_scope, ensure_ascii=False, indent=2)}"
+    )
+    scoped_repositories = []
+    scoped_text_lower = scoped_text.lower()
+    for item in agent.MEMORY_STORE.list_github_repositories():
+        repository = str(item.get("repository", "")).strip()
+        if repository and repository.lower() in scoped_text_lower:
+            scoped_repositories.append(f"https://github.com/{repository}")
+
+    for owner, repo in re.findall(
+        r"(?:Repository|repository|repo)\s*:\s*([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)",
+        scoped_text,
+    ):
+        url = f"https://github.com/{owner}/{repo.removesuffix('.git')}"
+        if url not in scoped_repositories:
+            scoped_repositories.append(url)
+
+    return f"{scoped_text}\n\nStored GitHub repositories for this project:\n" + "\n".join(scoped_repositories)
+
+
+def read_github_repo_source(resume_source: str, project_name: str = "", project_id: str = "") -> str:
+    if project_name.strip() or project_id.strip():
+        return scoped_project_github_source(project_name=project_name, project_id=project_id)
+
     if resume_source == "resume":
         return agent.read_resume()
     if resume_source == "tailored_resume":
@@ -2197,12 +2434,17 @@ def read_github_repo_source(resume_source: str) -> str:
     )
 
 
-def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> dict[str, Any]:
+def fetch_github_context_api(
+    approved: bool,
+    resume_source: str = "resume",
+    project_name: str = "",
+    project_id: str = "",
+) -> dict[str, Any]:
     if not approved:
         return {"saved": False, "message": "GitHub context fetch was not approved."}
 
     try:
-        repo_source = read_github_repo_source(resume_source)
+        repo_source = read_github_repo_source(resume_source, project_name=project_name, project_id=project_id)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -2234,6 +2476,8 @@ def fetch_github_context_api(approved: bool, resume_source: str = "resume") -> d
     return {
         "saved": agent.has_usable_repo_context(repo_contexts),
         "path": str(path),
+        "project_name": project_name.strip(),
+        "project_id": project_id.strip(),
         "project_memory_update": project_memory_update,
         "context": repo_contexts,
     }
@@ -2583,7 +2827,7 @@ Rules for this response:
     if not analysis:
         raise HTTPException(status_code=500, detail="Agent did not return job analysis content.")
 
-    analysis_path = agent.save_analysis_output(analysis)
+    analysis_path = agent.save_analysis_output(analysis, company=company, role=role)
     history_entry = update_job_analysis_history(company, role, job_description, analysis_path)
     return {
         "analysis": analysis,
@@ -2628,11 +2872,16 @@ Project Memory, read first and use as the primary project source:
             "Never remove an entry merely to invent or substitute unsupported experience."
         )
     prompt += "\nGitHub evidence is not requested for this generation; use Project Memory, resume.txt, and job_description.txt."
+    job_description = (
+        agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
+        if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
+        else ""
+    )
+    application_hint = resolve_saved_application_hint(job_description)
     answer = run_agent_task(prompt)
-    if agent.looks_like_latex_resume(answer):
-        agent.save_tailored_resume(answer)
-    else:
+    if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    agent.save_tailored_resume(answer, company=application_hint["company"], role=application_hint["role"])
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
         "saved": True,
@@ -2642,19 +2891,18 @@ Project Memory, read first and use as the primary project source:
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
     }
     if body.include_application_hint:
-        job_description = (
-            agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
-            if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
-            else ""
-        )
-        response["application_hint"] = resolve_application_hint(job_description)
+        response["application_hint"] = application_hint
     return response
 
 
 @app.post("/api/resume/update-memory")
 def update_resume_memory(body: ResumeMemoryBody):
     try:
-        return update_memory_from_resume_source(body.resume_source)
+        return update_memory_from_resume_source(
+            body.resume_source,
+            project_name=body.project_name,
+            project_id=body.project_id,
+        )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -2689,9 +2937,10 @@ def resume_pdf_to_latex(body: ResumePdfToLatexBody):
 @app.post("/api/resume/tailored/pdf")
 def export_tailored_resume_pdf(body: TailoredResumePdfBody):
     content = body.content.strip()
+    application_hint = resolve_saved_application_hint()
     if content:
         try:
-            agent.save_tailored_resume(content)
+            agent.save_tailored_resume(content, company=application_hint["company"], role=application_hint["role"])
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
     else:
@@ -2700,7 +2949,11 @@ def export_tailored_resume_pdf(body: TailoredResumePdfBody):
         except (FileNotFoundError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-    output_pdf = compile_tailored_resume_pdf(content)
+    output_pdf = compile_tailored_resume_pdf(
+        content,
+        company=application_hint["company"],
+        role=application_hint["role"],
+    )
     return {
         "saved": True,
         "path": str(output_pdf),
@@ -2726,13 +2979,14 @@ def generate_cover_letter(body: CoverLetterBody):
         if agent.COVER_LETTER_PATH.exists()
         else None
     )
+    application_hint = resolve_saved_application_hint()
     answer = run_agent_task(prompt)
     cover_letter_was_saved = (
         agent.COVER_LETTER_PATH.exists()
         and agent.COVER_LETTER_PATH.stat().st_mtime_ns != cover_letter_mtime
     )
     if answer.strip() and not cover_letter_was_saved:
-        agent.save_cover_letter(answer)
+        agent.save_cover_letter(answer, company=application_hint["company"], role=application_hint["role"])
     cover_letter_outputs = list_output_files(agent.COVER_LETTER_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
         "saved": True,
@@ -2743,25 +2997,21 @@ def generate_cover_letter(body: CoverLetterBody):
         else answer,
     }
     if body.include_application_hint:
-        job_description = (
-            agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
-            if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
-            else ""
-        )
-        response["application_hint"] = resolve_application_hint(job_description)
+        response["application_hint"] = application_hint
     return response
 
 
 @app.post("/api/interview-prep/generate")
 def generate_interview_prep(body: InterviewPrepBody):
     prompt = build_interview_prep_prompt(body.use_github_context, body.language)
+    application_hint = resolve_saved_application_hint()
     answer = run_text_task(prompt)
     if not looks_like_interview_prep(answer):
         raise HTTPException(
             status_code=400,
             detail="Agent did not return usable interview preparation notes. Please regenerate after checking the job description and resume.",
         )
-    agent.save_interview_prep(answer)
+    agent.save_interview_prep(answer, company=application_hint["company"], role=application_hint["role"])
     interview_prep_outputs = list_output_files(agent.INTERVIEW_PREP_OUTPUT_DIR, ".txt", limit=1)
     return {
         "saved": True,
@@ -2776,7 +3026,11 @@ def generate_interview_prep(body: InterviewPrepBody):
 @app.post("/api/github/scan")
 def github_scan(body: GitHubScanBody):
     try:
-        repo_source = read_github_repo_source(body.resume_source)
+        repo_source = read_github_repo_source(
+            body.resume_source,
+            project_name=body.project_name,
+            project_id=body.project_id,
+        )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -2789,6 +3043,8 @@ def github_scan(body: GitHubScanBody):
         ],
         "token_configured": agent.github_token_is_configured(),
         "identities": identities,
+        "project_name": body.project_name.strip(),
+        "project_id": body.project_id.strip(),
     }
 
 
@@ -2814,7 +3070,12 @@ def save_github_config(body: GitHubConfigBody):
 @app.post("/api/github/context")
 def github_context(body: GitHubContextBody):
     try:
-        return fetch_github_context_api(body.approved, body.resume_source)
+        return fetch_github_context_api(
+            body.approved,
+            body.resume_source,
+            project_name=body.project_name,
+            project_id=body.project_id,
+        )
     except agent.transient_network_errors() as error:
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
 

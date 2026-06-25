@@ -47,12 +47,87 @@ function resolveProjectMemoryUpdatedAt(githubConfig, status) {
   );
 }
 
+function normalizeProjectAlias(value) {
+  let textValue = String(value || "").trim().toLowerCase();
+  const githubMatch = textValue.match(/https?:\/\/(?:www\.)?github\.com\/([a-z0-9_.-]+)\/([a-z0-9_.-]+)/);
+  if (githubMatch) textValue = `${githubMatch[1]}/${githubMatch[2]}`;
+  textValue = textValue.replace(/^https?:\/\/(?:www\.)?github\.com\//, "");
+  const repoMatch = textValue.match(/^([a-z0-9_.-]+)\/([a-z0-9_.-]+)$/);
+  if (repoMatch) textValue = repoMatch[2];
+  textValue = textValue.replace(/\.git$/, "");
+  return textValue.replace(/[^a-z0-9]+/g, "");
+}
+
+function appendProjectOption(options, usedKeys, aliases, preferredValue) {
+  const aliasValues = aliases.map((alias) => String(alias || "").trim()).filter(Boolean);
+  if (!aliasValues.length) return;
+  const keys = Array.from(new Set(aliasValues.map(normalizeProjectAlias).filter(Boolean)));
+  if (!keys.length) return;
+  const existing = options.find((option) => option.keys.some((key) => keys.includes(key)));
+  if (existing) {
+    keys.forEach((key) => {
+      if (!usedKeys.has(key)) existing.keys.push(key);
+      usedKeys.add(key);
+    });
+    return;
+  }
+  const label = String(preferredValue || aliasValues[0]).trim();
+  options.push({ label, keys });
+  keys.forEach((key) => usedKeys.add(key));
+}
+
+function collectProjectOptions(projectMemory) {
+  const options = [];
+  const usedKeys = new Set();
+  const rawProjects = projectMemory?.projects;
+  const projects = Array.isArray(rawProjects)
+    ? rawProjects
+    : rawProjects && typeof rawProjects === "object"
+      ? [rawProjects]
+      : [];
+
+  projects.forEach((project) => {
+    if (!project || typeof project !== "object") return;
+    const aliases = [
+      project.project_name,
+      project.project_id,
+      project.name,
+      project.title,
+      project.repository,
+    ];
+
+    const identity = project.identity;
+    if (identity && typeof identity === "object") {
+      aliases.push(identity.project_name, identity.project_id, identity.name);
+    }
+
+    const evidenceNotes = String(project.evidence_notes || "");
+    evidenceNotes.replace(
+      /(?:Repository|repository|repo)\s*:\s*([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/g,
+      (_, repository) => {
+        aliases.push(repository.replace(/\.git$/, ""));
+        return "";
+      },
+    );
+
+    appendProjectOption(
+      options,
+      usedKeys,
+      aliases,
+      project.project_name || project.name || project.title || project.project_id || project.repository,
+    );
+  });
+
+  return options.sort((left, right) => left.label.localeCompare(right.label));
+}
+
 export default function GitHubContext() {
   const { language } = useLanguage();
   const copy = text[language].github;
   const [scan, setScan] = useState(null);
   const [context, setContext] = useState(null);
   const [source, setSource] = useState("tailored_resume_and_resume_and_memory");
+  const [projectScope, setProjectScope] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [githubForm, setGithubForm] = useState({
     usernames: "",
@@ -62,12 +137,17 @@ export default function GitHubContext() {
   });
   const [tokenConfigured, setTokenConfigured] = useState(false);
   const [memoryRepositories, setMemoryRepositories] = useState([]);
+  const [projectOptions, setProjectOptions] = useState([]);
   const [projectMemoryUpdatedAt, setProjectMemoryUpdatedAt] = useState(null);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadGithubConfig = () =>
     run(async () => {
-      const [data, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
+      const [data, status, projectMemoryFile] = await Promise.all([
+        api.getGithubConfig(),
+        api.getStatus(),
+        api.getFile("project_memory").catch(() => ({ content: "" })),
+      ]);
       setGithubForm((current) => ({
         usernames: listToText(data.identities?.usernames),
         author_names: listToText(data.identities?.author_names),
@@ -76,6 +156,11 @@ export default function GitHubContext() {
       }));
       setTokenConfigured(data.token_configured);
       setMemoryRepositories(data.memory_repositories || []);
+      try {
+        setProjectOptions(collectProjectOptions(JSON.parse(projectMemoryFile.content || "{}")));
+      } catch {
+        setProjectOptions([]);
+      }
       setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(data, status));
       return data;
     });
@@ -107,7 +192,9 @@ export default function GitHubContext() {
 
   const scanRepos = () =>
     run(async () => {
-      const data = await api.scanGithub(source);
+      const data = await api.scanGithub(source, {
+        project_name: projectScope.trim(),
+      });
       setScan(data);
       setContext(null);
       setTokenConfigured(data.token_configured);
@@ -116,7 +203,9 @@ export default function GitHubContext() {
 
   const approveFetchContext = () =>
     run(async () => {
-      const data = await api.fetchGithubContext(true, source);
+      const data = await api.fetchGithubContext(true, source, {
+        project_name: projectScope.trim(),
+      });
       const [githubConfig, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
       setContext(data);
       setMemoryRepositories(githubConfig.memory_repositories || []);
@@ -135,6 +224,25 @@ export default function GitHubContext() {
     ...(identities.author_names || []).map((value) => `Commit author name: ${value}`),
     ...(identities.author_emails || []).map((value) => `Commit author email: ${value}`),
   ];
+  const projectScopeLabels = [];
+  const projectScopeKeys = new Set();
+  projectOptions.forEach((option) => {
+    if (option.label && !projectScopeLabels.includes(option.label)) {
+      projectScopeLabels.push(option.label);
+    }
+    (option.keys || []).forEach((key) => projectScopeKeys.add(key));
+  });
+  [...(scan?.repos || []).map((repo) => `${repo.owner}/${repo.repo}`), ...memoryRepositories.map((repo) => repo.repository)]
+    .filter(Boolean)
+    .forEach((option) => {
+      const key = normalizeProjectAlias(option);
+      if (key && !projectScopeKeys.has(key) && !projectScopeLabels.includes(option)) {
+        projectScopeKeys.add(key);
+        projectScopeLabels.push(option);
+      }
+    });
+  const projectScopeOptions = projectScopeLabels
+    .sort((left, right) => left.localeCompare(right));
   const repositoryEvidenceTitle =
     language === "en" ? (copy.memoryRepositories || "Repositories in Chroma Evidence DB") : "Chroma 证据库中的仓库";
   const repositoryEvidenceHint =
@@ -222,6 +330,24 @@ export default function GitHubContext() {
             <option value="tailored_resume">{copy.tailoredResume}</option>
             <option value="memory">{copy.memoryProjects || "仅记忆中的项目"}</option>
           </select>
+        </div>
+        <div className="field compact-field">
+          <label>{copy.projectScopeLabel || "Project scope"}</label>
+          <input
+            list="github-project-scope-options"
+            value={projectScope}
+            onChange={(event) => setProjectScope(event.target.value)}
+            disabled={loading}
+            placeholder={copy.projectScopePlaceholder || "Choose a project, or type a project name / ID"}
+          />
+          <datalist id="github-project-scope-options">
+            {projectScopeOptions.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
+          <p className="helper-text">
+            {copy.projectScopeHint || "Optional. Suggestions come from Project Memory, scanned repositories, and local evidence; leave blank to scan every repository in the selected sources."}
+          </p>
         </div>
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={scanRepos} disabled={loading}>

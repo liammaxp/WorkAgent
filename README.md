@@ -235,6 +235,8 @@ Main FastAPI endpoints:
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
 - `POST /api/resume/update-memory`
+- `POST /api/resume/pdf-to-latex`
+- `POST /api/resume/tailored/pdf`
 - `POST /api/cover-letter/generate`
 - `POST /api/interview-prep/generate`
 - `POST /api/github/scan`
@@ -266,7 +268,11 @@ Agent Chat image requests use data URLs:
 
 `GET /api/status` includes `file_metadata` timestamps for local working files. The frontend uses those timestamps to avoid showing stale generated resume, cover letter, and interview prep outputs from before the current app session.
 
+`GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions.
+
 `POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+
+`POST /api/resume/pdf-to-latex` converts an uploaded PDF resume into editable LaTeX and saves it as the base resume. `POST /api/resume/tailored/pdf` compiles the current tailored LaTeX resume into a PDF output file.
 
 `POST /api/cover-letter/generate` also accepts `include_application_hint` and can return the same extracted application fields.
 
@@ -732,6 +738,8 @@ background/prompt.example.txt
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
 - `POST /api/resume/update-memory`
+- `POST /api/resume/pdf-to-latex`
+- `POST /api/resume/tailored/pdf`
 - `POST /api/cover-letter/generate`
 - `POST /api/interview-prep/generate`
 - `POST /api/github/scan`
@@ -763,7 +771,11 @@ Agent Chat 图片请求使用 data URL：
 
 `GET /api/status` 会返回本地工作文件的 `file_metadata` 时间戳。前端用这些时间戳避免展示当前应用会话之前生成的旧版简历、求职信和面试准备内容。
 
+`GET /api/output-file`、`POST /api/output-file/launch` 和 `DELETE /api/output-file` 让前端读取、用桌面默认应用打开或删除生成输出文件，例如定制简历文本版本和导出的 PDF 版本。
+
 `POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
+
+`POST /api/resume/pdf-to-latex` 会把上传的 PDF 简历转换为可编辑 LaTeX，并保存为基础简历。`POST /api/resume/tailored/pdf` 会把当前定制版 LaTeX 简历编译成 PDF 输出文件。
 
 `POST /api/cover-letter/generate` 也接受 `include_application_hint`，并可以返回同样的投递记录字段。
 

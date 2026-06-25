@@ -149,25 +149,7 @@ export default function CoverLetter() {
             {loading ? copy.generating : copy.generate}
           </button>
         </div>
-        <OutputFileSelect
-          files={outputFiles}
-          value={outputPath}
-          disabled={loading}
-          onSelect={(path) => run(async () => {
-            const data = await api.getOutputFile(path);
-            setContent(data.content || "");
-            setOutputPath(path);
-          })}
-          onDelete={(path) => run(async () => {
-            await api.deleteOutputFile(path);
-            setOutputFiles((files) => files.filter((file) => file.path !== path));
-            if (outputPath === path) {
-              setContent("");
-              setOutputPath("");
-              cachedCoverLetter = null;
-            }
-          }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
-        />
+
       </section>
 
       <EditorCard
@@ -177,6 +159,28 @@ export default function CoverLetter() {
         onSave={save}
         saving={loading}
         placeholder={copy.placeholder}
+        extraActions={
+          <OutputFileSelect
+            files={outputFiles}
+            value={outputPath}
+            disabled={loading}
+            inline
+            onSelect={(path) => run(async () => {
+              const data = await api.getOutputFile(path);
+              setContent(data.content || "");
+              setOutputPath(path);
+            })}
+            onDelete={(path) => run(async () => {
+              await api.deleteOutputFile(path);
+              setOutputFiles((files) => files.filter((file) => file.path !== path));
+              if (outputPath === path) {
+                setContent("");
+                setOutputPath("");
+                cachedCoverLetter = null;
+              }
+            }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+          />
+        }
         short
       />
     </>

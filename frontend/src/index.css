@@ -353,6 +353,7 @@ textarea {
 .btn-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   margin-top: 12px;
 }
@@ -452,6 +453,14 @@ textarea {
   font-family: inherit;
 }
 
+.compact-field {
+  max-width: 560px;
+}
+
+.compact-field .helper-text {
+  align-self: flex-start;
+}
+
 .alert {
   padding: 12px 14px;
   border-radius: 10px;
@@ -474,11 +483,52 @@ textarea {
   margin-top: 22px;
 }
 
+.output-file-select-inline {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  margin: 0;
+  margin-bottom: 0;
+}
+
+.output-file-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.output-file-select-inline .output-file-control {
+  flex: 0 0 auto;
+}
+
+.output-file-label {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.output-file-select-inline select {
+  width: clamp(220px, 24vw, 420px);
+  min-width: 220px;
+}
+
 .output-file-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 6px;
+}
+
+.output-file-select-inline .output-file-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-top: 0;
 }
 
 .alert.error {

@@ -65,6 +65,7 @@ INTERVIEW_PREP_PATH = INFORMATION_DIR / "interview_prep.txt"
 APPLICATION_DB_PATH = INFORMATION_DIR / "applications.sqlite3"
 PLACEHOLDER_TEXT = "Paste "
 MEMORY_STORE = MemoryVectorStore(CHROMA_DB_PATH, MEMORY_PATH, GITHUB_CONTEXT_OUTPUT_DIR)
+APPLICATION_OUTPUT_METADATA = {"company": "", "role": ""}
 DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 JOB_AGENT_PROMPT = """
 Analyze the job description and produce:
@@ -657,8 +658,72 @@ def timestamp_slug():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def save_analysis_output(content, prefix="job_analysis"):
-    path = ANALYSIS_OUTPUT_DIR / f"{prefix}_{timestamp_slug()}.txt"
+RESERVED_WINDOWS_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def safe_filename_part(value, fallback="unknown", max_length=80):
+    text = str(value or "").strip()
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    if not text:
+        text = fallback
+    if text.upper() in RESERVED_WINDOWS_FILENAMES:
+        text = f"{text}_"
+    text = text[:max_length].strip(" .")
+    return text or fallback
+
+
+def application_output_stem(company="", role="", fallback_prefix="output"):
+    company_part = safe_filename_part(company, "", max_length=80)
+    role_part = safe_filename_part(role, "", max_length=100)
+    if company_part or role_part:
+        return "_".join(part for part in [company_part, role_part] if part)
+    return f"{fallback_prefix}_{timestamp_slug()}"
+
+
+def set_application_output_metadata(company="", role=""):
+    APPLICATION_OUTPUT_METADATA["company"] = str(company or "").strip()
+    APPLICATION_OUTPUT_METADATA["role"] = str(role or "").strip()
+
+
+def current_application_output_metadata(company="", role=""):
+    return {
+        "company": str(company or APPLICATION_OUTPUT_METADATA.get("company") or "").strip(),
+        "role": str(role or APPLICATION_OUTPUT_METADATA.get("role") or "").strip(),
+    }
+
+
+def unique_application_output_path(directory, company="", role="", suffix=".txt", fallback_prefix="output"):
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = application_output_stem(company, role, fallback_prefix)
+    candidate = directory / f"{stem}{suffix}"
+    if not candidate.exists():
+        return candidate
+
+    index = 2
+    while True:
+        candidate = directory / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def save_analysis_output(content, prefix="job_analysis", company="", role=""):
+    metadata = current_application_output_metadata(company, role)
+    path = unique_application_output_path(
+        ANALYSIS_OUTPUT_DIR,
+        company=metadata["company"],
+        role=metadata["role"],
+        suffix=".txt",
+        fallback_prefix=prefix,
+    )
     write_text_file(path, content)
     return path
 
@@ -1074,26 +1139,47 @@ def job_description_output_language_instruction(job_description=None):
     )
 
 
-def save_tailored_resume(content):
+def save_tailored_resume(content, company="", role=""):
     latex = extract_latex_document(content)
     if not latex:
         raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
 
-    version_path = TAILORED_RESUME_OUTPUT_DIR / f"tailored_resume_{timestamp_slug()}.txt"
+    metadata = current_application_output_metadata(company, role)
+    version_path = unique_application_output_path(
+        TAILORED_RESUME_OUTPUT_DIR,
+        company=metadata["company"],
+        role=metadata["role"],
+        suffix=".txt",
+        fallback_prefix="tailored_resume",
+    )
     write_text_file(OUTPUT_RESUME_PATH, latex)
     write_text_file(version_path, latex)
     return f"Saved tailored resume to {OUTPUT_RESUME_PATH} and {version_path}"
 
 
-def save_cover_letter(content):
-    output_path = COVER_LETTER_OUTPUT_DIR / f"cover_letter_{timestamp_slug()}.txt"
+def save_cover_letter(content, company="", role=""):
+    metadata = current_application_output_metadata(company, role)
+    output_path = unique_application_output_path(
+        COVER_LETTER_OUTPUT_DIR,
+        company=metadata["company"],
+        role=metadata["role"],
+        suffix=".txt",
+        fallback_prefix="cover_letter",
+    )
     write_text_file(COVER_LETTER_PATH, content)
     write_text_file(output_path, content)
     return f"Saved cover letter to {COVER_LETTER_PATH} and {output_path}"
 
 
-def save_interview_prep(content):
-    output_path = INTERVIEW_PREP_OUTPUT_DIR / f"interview_prep_{timestamp_slug()}.txt"
+def save_interview_prep(content, company="", role=""):
+    metadata = current_application_output_metadata(company, role)
+    output_path = unique_application_output_path(
+        INTERVIEW_PREP_OUTPUT_DIR,
+        company=metadata["company"],
+        role=metadata["role"],
+        suffix=".txt",
+        fallback_prefix="interview_prep",
+    )
     write_text_file(INTERVIEW_PREP_PATH, content)
     write_text_file(output_path, content)
     return f"Saved interview preparation notes to {INTERVIEW_PREP_PATH} and {output_path}"
@@ -1669,7 +1755,7 @@ def extract_github_repos(text):
     seen = set()
 
     for owner, repo in GITHUB_REPO_PATTERN.findall(text):
-        repo = repo.removesuffix(".git")
+        repo = repo.removesuffix(".git").rstrip(".,;:)]}>")
         key = (owner, repo)
         if key in seen:
             continue
