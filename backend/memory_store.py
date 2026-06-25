@@ -24,18 +24,33 @@ PROFILE_COLLECTION = "profile_facts"
 GITHUB_COLLECTION = "github_evidence"
 PROFILE_MIGRATION_MARKER = ".legacy_profile_migrated"
 TOKEN_PATTERN = re.compile(r"[\w.+#-]+", re.UNICODE)
+GITHUB_URL_PATTERN = re.compile(
+    r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
+)
+GITHUB_REPOSITORY_PATTERN = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$")
 
 
 def normalized_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
 
 
-def compact_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
 def timestamp_slug() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def canonical_github_repository(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    url_match = GITHUB_URL_PATTERN.search(text)
+    if url_match:
+        owner, repo = url_match.groups()
+        return f"{owner}/{repo.removesuffix('.git').rstrip('.,;:)]}>')}"
+    repo_match = GITHUB_REPOSITORY_PATTERN.match(text)
+    if repo_match:
+        owner, repo = repo_match.groups()
+        return f"{owner}/{repo.removesuffix('.git').rstrip('.,;:)]}>')}"
+    return text.removesuffix(".git").rstrip(".,;:)]}>")
 
 
 class LocalHashEmbedding:
@@ -325,7 +340,11 @@ class MemoryVectorStore:
 
     @staticmethod
     def _repo_key(context: dict[str, Any], index: int) -> str:
-        return str(context.get("repository") or context.get("url") or f"repo-{index}")
+        key = canonical_github_repository(context.get("repository"))
+        if key:
+            return key
+        key = canonical_github_repository(context.get("url"))
+        return key or f"repo-{index}"
 
     def _store_github_contexts(self, contexts: list[dict[str, Any]], source: str) -> dict[str, Any]:
         run_id = timestamp_slug()
@@ -346,6 +365,7 @@ class MemoryVectorStore:
             )
         result = self._upsert_with_similarity(self._github, records)
         result["run_id"] = run_id
+        result["cleanup"] = self.cleanup_github_repositories()
         return result
 
     def store_github_contexts(
@@ -374,15 +394,61 @@ class MemoryVectorStore:
         if not self._github.count():
             return []
         metadatas = self._github.get(include=["metadatas"]).get("metadatas", [])
-        repositories = [
-            {
-                "repository": str(metadata.get("repository", "")),
-                "updated_at": str(metadata.get("updated_at", "")),
-            }
-            for metadata in metadatas
-            if metadata.get("repository")
-        ]
+        repository_map: dict[str, dict[str, str]] = {}
+        for metadata in metadatas:
+            repository = canonical_github_repository(metadata.get("repository"))
+            if not repository:
+                continue
+            updated_at = str(metadata.get("updated_at", ""))
+            current = repository_map.get(repository)
+            if current is None or updated_at > current["updated_at"]:
+                repository_map[repository] = {"repository": repository, "updated_at": updated_at}
+        repositories = list(repository_map.values())
         return sorted(repositories, key=lambda item: item["updated_at"], reverse=True)
+
+    def cleanup_github_repositories(self) -> dict[str, int]:
+        self._ensure_client()
+        if not self._github.count():
+            return {"canonicalized": 0, "deleted": 0}
+
+        existing = self._github.get(include=["documents", "metadatas"])
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for record_id, document, metadata in zip(
+            existing.get("ids", []),
+            existing.get("documents", []),
+            existing.get("metadatas", []),
+        ):
+            repository = canonical_github_repository(metadata.get("repository"))
+            if not repository:
+                continue
+            groups.setdefault(repository, []).append(
+                {"id": record_id, "document": document, "metadata": metadata}
+            )
+
+        canonicalized = 0
+        deleted_ids = []
+        for repository, records in groups.items():
+            records.sort(key=lambda record: str(record["metadata"].get("updated_at", "")), reverse=True)
+            keep = records[0]
+            canonical_id = self._record_id("github", repository)
+            if keep["id"] != canonical_id or keep["metadata"].get("repository") != repository:
+                payload = json.loads(keep["document"].split("\n", 1)[1])
+                document = f"Approved GitHub evidence for {repository}\n{normalized_json(payload)}"
+                metadata = {**keep["metadata"], "repository": repository}
+                self._github.upsert(
+                    ids=[canonical_id],
+                    embeddings=[self.embedder.embed(document)],
+                    documents=[document],
+                    metadatas=[metadata],
+                )
+                canonicalized += 1
+            for record in records:
+                if record["id"] != canonical_id:
+                    deleted_ids.append(record["id"])
+
+        if deleted_ids:
+            self._github.delete(ids=sorted(set(deleted_ids)))
+        return {"canonicalized": canonicalized, "deleted": len(set(deleted_ids))}
 
     def github_count(self) -> int:
         self._ensure_client()

@@ -6,6 +6,7 @@ import {
   Alert,
   EditorCard,
   LoadingBar,
+  OutputFileSelect,
   PageHeader,
   StatusBadge,
   useAsyncAction,
@@ -31,6 +32,7 @@ export default function CoverLetter() {
   const [style, setStyle] = useState("concise");
   const [useGithub, setUseGithub] = useState(() => readStoredBoolean("workagent-cover-letter-use-github", false));
   const [outputPath, setOutputPath] = useState("");
+  const [outputFiles, setOutputFiles] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
 
   const loadCoverLetter = useCallback(() => {
@@ -48,6 +50,7 @@ export default function CoverLetter() {
         : "";
       setContent(latestContent);
       setOutputPath(latestOutputPath);
+      setOutputFiles(status.outputs?.cover_letters || []);
       cachedCoverLetter = {
         content: latestContent,
         jobDescription: jobData.content || "",
@@ -91,8 +94,10 @@ export default function CoverLetter() {
         use_github_context: useGithub,
         style,
       });
+      const status = await api.getStatus();
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
+      setOutputFiles(status.outputs?.cover_letters || []);
       cachedCoverLetter = {
         content: data.content || "",
         jobDescription: jobData.content || "",
@@ -144,7 +149,7 @@ export default function CoverLetter() {
             {loading ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && <p className="meta-line">{common.recentOutput}{outputPath}</p>}
+
       </section>
 
       <EditorCard
@@ -154,6 +159,28 @@ export default function CoverLetter() {
         onSave={save}
         saving={loading}
         placeholder={copy.placeholder}
+        extraActions={
+          <OutputFileSelect
+            files={outputFiles}
+            value={outputPath}
+            disabled={loading}
+            inline
+            onSelect={(path) => run(async () => {
+              const data = await api.getOutputFile(path);
+              setContent(data.content || "");
+              setOutputPath(path);
+            })}
+            onDelete={(path) => run(async () => {
+              await api.deleteOutputFile(path);
+              setOutputFiles((files) => files.filter((file) => file.path !== path));
+              if (outputPath === path) {
+                setContent("");
+                setOutputPath("");
+                cachedCoverLetter = null;
+              }
+            }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+          />
+        }
         short
       />
     </>

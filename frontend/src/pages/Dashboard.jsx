@@ -226,7 +226,9 @@ export default function Dashboard() {
               <h2 className="card-title">{copy.recentAnalysis}</h2>
               {status.outputs.analysis.length ? (
                 <ul className="output-list">
-                  {status.outputs.analysis.map((item) => <li key={item.path || item.name}>{item.name}</li>)}
+                  {status.outputs.analysis.map((item) => (
+                    <li key={item.path}>{new Date(item.updated_at).toLocaleString(language === "zh" ? "zh-CN" : "en-US", { hour12: false })}</li>
+                  ))}
                 </ul>
               ) : (
                 <p className="empty-state">{copy.noAnalysis}</p>

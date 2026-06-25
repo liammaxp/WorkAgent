@@ -96,6 +96,69 @@ export function StatusBadge({ ready }) {
   );
 }
 
+export function OutputFileSelect({
+  files = [],
+  value = "",
+  onSelect,
+  onOpen = null,
+  onDelete = null,
+  disabled = false,
+  showWhenEmpty = false,
+  label: customLabel = "",
+  placeholder: customPlaceholder = "",
+  inline = false,
+}) {
+  const { language } = useLanguage();
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  const label = customLabel || (language === "zh" ? "历史输出" : "Output history");
+  const placeholder = customPlaceholder || (language === "zh" ? "选择生成时间以查看内容" : "Choose a generated time to view");
+  const openLabel = language === "zh" ? "打开" : "Open";
+  const deleteLabel = language === "zh" ? "删除" : "Delete";
+
+  if (!files.length && !showWhenEmpty) return null;
+
+  return (
+    <div className={`field output-file-select${inline ? " output-file-select-inline" : ""}`}>
+      {!inline && <label>{label}</label>}
+      <div className="output-file-control">
+        {inline && <span className="output-file-label">{label}</span>}
+        <select
+          value={files.some((file) => file.path === value) ? value : ""}
+          disabled={disabled || !files.length}
+          aria-label={label}
+          onChange={(event) => {
+            const path = event.target.value;
+            if (path) onSelect(path);
+          }}
+        >
+          <option value="">{placeholder}</option>
+          {files.map((file) => {
+            const date = new Date(file.generated_at || file.updated_at || file.generated_at_ms || 0);
+            const displayTime = Number.isNaN(date.getTime())
+              ? file.generated_at_display || file.updated_at_display || "-"
+              : date.toLocaleString(locale, { hour12: false });
+            return <option key={file.path} value={file.path}>{displayTime}</option>;
+          })}
+        </select>
+      </div>
+      {(onOpen || onDelete) && (
+        <div className="output-file-actions">
+          {onOpen && (
+            <button type="button" className="btn btn-secondary" disabled={disabled || !value} onClick={() => onOpen(value)}>
+              {openLabel}
+            </button>
+          )}
+          {onDelete && (
+            <button type="button" className="btn btn-danger" disabled={disabled || !value} onClick={() => onDelete(value)}>
+              {deleteLabel}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EditorCard({
   title,
   value,

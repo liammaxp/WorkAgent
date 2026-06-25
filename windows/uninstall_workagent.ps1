@@ -1,11 +1,11 @@
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendDir = Join-Path $root "backend"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $frontendDir = Join-Path $root "frontend"
-$requirementsFile = Join-Path $backendDir "requirements.txt"
 $nodeModulesDir = Join-Path $frontendDir "node_modules"
 $latexWarmupDir = Join-Path $root "outputs\latex_install_warmup"
+$venvDir = Join-Path $root ".venv"
 
 function Confirm-Action {
     param(
@@ -49,34 +49,17 @@ function Remove-DirectoryInsideWorkspace {
 
     $resolvedRoot = [System.IO.Path]::GetFullPath($root)
     $resolvedPath = [System.IO.Path]::GetFullPath($Path)
-    if (-not $resolvedPath.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $resolvedRootPrefix = $resolvedRoot.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedPath.StartsWith($resolvedRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         Write-Host "Refusing to remove path outside workspace: $resolvedPath"
         exit 1
     }
 
     Write-Host "Removing $Label..."
     Remove-Item -LiteralPath $resolvedPath -Recurse -Force
-}
-
-function Uninstall-PythonPackages {
-    if (-not (Test-Path $requirementsFile)) {
-        Write-Host "Backend requirements file not found; skipping Python package uninstall."
-        return
-    }
-
-    if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-        Write-Host "python not found; skipping Python package uninstall."
-        return
-    }
-
-    Write-Host "Uninstalling backend Python packages from the current Python environment..."
-    Push-Location $backendDir
-    try {
-        Invoke-CheckedCommand { python -m pip uninstall -r requirements.txt -y } "Python package uninstall failed."
-    }
-    finally {
-        Pop-Location
-    }
 }
 
 function Test-MiktexInstalled {
@@ -149,16 +132,7 @@ Write-Host ""
 
 Remove-DirectoryInsideWorkspace $nodeModulesDir "frontend node_modules"
 Remove-DirectoryInsideWorkspace $latexWarmupDir "LaTeX package warmup files"
-
-Write-Host ""
-Write-Host "Python packages were installed into the current Python environment."
-Write-Host "Only uninstall them if this Python environment is dedicated to WorkAgent."
-if (Confirm-Action "Uninstall backend Python packages from backend/requirements.txt?") {
-    Uninstall-PythonPackages
-}
-else {
-    Write-Host "Skipping Python package uninstall."
-}
+Remove-DirectoryInsideWorkspace $venvDir "WorkAgent Python virtual environment"
 
 Write-Host ""
 Write-Host "MiKTeX may be shared by other LaTeX projects."

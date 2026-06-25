@@ -1,9 +1,5 @@
 const APP_OPENED_AT = Date.now();
 
-export function getAppOpenedAt() {
-  return APP_OPENED_AT;
-}
-
 export function fileChangedSinceAppOpened(status, name) {
   const mtime = status?.file_metadata?.[name]?.mtime_ms;
   return typeof mtime === "number" && mtime >= APP_OPENED_AT;

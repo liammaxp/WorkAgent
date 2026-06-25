@@ -7,6 +7,7 @@ import {
   ConfirmDialog,
   EditorCard,
   LoadingBar,
+  OutputFileSelect,
   PageHeader,
   useAsyncAction,
 } from "../components/ui.jsx";
@@ -69,7 +70,11 @@ export default function Resume() {
     readStoredBoolean("workagent-resume-allow-experience-removal", false),
   );
   const [outputPath, setOutputPath] = useState("");
+  const [outputFiles, setOutputFiles] = useState([]);
+  const [pdfPath, setPdfPath] = useState("");
+  const [pdfFiles, setPdfFiles] = useState([]);
   const [memorySummary, setMemorySummary] = useState("");
+  const [memoryProject, setMemoryProject] = useState("");
   const [routeError, setRouteError] = useState("");
   const [applicationPrompt, setApplicationPrompt] = useState(null);
   const [applicationForm, setApplicationForm] = useState(EMPTY_APPLICATION_FORM);
@@ -94,6 +99,10 @@ export default function Resume() {
         api.getStatus(),
       ]);
       setResume(base.content || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       if (!fileChangedSinceAppOpened(status, "tailored_resume")) {
         setTailored("");
         setOutputPath("");
@@ -184,7 +193,9 @@ export default function Resume() {
   const updateMemory = () =>
     runResumeAction("memory", async () => {
       await api.saveFile("resume", resume);
-      const data = await api.updateMemoryFromResume("resume");
+      const data = await api.updateMemoryFromResume("resume", {
+        project_name: memoryProject.trim(),
+      });
       const additions = data.additions || [];
       if (data.updated && additions.length) {
         setMemorySummary(additions.join("\n"));
@@ -199,12 +210,21 @@ export default function Resume() {
       await api.saveFile("tailored_resume", tailored);
       const status = await api.getStatus();
       setOutputPath(status.outputs?.tailored_resumes?.[0]?.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
     }, copy.tailoredSaved);
 
   const exportTailoredPdf = () =>
     runResumeAction("exportPdf", async () => {
       const data = await api.exportTailoredResumePdf(tailored);
-      setOutputPath(data.output_path || data.path || "");
+      const status = await api.getStatus();
+      setPdfPath(data.output_path || data.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       return data;
     }, copy.tailoredPdfExported || "Tailored resume PDF exported");
 
@@ -221,8 +241,13 @@ export default function Resume() {
         allowExperienceRemoval,
         needsApplicationHint,
       );
+      const status = await api.getStatus();
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
+      setOutputFiles([
+        ...(status.outputs?.tailored_resumes || []),
+      ]);
+      setPdfFiles(status.outputs?.tailored_resume_pdfs || []);
       if (needsApplicationHint) {
         setApplicationForm({ ...EMPTY_APPLICATION_FORM, ...(data.application_hint || {}) });
         setApplicationPrompt({
@@ -291,6 +316,16 @@ export default function Resume() {
       <section className="card">
         <h2 className="card-title">{copy.memoryTitle}</h2>
         <p className="helper-paragraph">{copy.memoryDescription}</p>
+        <div className="field compact-field">
+          <label>{copy.memoryProjectLabel || "Project scope"}</label>
+          <input
+            value={memoryProject}
+            onChange={(event) => setMemoryProject(event.target.value)}
+            disabled={loading}
+            placeholder={copy.memoryProjectPlaceholder || "Leave blank to scan all memory"}
+          />
+          <p className="helper-text">{copy.memoryProjectHint || "Optional. Specify a project name or ID to update only that project's memory."}</p>
+        </div>
         <div className="btn-row">
           <button type="button" className="btn btn-secondary" onClick={updateMemory} disabled={loading}>
             {activeAction === "memory" ? copy.memoryUpdating : copy.memoryUpdate}
@@ -331,11 +366,7 @@ export default function Resume() {
             {activeAction === "generate" ? copy.generating : copy.generate}
           </button>
         </div>
-        {outputPath && (
-          <p className="meta-line">
-            {common.recentOutput}{outputPath}
-          </p>
-        )}
+
       </section>
 
       <EditorCard
@@ -347,9 +378,46 @@ export default function Resume() {
         disabled={loading}
         placeholder={copy.tailoredPlaceholder}
         extraActions={
-          <button type="button" className="btn btn-secondary" onClick={exportTailoredPdf} disabled={loading}>
-            {activeAction === "exportPdf" ? copy.tailoredPdfExporting || "Exporting..." : copy.exportTailoredPdf || "Export PDF"}
-          </button>
+          <>
+            <OutputFileSelect
+              files={outputFiles}
+              value={outputPath}
+              disabled={loading}
+              inline
+              onSelect={(path) => runResumeAction("loadOutput", async () => {
+                const data = await api.getOutputFile(path);
+                setTailored(data.content || "");
+                setOutputPath(path);
+              })}
+              onDelete={(path) => runResumeAction("deleteOutput", async () => {
+                await api.deleteOutputFile(path);
+                setOutputFiles((files) => files.filter((file) => file.path !== path));
+                if (outputPath === path) {
+                  setTailored("");
+                  setOutputPath("");
+                }
+              }, language === "zh" ? "输出文件已删除" : "Output file deleted")}
+            />
+            <button type="button" className="btn btn-secondary" onClick={exportTailoredPdf} disabled={loading}>
+              {activeAction === "exportPdf" ? copy.tailoredPdfExporting || "Exporting..." : copy.exportTailoredPdf || "Export PDF"}
+            </button>
+            <OutputFileSelect
+              files={pdfFiles}
+              value={pdfPath}
+              disabled={loading}
+              showWhenEmpty
+              inline
+              label={language === "zh" ? "PDF 历史" : "PDF history"}
+              placeholder={language === "zh" ? "选择 PDF" : "Choose PDF"}
+              onSelect={setPdfPath}
+              onOpen={(path) => runResumeAction("openPdf", () => api.launchOutputFile(path))}
+              onDelete={(path) => runResumeAction("deletePdf", async () => {
+                await api.deleteOutputFile(path);
+                setPdfFiles((files) => files.filter((file) => file.path !== path));
+                if (pdfPath === path) setPdfPath("");
+              }, language === "zh" ? "PDF 文件已删除" : "PDF file deleted")}
+            />
+          </>
         }
       />
 
