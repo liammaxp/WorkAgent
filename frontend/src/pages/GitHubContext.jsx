@@ -128,6 +128,8 @@ export default function GitHubContext() {
   const [context, setContext] = useState(null);
   const [source, setSource] = useState("tailored_resume_and_resume_and_memory");
   const [projectScope, setProjectScope] = useState("");
+  const [forceRefresh, setForceRefresh] = useState(false);
+  const [reanalyzeCached, setReanalyzeCached] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [githubForm, setGithubForm] = useState({
     usernames: "",
@@ -205,6 +207,8 @@ export default function GitHubContext() {
     run(async () => {
       const data = await api.fetchGithubContext(true, source, {
         project_name: projectScope.trim(),
+        force_refresh: forceRefresh,
+        reanalyze_cached: reanalyzeCached,
       });
       const [githubConfig, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
       setContext(data);
@@ -309,6 +313,27 @@ export default function GitHubContext() {
             />
           </div>
         </div>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={forceRefresh}
+            onChange={(event) => setForceRefresh(event.target.checked)}
+            disabled={loading}
+          />
+          {copy.forceRefresh || "Force refresh from GitHub"}
+        </label>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={reanalyzeCached}
+            onChange={(event) => setReanalyzeCached(event.target.checked)}
+            disabled={loading}
+          />
+          {copy.reanalyzeCached || "Reanalyze cached evidence only"}
+        </label>
+        <p className="helper-text">
+          {copy.cacheHint || "By default, unchanged repositories reuse cached GitHub evidence and skip full README/commit/diff fetching."}
+        </p>
         <div className="btn-row">
           <button type="button" className="btn btn-primary" onClick={saveGithubConfig} disabled={loading}>
             {copy.saveConfig}
@@ -410,6 +435,18 @@ export default function GitHubContext() {
       {context?.context && (
         <section className="card">
           <h2 className="card-title">{copy.contextSummary}</h2>
+          {context.scan_results?.length ? (
+            <div className="repo-list" style={{ marginBottom: 16 }}>
+              {context.scan_results.map((result) => (
+                <div key={result.repository} className="repo-item">
+                  <span>{result.repository}</span>
+                  <span className="status-line">
+                    {result.cache_status}{result.change_reason ? ` · ${result.change_reason}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <pre className="json-preview">{JSON.stringify(context.context, null, 2)}</pre>
         </section>
       )}
@@ -423,6 +460,16 @@ export default function GitHubContext() {
         onConfirm={approveFetchContext}
       >
         <p>{copy.allowBody}</p>
+        <p className="helper-text">
+          {forceRefresh
+            ? (copy.forceRefreshConfirm || "Force refresh is on; WorkAgent will fetch full repository context even when the latest commit is unchanged.")
+            : (copy.cacheConfirm || "WorkAgent will first compare cached ETags and latest commit SHAs, then reuse cached context for unchanged repositories.")}
+        </p>
+        {reanalyzeCached && (
+          <p className="helper-text">
+            {copy.reanalyzeCachedConfirm || "Cached repository context will be reanalyzed into Project Memory without forcing a full GitHub refetch."}
+          </p>
+        )}
         {scan?.repos?.length ? (
           <ul>
             {scan.repos.map((repo) => <li key={repo.url}>{repo.owner}/{repo.repo}</li>)}

@@ -16,9 +16,10 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -223,6 +224,12 @@ Rules:
 
 MAX_STAGED_PROJECTS = 3
 MAX_STAGED_TEXT_CHARS = 12000
+MAX_PROMPT_FILES_PER_REPO = 12
+MAX_PROMPT_DIFF_SIGNALS = 20
+MAX_PROMPT_CLAIMS = 12
+MAX_PROMPT_SIGNAL_CHARS = 240
+MAX_PROMPT_FILE_SUMMARY_CHARS = 500
+MAX_PROMPT_EVIDENCE_CHARS = 9000
 
 
 class ProviderBody(BaseModel):
@@ -339,6 +346,8 @@ class GitHubContextBody(BaseModel):
     resume_source: str = "resume"
     project_name: str = ""
     project_id: str = ""
+    force_refresh: bool = False
+    reanalyze_cached: bool = False
 
 
 class GitHubConfigBody(BaseModel):
@@ -481,6 +490,36 @@ def raise_model_api_http_exception(error: Exception) -> None:
         status_code=http_status,
         detail=f"Model API error: {message}",
     ) from error
+
+
+def is_context_window_error(exc: Exception) -> bool:
+    if isinstance(exc, HTTPException):
+        detail = getattr(exc, "detail", "")
+        status_code = getattr(exc, "status_code", None)
+        text = str(detail).lower()
+        return status_code == 400 and any(
+            marker in text
+            for marker in [
+                "context_length_exceeded",
+                "context_window_exceeded",
+                "input exceeds the context window",
+                "maximum context length",
+                "too many tokens",
+                "context window",
+                "context length",
+            ]
+        )
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in [
+            "context_length_exceeded",
+            "context_window_exceeded",
+            "input exceeds the context window",
+            "maximum context length",
+            "too many tokens",
+        ]
+    )
 
 
 def quote_env_value(value: str) -> str:
@@ -1777,35 +1816,57 @@ def update_project_memory_from_repo_analysis(repo_contexts: list[dict[str, Any]]
             "message": "Repository analysis payload is not usable.",
         }
 
-    current_project_memory = read_current_project_memory()
-    repo_analysis = build_project_analysis_payload(repo_contexts)
-    prompt = f"""
+    usable_contexts = [
+        context
+        for context in repo_contexts
+        if agent.has_usable_repo_context([context])
+    ]
+    project_memory = read_current_project_memory()
+    changed_any = False
+    additions: list[str] = []
+    processed_repositories: list[str] = []
+    skipped_repositories = [
+        str(context.get("repository") or context.get("url") or "")
+        for context in repo_contexts
+        if context not in usable_contexts
+    ]
+
+    for context in usable_contexts:
+        current_project_memory = project_memory
+        repo_analysis = build_project_analysis_payload([context])
+        prompt = f"""
 {PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT}
 
 Current project_memory.json:
 {json.dumps(current_project_memory, ensure_ascii=False, indent=2)}
 
-Repository analysis payload:
+Repository analysis payload for exactly one repository:
 {json.dumps(repo_analysis, ensure_ascii=False, indent=2)}
 """
-    response = run_text_task(prompt)
-    payload = extract_json_object(response)
-    project_memory = payload.get("project_memory")
-    if not isinstance(project_memory, dict):
-        raise HTTPException(status_code=500, detail="Agent JSON response must include a project_memory object.")
+        response = run_text_task(prompt)
+        payload = extract_json_object(response)
+        next_project_memory = payload.get("project_memory")
+        if not isinstance(next_project_memory, dict):
+            raise HTTPException(status_code=500, detail="Agent JSON response must include a project_memory object.")
 
-    changed = normalized_json(project_memory) != normalized_json(current_project_memory)
-    if changed:
-        agent.write_project_memory_file(project_memory)
+        changed = normalized_json(next_project_memory) != normalized_json(current_project_memory)
+        if changed:
+            agent.write_project_memory_file(next_project_memory)
+            changed_any = True
+        project_memory = next_project_memory
 
-    additions = payload.get("additions", [])
-    if not isinstance(additions, list):
-        additions = []
+        repo_additions = payload.get("additions", [])
+        if isinstance(repo_additions, list):
+            additions.extend(str(item) for item in repo_additions if str(item).strip())
+        processed_repositories.append(str(context.get("repository") or context.get("url") or ""))
 
     return {
-        "updated": changed,
+        "updated": changed_any,
         "source": "repo-analysis",
-        "additions": [str(item) for item in additions if str(item).strip()],
+        "mode": "sequential-per-repository",
+        "processed_repositories": processed_repositories,
+        "skipped_repositories": skipped_repositories,
+        "additions": additions,
         "project_memory": project_memory,
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
     }
@@ -1937,6 +1998,755 @@ def truncate_text(value: Any, max_chars: int = MAX_STAGED_TEXT_CHARS) -> str:
     return text[:max_chars].rstrip() + "\n... [truncated]"
 
 
+def compact_value_for_prompt(value: Any, max_string_chars: int = 1200, max_list_items: int = 6, depth: int = 0) -> Any:
+    if depth > 5:
+        return "[truncated nested value]"
+    if isinstance(value, str):
+        return truncate_text(value, max_string_chars)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        compacted = [
+            compact_value_for_prompt(item, max_string_chars, max_list_items, depth + 1)
+            for item in value[:max_list_items]
+        ]
+        if len(value) > max_list_items:
+            compacted.append(f"... [{len(value) - max_list_items} more items truncated]")
+        return compacted
+    if isinstance(value, dict):
+        skipped_keys = {
+            "patch",
+            "readme",
+            "source_facts",
+            "existing_bullets",
+            "bullet_writer_validation",
+            "compare_file_changes",
+            "file_changes",
+            "context",
+        }
+        compacted = {}
+        for key, item in value.items():
+            if key in skipped_keys:
+                continue
+            compacted[key] = compact_value_for_prompt(item, max_string_chars, max_list_items, depth + 1)
+        return compacted
+    return truncate_text(value, max_string_chars)
+
+
+def short_signal(value: Any, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> str:
+    return truncate_text(str(value or "").strip(), max_chars)
+
+
+def append_unique(items: list[str], value: Any, limit: int) -> None:
+    text = short_signal(value)
+    if text and text not in items and len(items) < limit:
+        items.append(text)
+
+
+def classify_prompt_signal_priority(signal: str) -> int:
+    text = signal.lower()
+    high_priority_keywords = [
+        "docker",
+        "kubernetes",
+        "aws",
+        "gcp",
+        "ci/cd",
+        "jenkins",
+        "github actions",
+        "terraform",
+        "helm",
+        "test",
+        "selenium",
+        "cypress",
+        "playwright",
+        "espresso",
+        "gradle",
+        "maven",
+        "linux",
+        "unix",
+        "shell",
+        "powershell",
+        "deployment",
+        "setup",
+        "debug",
+        "logging",
+        "error handling",
+        "backend api",
+        "database",
+        "persistence",
+        "validation",
+    ]
+    medium_priority_keywords = [
+        "frontend",
+        "ui",
+        "state",
+        "documentation",
+        "configuration",
+        "config",
+        "refactor",
+        "compression",
+    ]
+    low_priority_keywords = ["format", "comment", "readme-only", "cosmetic", "lockfile"]
+    if any(keyword in text for keyword in high_priority_keywords):
+        return 0
+    if any(keyword in text for keyword in medium_priority_keywords):
+        return 1
+    if any(keyword in text for keyword in low_priority_keywords):
+        return 3
+    return 2
+
+
+def ranked_prompt_signals(signals: list[str], limit: int = MAX_PROMPT_DIFF_SIGNALS) -> list[str]:
+    unique = []
+    for signal in signals:
+        append_unique(unique, signal, limit * 3)
+    unique.sort(key=lambda item: (classify_prompt_signal_priority(item), item.lower()))
+    return unique[:limit]
+
+
+def detect_languages_and_frameworks_from_files(files: list[str], text: str = "") -> list[str]:
+    values = []
+    lower_text = text.lower()
+    checks = [
+        ("Python", [".py", "fastapi", "pytest"]),
+        ("JavaScript", [".js", ".jsx", "vite", "react"]),
+        ("TypeScript", [".ts", ".tsx"]),
+        ("React", [".jsx", ".tsx", "react"]),
+        ("FastAPI", ["fastapi", "api_server.py"]),
+        ("SQLite", ["sqlite", ".sqlite"]),
+        ("Docker", ["dockerfile", "docker-compose"]),
+        ("GitHub Actions", [".github/workflows"]),
+        ("Gradle", ["gradle", "build.gradle"]),
+        ("Maven", ["pom.xml", "maven"]),
+        ("Android", ["androidmanifest", "espresso"]),
+        ("PowerShell", [".ps1", "powershell"]),
+        ("Shell", [".sh", "bash"]),
+    ]
+    file_text = "\n".join(files).lower()
+    combined = f"{file_text}\n{lower_text}"
+    for label, needles in checks:
+        if any(needle in combined for needle in needles):
+            append_unique(values, label, 20)
+    return values
+
+
+def extract_added_symbols_from_patch(patch: str) -> list[str]:
+    symbols = []
+    for line in str(patch or "").splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:].strip()
+        patterns = [
+            r"def\s+([A-Za-z_][\w]*)\s*\(",
+            r"class\s+([A-Za-z_][\w]*)",
+            r"function\s+([A-Za-z_$][\w$]*)\s*\(",
+            r"const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\([^)]*\)\s*=>|function)",
+            r"export\s+default\s+function\s+([A-Za-z_$][\w$]*)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                append_unique(symbols, match.group(1), 20)
+    return symbols
+
+
+def extract_diff_signals_for_prompt(file_change: dict[str, Any]) -> dict[str, Any]:
+    filename = str(file_change.get("filename") or file_change.get("file") or "").strip()
+    patch = str(file_change.get("patch") or file_change.get("diff") or file_change.get("raw_diff") or "")
+    status = str(file_change.get("status") or file_change.get("change_type") or "").strip()
+    added_symbols = extract_added_symbols_from_patch(patch)
+    patch_lower = patch.lower()
+    filename_lower = filename.lower()
+    signals = []
+    allowed_claims = []
+    forbidden_claims = []
+
+    checks = [
+        ("added backend API handling", ["@app.", "fastapi", "api_server", "route", "endpoint"], "Implemented backend API handling"),
+        ("added database persistence logic", ["sqlite", "select ", "insert ", "update ", "delete ", "database"], "Implemented database persistence logic"),
+        ("added data validation or schema handling", ["pydantic", "validate", "schema", "required", "invalid"], "Implemented data validation logic"),
+        ("added error handling path", ["try:", "except ", "raise ", "httpexception", "error"], "Debugged or implemented error handling paths"),
+        ("added logging/debugging signal", ["log", "debug", "traceback"], "Debugged runtime observability or logging behavior"),
+        ("added prompt compression helpers", ["for_prompt", "compact_", "truncate", "prompt"], "Implemented prompt compression utilities"),
+        ("removed raw evidence from prompt payloads", ["patch", "readme", "validation", "raw_diff", "full_diff"], "Refactored prompt payloads to avoid raw evidence"),
+        ("added frontend workflow or state handling", ["usestate", "useeffect", "onchange", "form", "input"], "Implemented frontend workflow or state handling"),
+        ("added test automation", ["test_", "unittest", "pytest", "assert", "playwright", "cypress", "espresso"], "Implemented test automation"),
+        ("added Gradle or Maven test setup", ["gradle", "maven", "pom.xml"], "Configured Java/Android build or test setup"),
+        ("added shell or PowerShell automation", [".sh", ".ps1", "powershell", "bash"], "Automated setup or developer workflows with scripts"),
+        ("changed environment variable loading logic", ["env", "environment", "load_dotenv"], "Implemented environment configuration handling"),
+        ("added deployment/container configuration", ["docker", "kubernetes", "terraform", "helm", "aws", "gcp", "jenkins"], "Implemented deployment or infrastructure configuration"),
+    ]
+    combined = f"{filename_lower}\n{patch_lower}"
+    for signal, needles, claim in checks:
+        if any(needle in combined for needle in needles):
+            append_unique(signals, signal, MAX_PROMPT_DIFF_SIGNALS)
+            append_unique(allowed_claims, claim, MAX_PROMPT_CLAIMS)
+
+    for symbol in added_symbols[:6]:
+        append_unique(signals, f"added or modified function/component `{symbol}`", MAX_PROMPT_DIFF_SIGNALS)
+
+    if filename:
+        append_unique(signals, f"changed `{filename}`", MAX_PROMPT_DIFF_SIGNALS)
+
+    infrastructure_keywords = {
+        "AWS": ["aws", "ecs", "lambda", "s3"],
+        "Kubernetes": ["kubernetes", "k8s"],
+        "Terraform": ["terraform"],
+        "Jenkins": ["jenkins"],
+        "Docker": ["docker"],
+    }
+    for label, needles in infrastructure_keywords.items():
+        if not any(needle in combined for needle in needles):
+            append_unique(forbidden_claims, f"Do not claim {label} work unless other evidence supports it", MAX_PROMPT_CLAIMS)
+
+    summary_parts = []
+    if status:
+        summary_parts.append(status)
+    if filename:
+        summary_parts.append(filename)
+    if signals:
+        summary_parts.append("; ".join(ranked_prompt_signals(signals, 4)))
+    file_summary = short_signal(" - ".join(summary_parts), MAX_PROMPT_FILE_SUMMARY_CHARS)
+
+    return {
+        "file": filename,
+        "status": status,
+        "change_type": file_change.get("change_type"),
+        "summary": file_summary,
+        "added_or_modified_symbols": added_symbols[:8],
+        "implementation_signals": ranked_prompt_signals(signals),
+        "allowed_claims": allowed_claims[:MAX_PROMPT_CLAIMS],
+        "forbidden_claims": forbidden_claims[:MAX_PROMPT_CLAIMS],
+        "evidence_id": hashlib.sha256(f"{filename}\n{patch[:1000]}".encode("utf-8")).hexdigest()[:12],
+        "confidence": "high" if patch and signals else "medium" if signals else "low",
+    }
+
+
+def validation_for_prompt(validation: Any, candidate_id: str = "", project: str = "") -> dict[str, Any]:
+    if not isinstance(validation, dict):
+        return {
+            "candidate_id": candidate_id,
+            "project": project,
+            "supported_claims": [],
+            "unsupported_claims": [],
+            "evidence_refs": [],
+            "risk_level": "medium",
+            "notes": "",
+        }
+    issues = [str(item) for item in validation.get("issues", []) if str(item).strip()][:6]
+    return {
+        "candidate_id": candidate_id,
+        "project": project,
+        "supported_claims": validation.get("supported_claims", [])[:MAX_PROMPT_CLAIMS],
+        "unsupported_claims": validation.get("unsupported_claims", issues)[:MAX_PROMPT_CLAIMS],
+        "evidence_refs": validation.get("evidence_refs", [])[:8],
+        "risk_level": "low" if validation.get("accepted") and not issues else "medium",
+        "notes": truncate_text(validation.get("notes") or "; ".join(issues), 400),
+    }
+
+
+def repo_evidence_for_prompt(evidence: Any) -> Any:
+    contexts = evidence if isinstance(evidence, list) else [evidence]
+    compacted = []
+    for context in contexts[:3]:
+        if not isinstance(context, dict):
+            compacted.append(compact_value_for_prompt(context))
+            continue
+        file_summaries = []
+        repo_allowed_claims = []
+        repo_forbidden_claims = []
+        repo_signals = []
+        contribution_evidence = []
+        for contribution in context.get("contribution_evidence", [])[:3]:
+            if not isinstance(contribution, dict):
+                continue
+            commits = []
+            for commit in contribution.get("commits", [])[:4]:
+                if not isinstance(commit, dict):
+                    continue
+                commit_file_summaries = []
+                for file_change in commit.get("file_changes", [])[:MAX_PROMPT_FILES_PER_REPO]:
+                    if isinstance(file_change, dict):
+                        extracted = extract_diff_signals_for_prompt(file_change)
+                        commit_file_summaries.append(extracted)
+                        file_summaries.append(extracted)
+                        repo_signals.extend(extracted["implementation_signals"])
+                        repo_allowed_claims.extend(extracted["allowed_claims"])
+                        repo_forbidden_claims.extend(extracted["forbidden_claims"])
+                commits.append(
+                    {
+                        "sha": commit.get("sha"),
+                        "message": commit.get("message"),
+                        "date": commit.get("date"),
+                        "files": commit.get("files", [])[:8],
+                        "diff_analysis": compact_value_for_prompt(commit.get("diff_analysis", {}), 400, 5),
+                        "file_summaries": commit_file_summaries[:MAX_PROMPT_FILES_PER_REPO],
+                    }
+                )
+            compare_file_summaries = []
+            for file_change in contribution.get("compare_file_changes", [])[:MAX_PROMPT_FILES_PER_REPO]:
+                if isinstance(file_change, dict):
+                    extracted = extract_diff_signals_for_prompt(file_change)
+                    compare_file_summaries.append(extracted)
+                    file_summaries.append(extracted)
+                    repo_signals.extend(extracted["implementation_signals"])
+                    repo_allowed_claims.extend(extracted["allowed_claims"])
+                    repo_forbidden_claims.extend(extracted["forbidden_claims"])
+            contribution_evidence.append(
+                {
+                    "method": contribution.get("method"),
+                    "github_account": contribution.get("github_account"),
+                    "base_sha": contribution.get("base_sha"),
+                    "head_sha": contribution.get("head_sha"),
+                    "commit_count_checked": contribution.get("commit_count_checked"),
+                    "commits": commits,
+                    "compare_diff_analysis": compact_value_for_prompt(contribution.get("compare_diff_analysis", {}), 400, 5),
+                    "compare_files": contribution.get("compare_files", [])[:8],
+                    "compare_file_summaries": compare_file_summaries,
+                    "error": contribution.get("error"),
+                }
+            )
+        files = context.get("root_files", [])[:20]
+        files.extend(summary.get("file", "") for summary in file_summaries if summary.get("file"))
+        languages_frameworks = []
+        for language in context.get("languages", [])[:10]:
+            append_unique(languages_frameworks, language, 20)
+        for detected in detect_languages_and_frameworks_from_files([str(item) for item in files], json.dumps(file_summaries, ensure_ascii=False)):
+            append_unique(languages_frameworks, detected, 20)
+        ranked_signals = ranked_prompt_signals(repo_signals)
+        allowed_claims = ranked_prompt_signals(repo_allowed_claims, MAX_PROMPT_CLAIMS)
+        forbidden_claims = ranked_prompt_signals(repo_forbidden_claims, MAX_PROMPT_CLAIMS)
+        compacted.append(
+            {
+                "url": context.get("url"),
+                "repository": context.get("repository"),
+                "project_name": context.get("project_name") or context.get("project"),
+                "description": truncate_text(context.get("description"), 400),
+                "topics": context.get("topics", [])[:8],
+                "default_branch": context.get("default_branch"),
+                "languages_frameworks_detected": languages_frameworks,
+                "root_files": context.get("root_files", [])[:20],
+                "incremental_update": compact_value_for_prompt(context.get("incremental_update", {}), 400, 5),
+                "changed_file_paths": [summary.get("file") for summary in file_summaries if summary.get("file")][:MAX_PROMPT_FILES_PER_REPO],
+                "file_level_summaries": file_summaries[:MAX_PROMPT_FILES_PER_REPO],
+                "diff_signals": ranked_signals,
+                "resume_relevant_keywords": ranked_signals[:10] + languages_frameworks[:10],
+                "allowed_claims": allowed_claims,
+                "forbidden_claims": forbidden_claims,
+                "evidence_confidence": "high" if ranked_signals else "medium" if contribution_evidence else "low",
+                "contribution_evidence": contribution_evidence,
+            }
+        )
+    serialized = json.dumps(compacted, ensure_ascii=False)
+    if len(serialized) <= MAX_PROMPT_EVIDENCE_CHARS:
+        return compacted
+    return compact_value_for_prompt(compacted, 700, 4)
+
+
+def compact_github_evidence_for_prompt(evidence: Any) -> Any:
+    return repo_evidence_for_prompt(evidence)
+
+
+def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
+    bullets = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+    candidate_id = str(candidate.get("project_id") or candidate.get("source_name") or candidate.get("project_name") or "")
+    project_name = candidate.get("project_name") or candidate.get("source_name")
+    return {
+        "section_type": candidate.get("section_type"),
+        "project_id": candidate.get("project_id"),
+        "project_name": project_name,
+        "candidate_id": candidate_id,
+        "fit": candidate.get("fit"),
+        "keep_or_replace": candidate.get("keep_or_replace"),
+        "fit_reason": truncate_text(candidate.get("fit_reason") or candidate.get("job_alignment"), 800),
+        "final_bullets": compact_value_for_prompt(bullets, 700, 4),
+        "skills_to_emphasize": candidate.get("skills_to_emphasize", [])[:10],
+        "risks": candidate.get("risks", [])[:6],
+        "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
+        "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
+        "validation": validation_for_prompt(candidate.get("bullet_writer_validation"), candidate_id=candidate_id, project=str(project_name or "")),
+    }
+
+
+def compact_bullet_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
+    return candidate_for_prompt(candidate)
+
+
+def compact_bullet_candidates_for_prompt(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [candidate_for_prompt(candidate) for candidate in candidates]
+
+
+def jd_core_for_prompt(jd: dict[str, Any] | str) -> dict[str, Any]:
+    if isinstance(jd, dict):
+        text = json.dumps(jd, ensure_ascii=False)
+    else:
+        text = str(jd or "")
+    lines = [line.strip(" -*\t") for line in text.splitlines() if line.strip()]
+    lower_text = text.lower()
+    title = ""
+    company = ""
+    title_patterns = [
+        r"(?:job title|position|role)\s*[:\-]\s*([^\n|]{2,100})",
+        r"\b([A-Z][A-Za-z0-9 /&+-]{2,80}(?:Engineer|Developer|Intern|Analyst|Specialist|Manager))\b",
+    ]
+    company_patterns = [
+        r"(?:company|employer|organization)\s*[:\-]\s*([^\n|]{2,100})",
+        r"\bat\s+([A-Z][A-Za-z0-9 .,&+-]{2,80})",
+    ]
+    for pattern in title_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            title = truncate_text(match.group(1).strip(), 100)
+            break
+    for pattern in company_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            company = truncate_text(match.group(1).strip(), 100)
+            break
+
+    keyword_groups = {
+        "testing_ci_infra_keywords": [
+            "aws",
+            "gcp",
+            "kubernetes",
+            "ecs",
+            "docker",
+            "jenkins",
+            "github actions",
+            "ci/cd",
+            "terraform",
+            "helm",
+            "elk",
+            "selenium",
+            "cypress",
+            "playwright",
+            "espresso",
+            "maven",
+            "gradle",
+            "unix",
+            "linux",
+            "debug",
+        ],
+        "must_have_keywords": [
+            "python",
+            "java",
+            "javascript",
+            "typescript",
+            "react",
+            "fastapi",
+            "sql",
+            "sqlite",
+            "mongodb",
+            "api",
+            "backend",
+            "frontend",
+            "automation",
+            "testing",
+            "git",
+            "bitbucket",
+        ],
+    }
+    extracted: dict[str, list[str]] = {}
+    for key, keywords in keyword_groups.items():
+        values = []
+        for keyword in keywords:
+            if keyword in lower_text:
+                append_unique(values, keyword.upper() if keyword in {"aws", "gcp", "sql", "api", "ci/cd", "elk"} else keyword, 20)
+        extracted[key] = values
+
+    scored_lines = []
+    dense_keywords = keyword_groups["testing_ci_infra_keywords"] + keyword_groups["must_have_keywords"]
+    for line in lines:
+        lower_line = line.lower()
+        score = sum(1 for keyword in dense_keywords if keyword in lower_line)
+        if any(word in lower_line for word in ["responsibil", "require", "qualification", "experience", "build", "develop", "debug", "test"]):
+            score += 1
+        if score:
+            scored_lines.append((score, line))
+    scored_lines.sort(key=lambda item: (-item[0], len(item[1])))
+    responsibilities = [truncate_text(line, 240) for _, line in scored_lines[:8]]
+
+    candidate_positioning = []
+    positioning_checks = [
+        ("backend/API development", ["api", "backend", "fastapi", "server"]),
+        ("test automation", ["test", "selenium", "cypress", "playwright", "espresso"]),
+        ("build/debug workflows", ["debug", "gradle", "maven", "ci/cd"]),
+        ("scripted setup", ["shell", "powershell", "setup", "automation"]),
+        ("Git collaboration", ["git", "github", "bitbucket"]),
+        ("frontend workflow", ["react", "frontend", "ui"]),
+        ("database persistence", ["sql", "sqlite", "mongodb", "database"]),
+    ]
+    for label, keywords in positioning_checks:
+        if any(keyword in lower_text for keyword in keywords):
+            append_unique(candidate_positioning, label, 12)
+
+    ats_keywords = ranked_prompt_signals(
+        extracted["testing_ci_infra_keywords"] + extracted["must_have_keywords"],
+        limit=20,
+    )
+    return {
+        "job_title": title,
+        "company": company,
+        "role_focus": responsibilities[:5],
+        "must_have_keywords": extracted["must_have_keywords"][:12],
+        "preferred_keywords": extracted["testing_ci_infra_keywords"][:12],
+        "core_responsibilities": responsibilities,
+        "testing_ci_infrastructure_keywords": extracted["testing_ci_infra_keywords"][:12],
+        "candidate_positioning": candidate_positioning,
+        "important_ats_keywords": ats_keywords,
+    }
+
+
+def latex_section_spans(resume_latex: str) -> list[dict[str, Any]]:
+    matches = list(re.finditer(r"\\section\{([^}]+)\}", resume_latex))
+    spans = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(resume_latex)
+        spans.append(
+            {
+                "name": match.group(1).strip(),
+                "start": match.start(),
+                "end": end,
+                "text": resume_latex[match.start() : end],
+            }
+        )
+    return spans
+
+
+def find_latex_section(resume_latex: str, section_name: str) -> dict[str, Any] | None:
+    target = section_name.lower()
+    aliases = {
+        "summary": ["professional summary", "summary", "profile", "summary/profile-section"],
+        "summary/profile-section": ["professional summary", "summary", "profile"],
+        "skills-section": ["technical skills", "skills"],
+        "experience-section": ["experience", "work experience"],
+        "project": ["projects"],
+        "projects": ["projects"],
+    }
+    names = aliases.get(target, [target])
+    for span in latex_section_spans(resume_latex):
+        if span["name"].lower() in names or target in span["name"].lower():
+            return span
+    return None
+
+
+def find_project_block(section_text: str, block_hint: str = "") -> str:
+    hint = str(block_hint or "").lower().strip()
+    starts = [match.start() for match in re.finditer(r"\\resumeProjectHeading", section_text)]
+    if not starts:
+        return ""
+    starts.append(len(section_text))
+    blocks = [section_text[starts[index] : starts[index + 1]] for index in range(len(starts) - 1)]
+    if hint:
+        for block in blocks:
+            if hint in block.lower():
+                return block
+    return blocks[0]
+
+
+def count_resume_items(latex_block: str) -> int:
+    return len(re.findall(r"\\(?:resumeItem|item)\b", latex_block))
+
+
+def resume_block_for_prompt(resume_latex: str, section_name: str, block_hint: str | None = None) -> dict[str, Any]:
+    if section_name.lower().startswith("project"):
+        section = find_latex_section(resume_latex, "projects")
+        if section:
+            block = find_project_block(section["text"], block_hint or "")
+            if block:
+                return {
+                    "scope": "project_block",
+                    "section_name": section["name"],
+                    "block_hint": block_hint or "",
+                    "latex": block,
+                    "original_bullet_count": count_resume_items(block),
+                    "length_style_constraints": "Keep bullet count close to the original block unless the candidate clearly requires fewer concise bullets.",
+                }
+            return {
+                "scope": "section",
+                "section_name": section["name"],
+                "block_hint": block_hint or "",
+                "latex": section["text"],
+                "original_bullet_count": count_resume_items(section["text"]),
+                "length_style_constraints": "Preserve complete Projects section structure.",
+            }
+    section = find_latex_section(resume_latex, section_name)
+    if not section:
+        section = find_latex_section(resume_latex, section_name.replace("-section", ""))
+    if section:
+        return {
+            "scope": "section",
+            "section_name": section["name"],
+            "block_hint": block_hint or "",
+            "latex": section["text"],
+            "original_bullet_count": count_resume_items(section["text"]),
+            "length_style_constraints": "Preserve the complete section boundary and current LaTeX style.",
+        }
+    return {
+        "scope": "document",
+        "section_name": section_name,
+        "block_hint": block_hint or "",
+        "latex": agent.extract_latex_document(resume_latex) or resume_latex,
+        "original_bullet_count": count_resume_items(resume_latex),
+        "length_style_constraints": "No matching section was found; preserve full document validity.",
+    }
+
+
+def replace_resume_block(current_resume: str, block_payload: dict[str, Any], replacement: str) -> str:
+    document = agent.extract_latex_document(replacement)
+    if document:
+        return document
+    original = str(block_payload.get("latex") or "")
+    replacement = replacement.strip()
+    if original and original in current_resume and replacement:
+        return current_resume.replace(original, replacement, 1)
+    if block_payload.get("scope") == "document" and replacement:
+        return replacement
+    raise HTTPException(status_code=400, detail="Compact retry did not return a replaceable LaTeX block.")
+
+
+RAW_PROMPT_MARKERS = ["diff --git", "@@", "+++ ", "--- "]
+RAW_PROMPT_KEYS = [
+    "patch",
+    "raw_diff",
+    "full_diff",
+    "readme",
+    "file_content",
+    "validation_blob",
+    "bullet_writer_validation",
+]
+
+
+def payload_has_raw_markers(payload: Any) -> bool:
+    serialized = json.dumps(payload, ensure_ascii=False).lower()
+    return any(marker.lower() in serialized for marker in RAW_PROMPT_MARKERS)
+
+
+def payload_has_raw_keys(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).lower() in RAW_PROMPT_KEYS:
+                return True
+            if payload_has_raw_keys(value):
+                return True
+    if isinstance(payload, list):
+        return any(payload_has_raw_keys(item) for item in payload)
+    return False
+
+
+def approx_payload_size(payload: Any) -> int:
+    return len(json.dumps(payload, ensure_ascii=False))
+
+
+def merge_retry_payload_for_prompt(original_payload: dict[str, Any]) -> dict[str, Any]:
+    section_name = original_payload["section_name"]
+    candidate = original_payload["candidate"]
+    if section_name.lower().startswith("project"):
+        candidate_summary = candidate_for_prompt(candidate)
+    else:
+        candidate_summary = compact_value_for_prompt(candidate, 900, 8)
+    block_hint = str(
+        candidate.get("project_name")
+        or candidate.get("source_name")
+        or candidate.get("project_id")
+        or original_payload.get("block_hint")
+        or ""
+    )
+    target_block = resume_block_for_prompt(
+        original_payload["current_resume"],
+        section_name,
+        block_hint=block_hint,
+    )
+    allowed_claims = []
+    forbidden_claims = []
+    if isinstance(candidate_summary, dict):
+        for claim in candidate_summary.get("allowed_claims", []):
+            append_unique(allowed_claims, claim, 10)
+        for claim in candidate_summary.get("forbidden_claims", []):
+            append_unique(forbidden_claims, claim, 10)
+        validation = candidate_summary.get("validation", {})
+        if isinstance(validation, dict):
+            for claim in validation.get("supported_claims", []):
+                append_unique(allowed_claims, claim, 10)
+            for claim in validation.get("unsupported_claims", []):
+                append_unique(forbidden_claims, claim, 10)
+    payload = {
+        "retry_reason": "normal merge payload exceeded model context window",
+        "compact_jd": jd_core_for_prompt(original_payload["job_description"]),
+        "target_resume_block": target_block,
+        "candidate": candidate_summary,
+        "allowed_claims": allowed_claims[:10],
+        "forbidden_claims": forbidden_claims[:10],
+        "formatting_rules": [
+            "Preserve valid LaTeX and complete begin/end boundaries.",
+            "Return only the merged target LaTeX block or section, not the full resume unless target scope is document.",
+            "Do not invent technologies, impact metrics, deployment, ownership, or infrastructure claims.",
+            "Do not add AWS, Kubernetes, Terraform, Jenkins, Docker, or cloud claims unless allowed_claims explicitly support them.",
+        ],
+        "length_budget": {
+            "original_bullet_count": target_block.get("original_bullet_count", 0),
+            "max_candidates": 1,
+            "keep_length_close_to_original": True,
+        },
+        "latex_safety_rules": [
+            "Do not cut off LaTeX commands.",
+            "Keep itemize/list environments balanced.",
+            "Keep section or project heading format consistent with the target block.",
+        ],
+    }
+    if approx_payload_size(payload) > 30000:
+        payload["candidate"] = compact_value_for_prompt(payload["candidate"], 500, 4)
+    return payload
+
+
+def build_retry_merge_prompt(payload: dict[str, Any]) -> str:
+    return f"""
+You are receiving a compact emergency merge payload because the full resume merge payload exceeded the model context window.
+
+Use only the provided compact JD, target LaTeX block or section, candidate, and claim boundaries.
+Preserve valid LaTeX. Do not invent technologies, impact metrics, deployment, ownership, or unsupported claims.
+Prefer the candidate wording that best matches the JD while remaining evidence-grounded.
+Keep the section/project length close to the original budget.
+Return only the merged LaTeX block or section. Do not include Markdown fences or explanation.
+
+Compact retry payload:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+"""
+
+
+def call_model_with_context_retry(
+    normal_payload: dict[str, Any],
+    build_retry_payload: Callable[[dict[str, Any]], dict[str, Any]],
+    call_model: Callable[[dict[str, Any]], str],
+) -> str:
+    try:
+        return call_model(normal_payload)
+    except Exception as error:
+        if not is_context_window_error(error):
+            raise
+        retry_payload = build_retry_payload(normal_payload)
+        normal_size = approx_payload_size(normal_payload)
+        retry_size = approx_payload_size(retry_payload)
+        print(
+            "Resume merge context retry: "
+            f"normal_payload_chars={normal_size}, retry_payload_chars={retry_size}, "
+            f"raw_markers_removed={not payload_has_raw_markers(retry_payload)}, "
+            f"raw_keys_removed={not payload_has_raw_keys(retry_payload)}"
+        )
+        if payload_has_raw_markers(retry_payload) or payload_has_raw_keys(retry_payload):
+            raise HTTPException(
+                status_code=500,
+                detail="Compact retry payload still contains raw diff or oversized evidence fields.",
+            ) from error
+        try:
+            return call_model({**normal_payload, "retry_payload": retry_payload, "retry": True})
+        except Exception as retry_error:
+            raise HTTPException(
+                status_code=getattr(retry_error, "status_code", 500),
+                detail=f"Compact retry after context-window error failed: {getattr(retry_error, 'detail', retry_error)}",
+            ) from retry_error
+
+
 def project_list_from_memory(project_memory: dict[str, Any]) -> list[dict[str, Any]]:
     projects = project_memory.get("projects", []) if isinstance(project_memory, dict) else []
     if isinstance(projects, dict):
@@ -2037,6 +2847,17 @@ def run_resume_bullet_writer_tool(
     language: str,
     extra_rules: str = "",
 ) -> dict[str, Any]:
+    prompt_source_facts = compact_value_for_prompt(source_facts, 1200, 8)
+    prompt_evidence = compact_github_evidence_for_prompt(evidence)
+    allowed_claims = []
+    forbidden_claims = []
+    for item in prompt_evidence if isinstance(prompt_evidence, list) else [prompt_evidence]:
+        if not isinstance(item, dict):
+            continue
+        for claim in item.get("allowed_claims", []):
+            append_unique(allowed_claims, claim, MAX_PROMPT_CLAIMS)
+        for claim in item.get("forbidden_claims", []):
+            append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
     prompt = f"""
 {RESUME_BULLET_WRITER_PROMPT}
 
@@ -2068,13 +2889,19 @@ Original resume:
 {truncate_text(resume, 22000)}
 
 Source facts:
-{json.dumps(source_facts, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_source_facts, ensure_ascii=False, indent=2)}
 
 Existing bullets:
 {json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
 
 Supporting evidence:
-{json.dumps(evidence, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_evidence, ensure_ascii=False, indent=2)}
+
+Allowed resume claims from compressed evidence:
+{json.dumps(allowed_claims, ensure_ascii=False, indent=2)}
+
+Forbidden / unsupported resume claims:
+{json.dumps(forbidden_claims, ensure_ascii=False, indent=2)}
 """
     payload = extract_json_object(run_text_task(prompt))
     for key in ["react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
@@ -2094,9 +2921,16 @@ Supporting evidence:
             language=language,
         )
     )
-    payload["bullet_writer_validation"] = validation
+    payload["bullet_writer_validation"] = {
+        "accepted": validation.get("accepted", False),
+        "issues": validation.get("issues", []),
+        "required_mode": validation.get("required_mode", ""),
+        "required_pattern": validation.get("required_pattern", ""),
+    }
     if validation.get("issues"):
         payload["risks"].extend(validation["issues"])
+    payload["allowed_claims"] = allowed_claims
+    payload["forbidden_claims"] = forbidden_claims
     return payload
 
 
@@ -2139,6 +2973,8 @@ def build_skills_resume_candidate(
     project_candidates: list[dict[str, Any]],
     language: str,
 ) -> dict[str, Any]:
+    prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
+    prompt_project_memory = compact_value_for_prompt(project_memory, 1200, 8)
     prompt = f"""
 Generate structured Skills-section tailoring recommendations.
 
@@ -2167,10 +3003,10 @@ Original resume:
 {truncate_text(resume, 22000)}
 
 Project Memory:
-{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_project_memory, ensure_ascii=False, indent=2)}
 
 Staged project candidates:
-{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_project_candidates, ensure_ascii=False, indent=2)}
 """
     payload = extract_json_object(run_text_task(prompt))
     for key in ["skills_to_emphasize", "skills_to_deemphasize", "skills_to_add_if_supported", "skills_to_remove_or_avoid", "risks"]:
@@ -2188,10 +3024,12 @@ def build_experience_resume_candidate(
     allow_experience_removal: bool,
     language: str,
 ) -> dict[str, Any]:
+    prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
+    prompt_skills_candidate = compact_value_for_prompt(skills_candidate, 900, 8)
     source_facts = {
-        "project_memory": project_memory,
-        "staged_project_candidates": project_candidates,
-        "staged_skills_candidate": skills_candidate,
+        "project_memory": compact_value_for_prompt(project_memory, 1200, 8),
+        "staged_project_candidates": prompt_project_candidates,
+        "staged_skills_candidate": prompt_skills_candidate,
         "allow_experience_removal": allow_experience_removal,
     }
     payload = run_resume_bullet_writer_tool(
@@ -2200,7 +3038,7 @@ def build_experience_resume_candidate(
         job_description=job_description,
         resume=resume,
         source_facts=source_facts,
-        evidence=project_candidates,
+        evidence=prompt_project_candidates,
         existing_bullets=[],
         language=language,
         extra_rules=(
@@ -2240,6 +3078,10 @@ def build_summary_resume_candidate(
     experience_candidate: dict[str, Any],
     language: str,
 ) -> dict[str, Any]:
+    prompt_project_memory = compact_value_for_prompt(project_memory, 1200, 8)
+    prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
+    prompt_skills_candidate = compact_value_for_prompt(skills_candidate, 900, 8)
+    prompt_experience_candidate = compact_value_for_prompt(experience_candidate, 900, 8)
     prompt = f"""
 Generate structured resume Summary/Profile tailoring recommendations.
 
@@ -2269,22 +3111,144 @@ Original resume:
 {truncate_text(resume, 26000)}
 
 Project Memory:
-{json.dumps(project_memory, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_project_memory, ensure_ascii=False, indent=2)}
 
 Staged project candidates:
-{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_project_candidates, ensure_ascii=False, indent=2)}
 
 Staged Skills candidate:
-{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_skills_candidate, ensure_ascii=False, indent=2)}
 
 Staged Experience candidate:
-{json.dumps(experience_candidate, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_experience_candidate, ensure_ascii=False, indent=2)}
 """
     payload = extract_json_object(run_text_task(prompt))
     for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
     return payload
+
+
+def apply_resume_project_candidate(
+    job_description: str,
+    current_resume: str,
+    project_candidate: dict[str, Any],
+    body: TailorBody,
+    index: int,
+    total: int,
+) -> str:
+    normal_payload = {
+        "section_name": "Project-section",
+        "job_description": job_description,
+        "current_resume": current_resume,
+        "candidate": project_candidate,
+        "block_hint": str(project_candidate.get("project_name") or project_candidate.get("project_id") or ""),
+        "index": index,
+        "total": total,
+        "allow_project_selection": body.allow_project_selection,
+        "allow_experience_removal": body.allow_experience_removal,
+        "language": body.language,
+    }
+
+    def call_merge_model(payload: dict[str, Any]) -> str:
+        if payload.get("retry"):
+            retry_payload = payload["retry_payload"]
+            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
+
+        prompt_project_candidate = compact_bullet_candidate_for_prompt(payload["candidate"])
+        prompt = (
+            output_language_instruction(body.language)
+            + original_resume_language_instruction("tailored_resume")
+            + f"""
+Apply exactly one staged Project-section candidate to the current LaTeX resume.
+
+Loop step:
+- Project candidate {payload["index"]} of {payload["total"]}.
+- Return the complete updated LaTeX resume.
+- Keep all previous edits already present in the current LaTeX resume.
+- Use only this one project candidate for this step.
+- Do not request or infer raw Chroma evidence.
+- Do not create project bullet claims outside this candidate's final_bullets / recommended_bullets.
+- Project selection allowed: {payload["allow_project_selection"]}
+- If project selection is not allowed, keep the existing resume project list and only update factual wording.
+- Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
+- Return only LaTeX code with no Markdown fences and no analysis text.
+
+Job description:
+{truncate_text(payload["job_description"], 12000)}
+
+Current LaTeX resume:
+{truncate_text(payload["current_resume"], 30000)}
+
+One staged Project candidate:
+{json.dumps(prompt_project_candidate, ensure_ascii=False, indent=2)}
+"""
+        )
+        return run_text_task(prompt)
+
+    answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
+    if not agent.looks_like_latex_resume(answer):
+        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after project merge step {index}.")
+    return answer
+
+
+def apply_resume_section_candidate(
+    section_name: str,
+    job_description: str,
+    current_resume: str,
+    candidate: dict[str, Any],
+    body: TailorBody,
+) -> str:
+    normal_payload = {
+        "section_name": section_name,
+        "job_description": job_description,
+        "current_resume": current_resume,
+        "candidate": candidate,
+        "block_hint": section_name,
+        "allow_project_selection": body.allow_project_selection,
+        "allow_experience_removal": body.allow_experience_removal,
+        "language": body.language,
+    }
+
+    def call_merge_model(payload: dict[str, Any]) -> str:
+        if payload.get("retry"):
+            retry_payload = payload["retry_payload"]
+            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
+
+        prompt_candidate = compact_value_for_prompt(payload["candidate"], 900, 8)
+        prompt = (
+            output_language_instruction(body.language)
+            + original_resume_language_instruction("tailored_resume")
+            + f"""
+Apply exactly one staged {section_name} candidate to the current LaTeX resume.
+
+Rules:
+- Return the complete updated LaTeX resume.
+- Keep all previous edits already present in the current LaTeX resume.
+- Use only this staged {section_name} candidate for this step.
+- For Project and Experience bullet wording, use only ReAct bullet writer candidates already present in the staged data.
+- Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
+- Entire Experience entry removal allowed: {payload["allow_experience_removal"]}
+- Return only LaTeX code with no Markdown fences and no analysis text.
+
+Job description:
+{truncate_text(payload["job_description"], 12000)}
+
+Current LaTeX resume:
+{truncate_text(payload["current_resume"], 30000)}
+
+One staged {section_name} candidate:
+{json.dumps(prompt_candidate, ensure_ascii=False, indent=2)}
+"""
+        )
+        return run_text_task(prompt)
+
+    answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
+    if not agent.looks_like_latex_resume(answer):
+        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after {section_name} merge step.")
+    return answer
 
 
 def merge_staged_resume(
@@ -2296,54 +3260,39 @@ def merge_staged_resume(
     summary_candidate: dict[str, Any],
     body: TailorBody,
 ) -> str:
-    prompt = (
-        RESUME_TAILOR_PROMPT
-        + output_language_instruction(body.language)
-        + original_resume_language_instruction("tailored_resume")
-        + f"""
+    current_resume = resume
+    for index, project_candidate in enumerate(project_candidates, start=1):
+        current_resume = apply_resume_project_candidate(
+            job_description,
+            current_resume,
+            project_candidate,
+            body,
+            index,
+            len(project_candidates),
+        )
 
-Use these staged project candidate results as the only GitHub-supported project evidence.
-Do not request or infer raw Chroma evidence in this final merge step.
-
-Rules:
-- Produce the complete modified LaTeX resume.
-- Keep factual meaning from the original resume.
-- Use staged candidates to update, add, remove, or reorder projects only when allowed.
-- For Project and Experience bullet wording, use the staged candidates produced by the ReAct bullet writer.
-  Do not create new bullet claims outside those staged bullet candidates.
-- Use the staged Skills-section candidate to rewrite or reorder the Skills section when factual and relevant.
-- Use the staged Experience-section candidate to rewrite, reorder, or remove Experience bullets within the user's permissions.
-- Use the staged Summary/Profile candidate to rewrite or add a concise summary only when it improves the resume.
-- Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
-- Return only LaTeX code with no Markdown fences and no analysis text.
-
-Project selection allowed: {body.allow_project_selection}
-Entire Experience entry removal allowed: {body.allow_experience_removal}
-
-Job description:
-{truncate_text(job_description, 12000)}
-
-Original resume:
-{truncate_text(resume, 30000)}
-
-Staged project candidates:
-{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
-
-Staged Skills-section candidate:
-{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
-
-Staged Experience-section candidate:
-{json.dumps(experience_candidate, ensure_ascii=False, indent=2)}
-
-Staged Summary/Profile candidate:
-{json.dumps(summary_candidate, ensure_ascii=False, indent=2)}
-"""
+    current_resume = apply_resume_section_candidate(
+        "Skills-section",
+        job_description,
+        current_resume,
+        skills_candidate,
+        body,
     )
-    if not body.allow_project_selection:
-        prompt += "\nKeep the existing resume project list; only update factual wording."
-    if body.allow_experience_removal:
-        prompt += "\nThe user explicitly allows removing entire Experience entries if weakly relevant."
-    return run_text_task(prompt)
+    current_resume = apply_resume_section_candidate(
+        "Experience-section",
+        job_description,
+        current_resume,
+        experience_candidate,
+        body,
+    )
+    current_resume = apply_resume_section_candidate(
+        "Summary/Profile-section",
+        job_description,
+        current_resume,
+        summary_candidate,
+        body,
+    )
+    return current_resume
 
 
 def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
@@ -2367,15 +3316,16 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         )
 
     candidates = []
+    selected_project_memory = {"projects": [compact_project_for_prompt(project) for project in selected_projects]}
     for project in selected_projects:
         evidence = retrieve_evidence_for_project(project)
         candidates.append(build_project_resume_candidate(job_description, resume, project, evidence, body.language))
 
-    skills_candidate = build_skills_resume_candidate(job_description, resume, project_memory, candidates, body.language)
+    skills_candidate = build_skills_resume_candidate(job_description, resume, selected_project_memory, candidates, body.language)
     experience_candidate = build_experience_resume_candidate(
         job_description,
         resume,
-        project_memory,
+        selected_project_memory,
         candidates,
         skills_candidate,
         body.allow_experience_removal,
@@ -2384,7 +3334,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     summary_candidate = build_summary_resume_candidate(
         job_description,
         resume,
-        project_memory,
+        selected_project_memory,
         candidates,
         skills_candidate,
         experience_candidate,
@@ -2520,11 +3470,142 @@ def read_github_repo_source(resume_source: str, project_name: str = "", project_
     )
 
 
+GITHUB_REPO_SCAN_STATE_VERSION = 1
+
+
+def project_memory_prompt_hash() -> str:
+    return hashlib.sha256(PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT.encode("utf-8")).hexdigest()[:16]
+
+
+def repo_state_key(repo_info: dict[str, Any]) -> str:
+    return f"{repo_info['owner']}/{repo_info['repo']}"
+
+
+def load_github_repo_scan_state() -> dict[str, Any]:
+    path = agent.GITHUB_REPO_SCAN_STATE_PATH
+    if not path.exists():
+        return {"version": GITHUB_REPO_SCAN_STATE_VERSION, "repositories": {}}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"version": GITHUB_REPO_SCAN_STATE_VERSION, "repositories": {}}
+    if not isinstance(state, dict):
+        return {"version": GITHUB_REPO_SCAN_STATE_VERSION, "repositories": {}}
+    repositories = state.get("repositories")
+    if not isinstance(repositories, dict):
+        state["repositories"] = {}
+    state["version"] = GITHUB_REPO_SCAN_STATE_VERSION
+    return state
+
+
+def save_github_repo_scan_state(state: dict[str, Any]) -> None:
+    path = agent.GITHUB_REPO_SCAN_STATE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def response_header(headers: dict[str, Any], name: str) -> str:
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return str(value)
+    return ""
+
+
+def fetch_github_remote_state(repo_info: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    owner = urllib.parse.quote(repo_info["owner"], safe="")
+    repo = urllib.parse.quote(repo_info["repo"], safe="")
+    repository = repo_state_key(repo_info)
+    base_url = f"https://api.github.com/repos/{owner}/{repo}"
+    remote_state: dict[str, Any] = {
+        "repository": repository,
+        "url": repo_info["url"],
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+    try:
+        repo_headers = {}
+        if previous.get("repo_etag"):
+            repo_headers["If-None-Match"] = previous["repo_etag"]
+        repo_response = agent.github_api_request(base_url, extra_headers=repo_headers)
+        if repo_response["status"] == 304:
+            default_branch = previous.get("default_branch", "")
+            remote_state["repo_not_modified"] = True
+            remote_state["repo_etag"] = previous.get("repo_etag", "")
+        else:
+            repo_data = json.loads(repo_response["text"])
+            default_branch = str(repo_data.get("default_branch") or "")
+            remote_state["repo_not_modified"] = False
+            remote_state["repo_etag"] = response_header(repo_response.get("headers", {}), "ETag")
+            remote_state["pushed_at"] = repo_data.get("pushed_at")
+            remote_state["updated_at"] = repo_data.get("updated_at")
+
+        remote_state["default_branch"] = default_branch
+        if not default_branch:
+            remote_state["changed"] = True
+            remote_state["change_reason"] = "default branch is unavailable"
+            return remote_state
+
+        commit_headers = {}
+        if previous.get("latest_commit_etag"):
+            commit_headers["If-None-Match"] = previous["latest_commit_etag"]
+        commit_response = agent.github_api_request(
+            f"{base_url}/commits/{urllib.parse.quote(default_branch, safe='')}",
+            extra_headers=commit_headers,
+        )
+        if commit_response["status"] == 304:
+            latest_commit_sha = previous.get("latest_commit_sha", "")
+            remote_state["commit_not_modified"] = True
+            remote_state["latest_commit_etag"] = previous.get("latest_commit_etag", "")
+        else:
+            commit_data = json.loads(commit_response["text"])
+            latest_commit_sha = str(commit_data.get("sha") or "")
+            remote_state["commit_not_modified"] = False
+            remote_state["latest_commit_etag"] = response_header(commit_response.get("headers", {}), "ETag")
+            commit_info = commit_data.get("commit") if isinstance(commit_data, dict) else {}
+            committer = commit_info.get("committer") if isinstance(commit_info, dict) else {}
+            remote_state["latest_commit_date"] = committer.get("date") if isinstance(committer, dict) else None
+
+        previous_sha = str(previous.get("latest_commit_sha") or "")
+        previous_branch = str(previous.get("default_branch") or "")
+        remote_state["latest_commit_sha"] = latest_commit_sha
+        remote_state["changed"] = (
+            not previous.get("context")
+            or not latest_commit_sha
+            or latest_commit_sha != previous_sha
+            or default_branch != previous_branch
+        )
+        if not previous.get("context"):
+            remote_state["change_reason"] = "no cached context"
+        elif default_branch != previous_branch:
+            remote_state["change_reason"] = "default branch changed"
+        elif latest_commit_sha != previous_sha:
+            remote_state["change_reason"] = "latest commit changed"
+        else:
+            remote_state["change_reason"] = "unchanged"
+        return remote_state
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as error:
+        remote_state["changed"] = True
+        remote_state["error"] = (
+            agent.describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
+        remote_state["change_reason"] = "remote state check failed"
+        return remote_state
+
+
 def fetch_github_context_api(
     approved: bool,
     resume_source: str = "resume",
     project_name: str = "",
     project_id: str = "",
+    force_refresh: bool = False,
+    reanalyze_cached: bool = False,
 ) -> dict[str, Any]:
     if not approved:
         return {"saved": False, "message": "GitHub context fetch was not approved."}
@@ -2545,26 +3626,145 @@ def fetch_github_context_api(
             detail=f"Add GitHub identities to {agent.GITHUB_ACCOUNTS_PATH} first.",
         )
 
+    scan_state = load_github_repo_scan_state()
+    repositories_state = scan_state.setdefault("repositories", {})
     repo_contexts = []
+    fetched_contexts = []
+    scan_results = []
+    prompt_hash = project_memory_prompt_hash()
+    needs_project_memory_reanalysis = bool(reanalyze_cached)
     for repo in repos:
-        repo_context = agent.fetch_github_repo_context(repo)
-        repo_context["verified_github_identities"] = github_identities
-        if repo_context.get("error"):
-            repo_context["contribution_evidence"] = []
-        else:
-            repo_context["contribution_evidence"] = agent.fetch_user_commits_for_repo(
-                repo, github_identities
+        key = repo_state_key(repo)
+        previous_state = repositories_state.get(key, {})
+        if not isinstance(previous_state, dict):
+            previous_state = {}
+
+        remote_state = fetch_github_remote_state(repo, previous_state)
+        should_fetch = force_refresh or remote_state.get("changed") or not previous_state.get("context")
+        previous_sha = str(previous_state.get("latest_commit_sha") or "")
+        latest_sha = str(remote_state.get("latest_commit_sha") or previous_sha)
+        can_incremental_fetch = (
+            should_fetch
+            and not force_refresh
+            and previous_state.get("context")
+            and previous_sha
+            and latest_sha
+            and latest_sha != previous_sha
+        )
+        cache_status = "fetch"
+        if remote_state.get("error"):
+            repo_context = {
+                "url": repo["url"],
+                "repository": key,
+                "error": f"Could not check repository update state: {remote_state['error']}",
+                "contribution_evidence": [],
+            }
+            cache_status = "remote-state-error"
+        elif not should_fetch:
+            repo_context = previous_state["context"]
+            cache_status = "reused"
+        elif can_incremental_fetch:
+            repo_context = agent.fetch_incremental_github_repo_context(
+                repo,
+                previous_state["context"],
+                github_identities,
+                previous_sha,
+                latest_sha,
             )
+            repo_context["verified_github_identities"] = github_identities
+            incremental_errors = [
+                evidence.get("error")
+                for evidence in repo_context.get("contribution_evidence", [])
+                if isinstance(evidence, dict) and evidence.get("error")
+            ]
+            if incremental_errors:
+                repo_context = agent.fetch_github_repo_context(repo)
+                repo_context["verified_github_identities"] = github_identities
+                if repo_context.get("error"):
+                    repo_context["contribution_evidence"] = []
+                else:
+                    repo_context["contribution_evidence"] = agent.fetch_user_commits_for_repo(
+                        repo, github_identities
+                    )
+                cache_status = "fetch"
+            else:
+                cache_status = "incremental"
+            fetched_contexts.append(repo_context)
+        else:
+            repo_context = agent.fetch_github_repo_context(repo)
+            repo_context["verified_github_identities"] = github_identities
+            if repo_context.get("error"):
+                repo_context["contribution_evidence"] = []
+            else:
+                repo_context["contribution_evidence"] = agent.fetch_user_commits_for_repo(
+                    repo, github_identities
+                )
+            fetched_contexts.append(repo_context)
+
+        if cache_status != "remote-state-error" and agent.has_usable_repo_context([repo_context]):
+            repositories_state[key] = {
+                **previous_state,
+                "repository": key,
+                "url": repo["url"],
+                "default_branch": remote_state.get("default_branch") or previous_state.get("default_branch", ""),
+                "latest_commit_sha": remote_state.get("latest_commit_sha") or previous_state.get("latest_commit_sha", ""),
+                "repo_etag": remote_state.get("repo_etag") or previous_state.get("repo_etag", ""),
+                "latest_commit_etag": remote_state.get("latest_commit_etag") or previous_state.get("latest_commit_etag", ""),
+                "checked_at": remote_state.get("checked_at"),
+                "context": repo_context,
+            }
+            if (
+                cache_status == "fetch"
+                or cache_status == "incremental"
+                or repositories_state[key].get("project_memory_prompt_hash") != prompt_hash
+            ):
+                needs_project_memory_reanalysis = True
+
+        scan_results.append(
+            {
+                "repository": key,
+                "cache_status": cache_status,
+                "changed": bool(remote_state.get("changed")),
+                "change_reason": remote_state.get("change_reason", ""),
+                "default_branch": remote_state.get("default_branch") or previous_state.get("default_branch", ""),
+                "latest_commit_sha": remote_state.get("latest_commit_sha") or previous_state.get("latest_commit_sha", ""),
+                "error": remote_state.get("error", ""),
+            }
+        )
         repo_contexts.append(repo_context)
 
-    path = agent.save_github_context_output(repo_contexts)
-    project_memory_update = update_project_memory_from_repo_analysis(repo_contexts)
+    path = agent.CHROMA_DB_PATH
+    if fetched_contexts:
+        path = agent.save_github_context_output(fetched_contexts)
+
+    if needs_project_memory_reanalysis:
+        project_memory_update = update_project_memory_from_repo_analysis(repo_contexts)
+        for result in scan_results:
+            key = result["repository"]
+            if key in repositories_state and not result.get("error"):
+                repositories_state[key]["project_memory_prompt_hash"] = prompt_hash
+                repositories_state[key]["project_memory_analyzed_at"] = datetime.now().isoformat(timespec="seconds")
+    else:
+        project_memory_update = {
+            "updated": False,
+            "source": "repo-analysis-cache",
+            "additions": [],
+            "project_memory": read_current_project_memory(),
+            "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+            "message": "Repository commit SHAs and Project Memory analysis prompt are unchanged; reused cached GitHub context.",
+        }
+
+    save_github_repo_scan_state(scan_state)
     return {
         "saved": agent.has_usable_repo_context(repo_contexts),
         "path": str(path),
         "project_name": project_name.strip(),
         "project_id": project_id.strip(),
         "project_memory_update": project_memory_update,
+        "scan_results": scan_results,
+        "fetched_repository_count": len(fetched_contexts),
+        "reused_repository_count": sum(1 for result in scan_results if result["cache_status"] == "reused"),
+        "scan_state_path": str(agent.GITHUB_REPO_SCAN_STATE_PATH),
         "context": repo_contexts,
     }
 

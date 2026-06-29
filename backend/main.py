@@ -52,6 +52,7 @@ CHROMA_DB_PATH = INFORMATION_DIR / "chroma"
 RESUME_PATH = INFORMATION_DIR / "resume.txt"
 JOB_DESCRIPTION_PATH = INFORMATION_DIR / "job_description.txt"
 GITHUB_ACCOUNTS_PATH = INFORMATION_DIR / "github_accounts.txt"
+GITHUB_REPO_SCAN_STATE_PATH = INFORMATION_DIR / "github_repo_scan_state.json"
 OUTPUT_DIR = ROOT_DIR / "outputs" / "backend"
 ANALYSIS_OUTPUT_DIR = OUTPUT_DIR / "analysis"
 GITHUB_CONTEXT_OUTPUT_DIR = OUTPUT_DIR / "github_context"
@@ -1786,7 +1787,7 @@ def summarize_commit_diff(file_changes):
     }
 
 
-def github_api_get(url, accept="application/vnd.github+json"):
+def github_api_request(url, accept="application/vnd.github+json", extra_headers=None):
     headers = {
         "Accept": accept,
         "Accept-Encoding": "identity",
@@ -1794,6 +1795,8 @@ def github_api_get(url, accept="application/vnd.github+json"):
         "User-Agent": "liam-job-application-agent",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    if extra_headers:
+        headers.update({key: value for key, value in extra_headers.items() if value})
     github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
@@ -1807,6 +1810,12 @@ def github_api_get(url, accept="application/vnd.github+json"):
                     headers=headers,
                     timeout=GITHUB_REQUEST_TIMEOUT,
                 )
+                if response.status_code == 304:
+                    return {
+                        "status": 304,
+                        "text": "",
+                        "headers": dict(response.headers),
+                    }
                 if response.status_code in [429, 500, 502, 503, 504]:
                     last_error = requests.HTTPError(
                         f"HTTP {response.status_code}: {response.text[:300]}"
@@ -1816,7 +1825,11 @@ def github_api_get(url, accept="application/vnd.github+json"):
                         continue
 
                 response.raise_for_status()
-                return response.text
+                return {
+                    "status": response.status_code,
+                    "text": response.text,
+                    "headers": dict(response.headers),
+                }
             except requests.HTTPError as error:
                 status_code = getattr(error.response, "status_code", None)
                 if status_code in [429, 500, 502, 503, 504] and attempt < GITHUB_REQUEST_RETRIES:
@@ -1842,12 +1855,30 @@ def github_api_get(url, accept="application/vnd.github+json"):
         )
 
     request = urllib.request.Request(url, headers=headers)
-    return read_url_response_text(
-        request,
-        timeout=GITHUB_REQUEST_TIMEOUT,
-        attempts=GITHUB_REQUEST_RETRIES,
-        operation="GitHub request",
-    )
+    for attempt in range(1, GITHUB_REQUEST_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=GITHUB_REQUEST_TIMEOUT) as response:
+                return {
+                    "status": response.status,
+                    "text": response.read().decode("utf-8"),
+                    "headers": dict(response.headers),
+                }
+        except urllib.error.HTTPError as error:
+            if error.code == 304:
+                return {"status": 304, "text": "", "headers": dict(error.headers)}
+            if error.code in TRANSIENT_HTTP_STATUS_CODES and attempt < GITHUB_REQUEST_RETRIES:
+                time.sleep(GITHUB_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < GITHUB_REQUEST_RETRIES:
+                time.sleep(GITHUB_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            raise
+
+
+def github_api_get(url, accept="application/vnd.github+json"):
+    return github_api_request(url, accept=accept)["text"]
 
 
 def github_token_is_configured():
@@ -2067,6 +2098,97 @@ def fetch_user_commits_for_repo(repo_info, github_identities):
         contributions.append(fetch_fallback_commits_for_repo(base_url, github_identities))
 
     return contributions
+
+
+def fetch_incremental_commits_for_repo(repo_info, github_identities, previous_sha, latest_sha):
+    owner = urllib.parse.quote(repo_info["owner"], safe="")
+    repo = urllib.parse.quote(repo_info["repo"], safe="")
+    base_url = f"https://api.github.com/repos/{owner}/{repo}"
+    compare_url = (
+        f"{base_url}/compare/"
+        f"{urllib.parse.quote(str(previous_sha), safe='')}..."
+        f"{urllib.parse.quote(str(latest_sha), safe='')}"
+    )
+    incremental_context = {
+        "method": "compare_previous_to_latest",
+        "base_sha": previous_sha,
+        "head_sha": latest_sha,
+        "commit_count_checked": 0,
+        "commits": [],
+        "compare_diff_analysis": {},
+    }
+
+    try:
+        comparison = json.loads(github_api_get(compare_url))
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as error:
+        incremental_context["error"] = (
+            describe_http_error(error)
+            if isinstance(error, urllib.error.HTTPError)
+            else str(error)
+        )
+        return incremental_context
+
+    commits = comparison.get("commits", [])
+    if not isinstance(commits, list):
+        incremental_context["error"] = "Unexpected compare API commits response."
+        return incremental_context
+
+    incremental_context["commit_count_checked"] = len(commits)
+    for commit in commits:
+        if not commit_matches_identity(commit, github_identities):
+            continue
+        incremental_context["commits"].append(
+            fetch_commit_files(base_url, summarize_commit(commit))
+        )
+        if len(incremental_context["commits"]) >= MAX_COMMIT_DETAILS:
+            break
+
+    compare_files = [
+        file_info
+        for file_info in comparison.get("files", [])
+        if isinstance(file_info, dict) and file_info.get("filename")
+    ][:MAX_COMMIT_FILES]
+    remaining_patch_chars = MAX_TOTAL_PATCH_CHARS_PER_COMMIT
+    file_changes = []
+    for file_info in compare_files:
+        file_change = summarize_file_change(file_info, remaining_patch_chars)
+        remaining_patch_chars -= len(file_change.get("patch", ""))
+        file_changes.append(file_change)
+    incremental_context["compare_diff_analysis"] = summarize_commit_diff(file_changes)
+    incremental_context["compare_files"] = [change["filename"] for change in file_changes]
+    incremental_context["compare_file_changes"] = file_changes
+    return incremental_context
+
+
+def fetch_incremental_github_repo_context(
+    repo_info,
+    previous_context,
+    github_identities,
+    previous_sha,
+    latest_sha,
+):
+    context = dict(previous_context or {})
+    context["url"] = repo_info["url"]
+    context["repository"] = f"{repo_info['owner']}/{repo_info['repo']}"
+    context["incremental_update"] = {
+        "base_sha": previous_sha,
+        "head_sha": latest_sha,
+        "mode": "compare_previous_to_latest",
+    }
+    context["contribution_evidence"] = [
+        fetch_incremental_commits_for_repo(
+            repo_info,
+            github_identities,
+            previous_sha,
+            latest_sha,
+        )
+    ]
+    return context
 
 
 def fetch_github_repo_context(repo_info):
