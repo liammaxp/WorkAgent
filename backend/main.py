@@ -649,9 +649,11 @@ def clear_interview_prep():
 
 def clear_tailored_resume():
     TAILORED_RESUME_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_RESUME_PATH.write_text("", encoding="utf-8")
+    for path in TAILORED_RESUME_OUTPUT_DIR.glob("*.txt"):
+        if path.is_file():
+            path.unlink()
     if LEGACY_OUTPUT_RESUME_PATH.exists():
-        LEGACY_OUTPUT_RESUME_PATH.write_text("", encoding="utf-8")
+        LEGACY_OUTPUT_RESUME_PATH.unlink()
 
 
 def timestamp_slug():
@@ -715,10 +717,55 @@ def unique_application_output_path(directory, company="", role="", suffix=".txt"
         index += 1
 
 
+def existing_matching_application_output_path(directory, content, company="", role="", suffix=".txt", fallback_prefix="output"):
+    stem = application_output_stem(company, role, fallback_prefix)
+    expected_content = str(content or "").strip()
+    if not expected_content or not directory.exists():
+        return None
+
+    candidates = sorted(
+        (
+            path
+            for path in directory.glob(f"{stem}*{suffix}")
+            if path.stem == stem or re.fullmatch(rf"{re.escape(stem)}_\d+", path.stem)
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            if path.read_text(encoding="utf-8").strip() == expected_content:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def application_output_path_for_content(directory, content, company="", role="", suffix=".txt", fallback_prefix="output"):
+    matching_path = existing_matching_application_output_path(
+        directory,
+        content,
+        company=company,
+        role=role,
+        suffix=suffix,
+        fallback_prefix=fallback_prefix,
+    )
+    if matching_path:
+        return matching_path
+    return unique_application_output_path(
+        directory,
+        company=company,
+        role=role,
+        suffix=suffix,
+        fallback_prefix=fallback_prefix,
+    )
+
+
 def save_analysis_output(content, prefix="job_analysis", company="", role=""):
     metadata = current_application_output_metadata(company, role)
-    path = unique_application_output_path(
+    path = application_output_path_for_content(
         ANALYSIS_OUTPUT_DIR,
+        content,
         company=metadata["company"],
         role=metadata["role"],
         suffix=".txt",
@@ -1099,14 +1146,114 @@ def read_project_evidence_map(limit_per_project=4):
     )
 
 
+def write_resume_bullets(
+    section_type,
+    source_name="",
+    job_alignment="",
+    source_facts=None,
+    evidence=None,
+    existing_bullets=None,
+    react_analysis=None,
+    final_bullets=None,
+    language="en",
+):
+    source_facts = source_facts or {}
+    evidence = evidence or []
+    existing_bullets = existing_bullets or []
+    react_analysis = react_analysis or []
+    final_bullets = final_bullets or []
+    allowed_sections = {"project", "experience"}
+    allowed_verbs = ("Used ", "Implemented ", "Automated ", "Debugged ")
+    issues = []
+
+    if section_type not in allowed_sections:
+        issues.append("section_type must be either 'project' or 'experience'.")
+    if not react_analysis:
+        issues.append("react_analysis is required before final bullets.")
+    if not final_bullets:
+        issues.append("final_bullets is required.")
+
+    normalized_bullets = []
+    for item in final_bullets:
+        if isinstance(item, str):
+            bullet = item.strip()
+            normalized = {"bullet": bullet, "evidence": "", "confidence": "medium"}
+        elif isinstance(item, dict):
+            bullet = str(item.get("bullet", "")).strip()
+            normalized = {
+                "bullet": bullet,
+                "evidence": str(item.get("evidence", "")).strip(),
+                "confidence": str(item.get("confidence", "medium")).strip() or "medium",
+            }
+        else:
+            continue
+
+        if not bullet:
+            issues.append("Every final bullet must include non-empty bullet text.")
+            continue
+        if not bullet.startswith(allowed_verbs):
+            issues.append(
+                "Bullet must start with one of: Used, Implemented, Automated, Debugged."
+            )
+        if " to " not in bullet:
+            issues.append(
+                "Bullet should follow: verb + technical method + to + function/problem + result/value."
+            )
+        normalized_bullets.append(normalized)
+
+    return json.dumps(
+        {
+            "accepted": not issues,
+            "section_type": section_type,
+            "source_name": source_name,
+            "language": language,
+            "required_mode": (
+                "ReAct: reason why the bullet is factual and worth writing, identify "
+                "business capability, identify technical signal, then write resume bullets."
+            ),
+            "required_pattern": (
+                "Used / Implemented / Automated / Debugged + technical method + "
+                "to implement a feature or solve a problem + result or value"
+            ),
+            "job_alignment": job_alignment,
+            "source_facts": source_facts,
+            "evidence": evidence,
+            "existing_bullets": existing_bullets,
+            "react_analysis": react_analysis,
+            "final_bullets": normalized_bullets,
+            "issues": issues,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def read_resume():
     return read_text_file(RESUME_PATH)
 
 
-def read_tailored_resume():
+def latest_tailored_resume_path():
     if file_is_ready(OUTPUT_RESUME_PATH):
-        return read_text_file(OUTPUT_RESUME_PATH)
-    return read_text_file(LEGACY_OUTPUT_RESUME_PATH)
+        return OUTPUT_RESUME_PATH
+    if TAILORED_RESUME_OUTPUT_DIR.exists():
+        candidates = sorted(
+            (
+                path
+                for path in TAILORED_RESUME_OUTPUT_DIR.glob("*.txt")
+                if path.is_file() and file_is_ready(path)
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            return candidates[0]
+    if file_is_ready(LEGACY_OUTPUT_RESUME_PATH):
+        return LEGACY_OUTPUT_RESUME_PATH
+    return OUTPUT_RESUME_PATH
+
+
+def read_tailored_resume():
+    return read_text_file(latest_tailored_resume_path())
 
 
 def read_job_description():
@@ -1145,22 +1292,23 @@ def save_tailored_resume(content, company="", role=""):
         raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
 
     metadata = current_application_output_metadata(company, role)
-    version_path = unique_application_output_path(
+    version_path = application_output_path_for_content(
         TAILORED_RESUME_OUTPUT_DIR,
+        latex,
         company=metadata["company"],
         role=metadata["role"],
         suffix=".txt",
         fallback_prefix="tailored_resume",
     )
-    write_text_file(OUTPUT_RESUME_PATH, latex)
     write_text_file(version_path, latex)
-    return f"Saved tailored resume to {OUTPUT_RESUME_PATH} and {version_path}"
+    return f"Saved tailored resume to {version_path}"
 
 
 def save_cover_letter(content, company="", role=""):
     metadata = current_application_output_metadata(company, role)
-    output_path = unique_application_output_path(
+    output_path = application_output_path_for_content(
         COVER_LETTER_OUTPUT_DIR,
+        content,
         company=metadata["company"],
         role=metadata["role"],
         suffix=".txt",
@@ -1173,8 +1321,9 @@ def save_cover_letter(content, company="", role=""):
 
 def save_interview_prep(content, company="", role=""):
     metadata = current_application_output_metadata(company, role)
-    output_path = unique_application_output_path(
+    output_path = application_output_path_for_content(
         INTERVIEW_PREP_OUTPUT_DIR,
+        content,
         company=metadata["company"],
         role=metadata["role"],
         suffix=".txt",
@@ -2180,6 +2329,72 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "write_resume_bullets",
+        "description": (
+            "Mandatory ReAct resume bullet writer for project and Experience bullets. "
+            "Call this tool before producing or modifying any project or Experience bullet. "
+            "The tool records why each bullet is factual, why it belongs in the resume, "
+            "what business capability it shows, what technical signal it shows, and the final "
+            "bullet text using the required pattern."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section_type": {
+                    "type": "string",
+                    "enum": ["project", "experience"],
+                    "description": "Whether these bullets are for a Project section or an Experience entry.",
+                },
+                "source_name": {
+                    "type": "string",
+                    "description": "Project name, employer/role, or resume entry name.",
+                },
+                "job_alignment": {
+                    "type": "string",
+                    "description": "Short explanation of why this source is relevant to the target job.",
+                },
+                "source_facts": {
+                    "type": "object",
+                    "description": "Factual project or experience data from resume.txt, project_memory.json, or approved evidence.",
+                },
+                "evidence": {
+                    "type": "array",
+                    "description": "Supporting evidence snippets, files, commits, diffs, or memory facts. Do not use unsupported claims.",
+                    "items": {},
+                },
+                "existing_bullets": {
+                    "type": "array",
+                    "description": "Existing resume bullets being rewritten, if any.",
+                    "items": {"type": "string"},
+                },
+                "react_analysis": {
+                    "type": "array",
+                    "description": (
+                        "ReAct analysis for each candidate bullet. Each item should explain: "
+                        "why this can be written, why it belongs in the project/experience, "
+                        "business capability shown, technical capability shown, and risk/unsupported claims avoided."
+                    ),
+                    "items": {"type": "object"},
+                },
+                "final_bullets": {
+                    "type": "array",
+                    "description": (
+                        "Final resume bullets. Each bullet must follow: Used / Implemented / Automated / "
+                        "Debugged + technical method + to + feature/problem + result or value."
+                    ),
+                    "items": {"type": "object"},
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Output language code or label, usually from the job description language.",
+                },
+            },
+            "required": ["section_type", "react_analysis", "final_bullets"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_resume",
         "description": "Read the user's current resume LaTeX code from resume.txt.",
         "parameters": {
@@ -2394,6 +2609,7 @@ TOOL_FUNCTIONS = {
     "read_memory": read_memory,
     "read_project_memory": read_project_memory,
     "read_project_evidence_map": read_project_evidence_map,
+    "write_resume_bullets": write_resume_bullets,
     "delete_profile_memory": delete_profile_memory,
     "read_resume": read_resume,
     "read_tailored_resume": read_tailored_resume,
@@ -2441,6 +2657,7 @@ For cover letters, read tailored_resume.txt first and use resume.txt only as a f
 Project Memory is the primary source of project truth. GitHub context is an evidence library only.
 Resume tailoring order for projects: first call read_project_memory to understand each project's background, purpose, scope, tech stack, workflows, confirmed features, and metrics; then call read_project_evidence_map to map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details; then modify the resume.
 Do not write resume bullets directly from retrieved GitHub evidence. Use Project Memory to decide which projects and claims are valid, and use the per-project evidence map only to add implementation details and proof.
+Mandatory bullet-writing tool rule: whenever the user asks to write, rewrite, tailor, generate, or modify Project-section bullets or Experience-section bullets, you must call write_resume_bullets before showing final bullet wording or before saving a modified resume. Use its ReAct fields to explain privately in the tool call why each bullet can be written, why it belongs in the project or experience, what business capability it shows, and what technical capability it shows. Final bullets must follow: Used / Implemented / Automated / Debugged + technical method + to + feature/problem + result or value.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals only as supporting evidence for facts already represented in Project Memory.
 When tailoring a resume, compare the current resume projects with factual projects from project_memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching Project Memory project. Project Memory rag_refs are candidates for Chroma evidence lookup, not permission to invent claims.
 When tailoring resume Experience entries, you may reorder factual bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. Preserve each existing Experience entry unless the user explicitly allows removing an entire entry. Never invent or change employers, roles, dates, responsibilities, technologies, or metrics.

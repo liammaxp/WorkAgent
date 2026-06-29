@@ -93,6 +93,11 @@ Repository links in Chroma profile memory may be used only as candidates for app
 Do not invent claims, technologies, metrics, responsibilities, employers, roles, dates, or repository facts.
 
 Resume Bullet Writing Rules:
+- Project and Experience bullet wording must come from the mandatory ReAct bullet writer tool/process.
+- The writer must first reason why the fact can be written, why it belongs in the project or experience,
+  what business capability it demonstrates, and what technical capability it demonstrates.
+- Final bullets must follow this pattern: Used / Implemented / Automated / Debugged + technical method
+  + to + feature/problem + result or value.
 - Before writing any project bullet, read the selected project's Project Memory fields in this order:
   1. identity.positioning
   2. identity.core_problem
@@ -106,7 +111,7 @@ Resume Bullet Writing Rules:
   3. technical implementation
   4. metrics, only if explicitly provided
 - Do not write bullets that only describe storage, CRUD, file handling, framework usage, or generic implementation.
-- Prefer strong verbs such as Built, Designed, Developed, Implemented, Integrated, Automated, Refactored, Optimized.
+- Prefer Used, Implemented, Automated, or Debugged as the bullet's main verb.
 - Avoid vague verbs such as leveraged, utilized, facilitated, enabled, supported unless necessary.
 - Technology names should support the story, not become the whole story.
 - Each project should have 3-4 bullets maximum.
@@ -120,12 +125,34 @@ Bad:
 - Developed a FastAPI backend.
 
 Good:
-- Built a local AI-assisted job application workspace that automates resume tailoring, application preparation, and job tracking workflows.
-- Designed a workflow to analyze job descriptions, select relevant project experience, and generate role-specific application materials while preserving factual accuracy.
-- Developed a full-stack architecture using React, FastAPI, SQLite, and vector memory to manage resumes, application history, interview preparation, and GitHub-backed project evidence.
+- Automated resume tailoring workflows with FastAPI, React, SQLite, and vector memory to generate role-specific application materials while preserving factual project evidence.
+- Implemented job-description analysis and project-selection logic to match application materials with role requirements and reduce unsupported resume claims.
+- Used GitHub-backed project evidence and Project Memory mapping to connect implementation details with ATS-friendly bullets for job applications.
 
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
+"""
+
+RESUME_BULLET_WRITER_PROMPT = """
+You are the mandatory ReAct resume bullet writer for WorkAgent.
+
+Use this mode for Project-section bullets and Experience-section bullets:
+1. Think: why this fact can be written in the resume without exaggeration.
+2. Reason: why this point belongs under this project or experience for the target job.
+3. Act: identify the business capability or product/workflow value shown.
+4. Act: identify the technical capability, stack, implementation method, bug fix, or feature delivery shown.
+5. Write: produce final resume bullets.
+
+Final bullet pattern:
+Used / Implemented / Automated / Debugged + technical method + to + feature/problem + result or value.
+
+Rules:
+- Use only supported facts from the original resume, Project Memory, staged candidates, and approved evidence.
+- Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, business impact, or performance claims.
+- Prefer business-relevant technical writing: technology stack, technical solution, bug or feature implemented, and the business requirement or workflow value it supports.
+- Do not write generic bullets that only say storage, CRUD, framework usage, or file handling.
+- If a result is qualitative, phrase it as workflow value, reliability, clarity, maintainability, relevance, or user/application-preparation value without inventing numbers.
+- Return ONLY valid JSON.
 """
 
 PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT = """
@@ -564,7 +591,11 @@ def list_output_files(directory: Path, suffix: str, limit: Optional[int] = None)
     if not directory.exists():
         return []
     files = sorted(
-        (path for path in directory.glob(f"*{suffix}") if path.stat().st_size > 0),
+        (
+            path
+            for path in directory.glob(f"*{suffix}")
+            if path.stat().st_size > 0
+        ),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -709,12 +740,12 @@ def read_file_content(name: str) -> tuple[bool, str]:
         content = agent.read_project_memory()
         return agent.file_is_ready(agent.PROJECT_MEMORY_PATH), content
 
-    if name == "tailored_resume" and not agent.file_is_ready(agent.OUTPUT_RESUME_PATH):
-        if not agent.LEGACY_OUTPUT_RESUME_PATH.exists():
+    if name == "tailored_resume":
+        try:
+            content = agent.read_tailored_resume()
+        except (FileNotFoundError, ValueError):
             return False, ""
-        content = agent.LEGACY_OUTPUT_RESUME_PATH.read_text(encoding="utf-8")
-        ready = agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
-        return ready, content
+        return bool(content.strip()), content
 
     path = FILE_MAP[name]
     if not path.exists():
@@ -730,7 +761,7 @@ def file_ready(name: str, path: Path) -> bool:
     if name == "project_memory":
         return agent.file_is_ready(path)
     if name == "tailored_resume":
-        return agent.file_is_ready(path) or agent.file_is_ready(agent.LEGACY_OUTPUT_RESUME_PATH)
+        return agent.file_is_ready(agent.latest_tailored_resume_path())
     return agent.file_is_ready(path)
 
 
@@ -1995,6 +2026,80 @@ Project Memory projects:
     return selected or projects[:MAX_STAGED_PROJECTS]
 
 
+def run_resume_bullet_writer_tool(
+    section_type: str,
+    source_name: str,
+    job_description: str,
+    resume: str,
+    source_facts: dict[str, Any],
+    evidence: Any,
+    existing_bullets: list[str],
+    language: str,
+    extra_rules: str = "",
+) -> dict[str, Any]:
+    prompt = f"""
+{RESUME_BULLET_WRITER_PROMPT}
+
+Return JSON with exactly these keys:
+  "section_type": "project" | "experience",
+  "source_name": string,
+  "job_alignment": string,
+  "react_analysis": array of objects with keys "candidate_fact", "why_writable", "why_it_belongs", "business_capability", "technical_capability", "risk_avoided",
+  "final_bullets": array of objects with keys "bullet", "evidence", "confidence",
+  "skills_to_emphasize": array of strings,
+  "risks": array of strings
+
+Output language requirement:
+{output_language_instruction(language)}
+
+Section type:
+{section_type}
+
+Source name:
+{source_name}
+
+Extra rules:
+{extra_rules}
+
+Job description:
+{truncate_text(job_description, 12000)}
+
+Original resume:
+{truncate_text(resume, 22000)}
+
+Source facts:
+{json.dumps(source_facts, ensure_ascii=False, indent=2)}
+
+Existing bullets:
+{json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
+
+Supporting evidence:
+{json.dumps(evidence, ensure_ascii=False, indent=2)}
+"""
+    payload = extract_json_object(run_text_task(prompt))
+    for key in ["react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+
+    validation = json.loads(
+        agent.write_resume_bullets(
+            section_type=section_type,
+            source_name=source_name,
+            job_alignment=str(payload.get("job_alignment", "")),
+            source_facts=source_facts,
+            evidence=evidence if isinstance(evidence, list) else [evidence],
+            existing_bullets=existing_bullets,
+            react_analysis=payload["react_analysis"],
+            final_bullets=payload["final_bullets"],
+            language=language,
+        )
+    )
+    payload["bullet_writer_validation"] = validation
+    if validation.get("issues"):
+        payload["risks"].extend(validation["issues"])
+    return payload
+
+
 def build_project_resume_candidate(
     job_description: str,
     resume: str,
@@ -2002,44 +2107,28 @@ def build_project_resume_candidate(
     evidence: list[dict[str, Any]],
     language: str,
 ) -> dict[str, Any]:
-    prompt = f"""
-Generate structured resume tailoring candidates for ONE project.
-
-Rules:
-- Project Memory is the primary source of truth.
-- Chroma evidence is supporting proof only.
-- Do not output a full resume.
-- Do not invent metrics, technologies, files, commits, dates, ownership, or impact.
-- If evidence is weak, lower confidence or leave risk notes.
-- Return ONLY valid JSON with exactly these keys:
-  "project_id": string,
-  "project_name": string,
-  "fit": "high" | "medium" | "low",
-  "keep_or_replace": "keep" | "update" | "add" | "remove",
-  "fit_reason": string,
-  "recommended_bullets": array of objects with keys "bullet", "evidence", "confidence",
-  "skills_to_emphasize": array of strings,
-  "risks": array of strings
-
-Output language requirement:
-{output_language_instruction(language)}
-
-Job description:
-{truncate_text(job_description, 12000)}
-
-Original resume:
-{truncate_text(resume, 18000)}
-
-Project Memory project:
-{json.dumps(compact_project_for_prompt(project), ensure_ascii=False, indent=2)}
-
-Mapped Chroma evidence for this project, passed in its original stored form:
-{json.dumps(evidence, ensure_ascii=False, indent=2)}
-"""
-    payload = extract_json_object(run_text_task(prompt))
-    for key in ["recommended_bullets", "skills_to_emphasize", "risks"]:
-        if not isinstance(payload.get(key), list):
-            payload[key] = []
+    source_facts = compact_project_for_prompt(project)
+    payload = run_resume_bullet_writer_tool(
+        section_type="project",
+        source_name=str(project.get("project_name") or project.get("name") or project.get("project_id") or ""),
+        job_description=job_description,
+        resume=resume,
+        source_facts=source_facts,
+        evidence=evidence,
+        existing_bullets=[],
+        language=language,
+        extra_rules=(
+            "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
+            "Select 3-4 bullets maximum. The first bullet must explain what the project is and what "
+            "workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
+        ),
+    )
+    payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
+    payload["project_name"] = payload.get("project_name") or project.get("project_name") or project.get("name") or ""
+    payload["fit"] = payload.get("fit") if payload.get("fit") in {"high", "medium", "low"} else "medium"
+    payload["keep_or_replace"] = payload.get("keep_or_replace") or "update"
+    payload["fit_reason"] = payload.get("fit_reason") or payload.get("job_alignment", "")
+    payload["recommended_bullets"] = payload.get("final_bullets", [])
     return payload
 
 
@@ -2099,49 +2188,44 @@ def build_experience_resume_candidate(
     allow_experience_removal: bool,
     language: str,
 ) -> dict[str, Any]:
-    prompt = f"""
-Generate structured Experience-section tailoring recommendations.
-
-Rules:
-- Do not output a full resume.
-- Use only the job description, original resume, Project Memory, staged project candidates, and staged Skills candidate.
-- You may reorder factual Experience bullets and rewrite them for relevance and clarity.
-- You may remove weak or redundant Experience bullets.
-- Preserve every existing Experience entry unless allow_experience_removal is true.
-- If allow_experience_removal is false, do not recommend removing an entire employer/role entry.
-- Do not invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership.
-- Add a technology or responsibility only if supported by the original resume or staged candidates.
-- Return ONLY valid JSON with exactly these keys:
-  "experience_strategy": string,
-  "entry_recommendations": array of objects with keys "entry_name", "action", "reason", "recommended_bullets", "remove_bullets", "risks",
-  "bullets_to_emphasize": array of strings,
-  "bullets_to_deemphasize": array of strings,
-  "unsupported_claims_to_avoid": array of strings,
-  "risks": array of strings
-
-Output language requirement:
-{output_language_instruction(language)}
-
-allow_experience_removal:
-{allow_experience_removal}
-
-Job description:
-{truncate_text(job_description, 12000)}
-
-Original resume:
-{truncate_text(resume, 26000)}
-
-Project Memory:
-{json.dumps(project_memory, ensure_ascii=False, indent=2)}
-
-Staged project candidates:
-{json.dumps(project_candidates, ensure_ascii=False, indent=2)}
-
-Staged Skills candidate:
-{json.dumps(skills_candidate, ensure_ascii=False, indent=2)}
-"""
-    payload = extract_json_object(run_text_task(prompt))
-    for key in ["entry_recommendations", "bullets_to_emphasize", "bullets_to_deemphasize", "unsupported_claims_to_avoid", "risks"]:
+    source_facts = {
+        "project_memory": project_memory,
+        "staged_project_candidates": project_candidates,
+        "staged_skills_candidate": skills_candidate,
+        "allow_experience_removal": allow_experience_removal,
+    }
+    payload = run_resume_bullet_writer_tool(
+        section_type="experience",
+        source_name="Experience",
+        job_description=job_description,
+        resume=resume,
+        source_facts=source_facts,
+        evidence=project_candidates,
+        existing_bullets=[],
+        language=language,
+        extra_rules=(
+            "Generate Experience-section tailoring recommendations. You may reorder factual Experience "
+            "bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. "
+            "Preserve every existing Experience entry unless allow_experience_removal is true. Do not "
+            "invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership. "
+            "Return experience_strategy, entry_recommendations, bullets_to_emphasize, bullets_to_deemphasize, "
+            "and unsupported_claims_to_avoid if possible."
+        ),
+    )
+    final_bullets = payload.get("final_bullets", [])
+    payload["experience_strategy"] = payload.get("experience_strategy") or payload.get("job_alignment", "")
+    if not isinstance(payload.get("entry_recommendations"), list):
+        payload["entry_recommendations"] = [
+            {
+                "entry_name": "Experience",
+                "action": "rewrite_bullets",
+                "reason": payload.get("job_alignment", ""),
+                "recommended_bullets": final_bullets,
+                "remove_bullets": [],
+                "risks": payload.get("risks", []),
+            }
+        ]
+    for key in ["bullets_to_emphasize", "bullets_to_deemphasize", "unsupported_claims_to_avoid", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
     return payload
@@ -2225,6 +2309,8 @@ Rules:
 - Produce the complete modified LaTeX resume.
 - Keep factual meaning from the original resume.
 - Use staged candidates to update, add, remove, or reorder projects only when allowed.
+- For Project and Experience bullet wording, use the staged candidates produced by the ReAct bullet writer.
+  Do not create new bullet claims outside those staged bullet candidates.
 - Use the staged Skills-section candidate to rewrite or reorder the Skills section when factual and relevant.
 - Use the staged Experience-section candidate to rewrite, reorder, or remove Experience bullets within the user's permissions.
 - Use the staged Summary/Profile candidate to rewrite or add a concise summary only when it improves the resume.
@@ -2313,7 +2399,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
         "saved": True,
-        "path": str(agent.OUTPUT_RESUME_PATH),
+        "path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else str(agent.latest_tailored_resume_path()),
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
@@ -2487,6 +2573,8 @@ def fetch_github_context_api(
 def get_status():
     file_metadata = {}
     for name, path in FILE_MAP.items():
+        if name == "tailored_resume":
+            path = agent.latest_tailored_resume_path()
         if path.exists():
             file_metadata[name] = {
                 "mtime": path.stat().st_mtime,
@@ -2755,8 +2843,8 @@ def agent_ask(body: AgentAskBody):
         "answer": answer,
         "artifacts": {
             "analysis_path": None,
-            "tailored_resume_path": str(agent.OUTPUT_RESUME_PATH)
-            if agent.file_is_ready(agent.OUTPUT_RESUME_PATH)
+            "tailored_resume_path": str(agent.latest_tailored_resume_path())
+            if agent.file_is_ready(agent.latest_tailored_resume_path())
             else None,
             "cover_letter_path": str(agent.COVER_LETTER_PATH)
             if agent.file_is_ready(agent.COVER_LETTER_PATH)
@@ -2872,6 +2960,10 @@ Project Memory, read first and use as the primary project source:
             "Never remove an entry merely to invent or substitute unsupported experience."
         )
     prompt += "\nGitHub evidence is not requested for this generation; use Project Memory, resume.txt, and job_description.txt."
+    prompt += (
+        "\nBefore writing or modifying any Project-section or Experience-section bullet, call "
+        "write_resume_bullets and use its ReAct analysis plus final_bullets as the source of bullet wording."
+    )
     job_description = (
         agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
         if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
@@ -2885,7 +2977,7 @@ Project Memory, read first and use as the primary project source:
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
         "saved": True,
-        "path": str(agent.OUTPUT_RESUME_PATH),
+        "path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else str(agent.latest_tailored_resume_path()),
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
@@ -2939,10 +3031,10 @@ def export_tailored_resume_pdf(body: TailoredResumePdfBody):
     content = body.content.strip()
     application_hint = resolve_saved_application_hint()
     if content:
-        try:
-            agent.save_tailored_resume(content, company=application_hint["company"], role=application_hint["role"])
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        document = agent.extract_latex_document(content)
+        if not document:
+            raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
+        content = document
     else:
         try:
             content = agent.read_tailored_resume()

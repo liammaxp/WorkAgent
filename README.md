@@ -21,6 +21,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Ask Agent Chat to prepare application materials; it can generate the tailored resume and/or cover letter, pause for missing fresh JD or base resume input, and create an application record automatically.
 - Generate and edit cover letters based on the tailored resume, with fallback to the base resume.
 - Generate and edit interview preparation notes.
+- Keep generated analysis, tailored resume, cover letter, and interview prep outputs as readable role-based history files, reusing an existing file when regenerated content is unchanged.
 - Use the saved job description's predominant language for all generated application content and Agent Chat responses, independently of the Web UI language.
 - Configure model providers, models, Base URLs, and API keys from the Web UI.
 - Configure GitHub usernames, commit author names, commit emails, and GitHub token from the Web UI.
@@ -202,7 +203,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, switch or delete text-output versions by generation time, export and manage PDF versions, open PDFs with the desktop default application, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
+- Resume: edit the base resume, switch or delete text-output versions by readable file name, export and manage PDF versions, open PDFs with the desktop default application, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
@@ -268,7 +269,7 @@ Agent Chat image requests use data URLs:
 
 `GET /api/status` includes `file_metadata` timestamps for local working files. The frontend uses those timestamps to avoid showing stale generated resume, cover letter, and interview prep outputs from before the current app session.
 
-`GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions.
+`GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions. Output history lists readable file names rather than timestamps and omits reserved current-working files. When analysis, tailored resume, cover letter, or interview prep generation produces unchanged content for the same company and role, WorkAgent reuses the matching history file instead of creating a duplicate numbered version.
 
 `POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
 
@@ -527,6 +528,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 在 Agent Chat 中请求生成求职材料；它可以生成定制简历和/或求职信，在缺少本次会话内保存的 JD 或基础简历时暂停，并自动创建投递记录。
 - 基于定制简历生成和编辑求职信，定制简历不可用时回退到基础简历。
 - 生成和编辑面试准备笔记。
+- 将职位分析、定制简历、求职信和面试准备保存为可读的岗位历史文件；同一公司和岗位下内容未变化时复用已有文件，避免重复编号版本。
 - 所有生成的求职材料和 Agent Chat 回复均使用已保存职位描述的主要语言，不受 Web UI 界面语言影响。
 - 直接在 Web UI 中配置模型供应商、模型、Base URL 和 API Key。
 - 直接在 Web UI 中配置 GitHub 用户名、提交作者名、提交邮箱和 GitHub Token。
@@ -705,7 +707,7 @@ background/prompt.example.txt
 
 - Dashboard：查看 provider/model 状态、配置 API Key、检查文件状态、查看最近输出和快速入口。
 - Job Description：编辑、保存并分析当前职位描述。
-- Resume：编辑基础简历，按生成时间切换或删除文本输出版本，导出和管理 PDF 版本，使用桌面默认应用打开 PDF，更新 Chroma 向量记忆，并生成定制版 LaTeX 简历。
+- Resume：编辑基础简历，按可读文件名切换或删除文本输出版本，导出和管理 PDF 版本，使用桌面默认应用打开 PDF，更新 Chroma 向量记忆，并生成定制版 LaTeX 简历。
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
@@ -771,7 +773,7 @@ Agent Chat 图片请求使用 data URL：
 
 `GET /api/status` 会返回本地工作文件的 `file_metadata` 时间戳。前端用这些时间戳避免展示当前应用会话之前生成的旧版简历、求职信和面试准备内容。
 
-`GET /api/output-file`、`POST /api/output-file/launch` 和 `DELETE /api/output-file` 让前端读取、用桌面默认应用打开或删除生成输出文件，例如定制简历文本版本和导出的 PDF 版本。
+`GET /api/output-file`、`POST /api/output-file/launch` 和 `DELETE /api/output-file` 让前端读取、用桌面默认应用打开或删除生成输出文件，例如定制简历文本版本和导出的 PDF 版本。输出历史按可读文件名展示，而不是按时间戳展示，并且会排除保留的当前工作文件。当职位分析、定制简历、求职信或面试准备在同一公司和岗位下生成出未变化的内容时，WorkAgent 会复用匹配的历史文件，而不是创建重复的编号版本。
 
 `POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
 

@@ -96,6 +96,13 @@ export function StatusBadge({ ready }) {
   );
 }
 
+function outputDisplayName(file) {
+  const rawName = file.name || file.path || file.generated_at_display || file.updated_at_display || "-";
+  const withoutExtension = rawName.replace(/\.[^.\\/]+$/, "");
+  const withSequence = withoutExtension.replace(/_(\d+)$/, " ($1)");
+  return withSequence.replace(/_/g, " ").replace(/\s+/g, " ").trim() || rawName;
+}
+
 export function OutputFileSelect({
   files = [],
   value = "",
@@ -109,7 +116,6 @@ export function OutputFileSelect({
   inline = false,
 }) {
   const { language } = useLanguage();
-  const locale = language === "zh" ? "zh-CN" : "en-US";
   const label = customLabel || (language === "zh" ? "历史输出" : "Output history");
   const placeholder = customPlaceholder || (language === "zh" ? "选择生成时间以查看内容" : "Choose a generated time to view");
   const openLabel = language === "zh" ? "打开" : "Open";
@@ -133,11 +139,8 @@ export function OutputFileSelect({
         >
           <option value="">{placeholder}</option>
           {files.map((file) => {
-            const date = new Date(file.generated_at || file.updated_at || file.generated_at_ms || 0);
-            const displayTime = Number.isNaN(date.getTime())
-              ? file.generated_at_display || file.updated_at_display || "-"
-              : date.toLocaleString(locale, { hour12: false });
-            return <option key={file.path} value={file.path}>{displayTime}</option>;
+            const displayName = outputDisplayName(file);
+            return <option key={file.path} value={file.path}>{displayName}</option>;
           })}
         </select>
       </div>
