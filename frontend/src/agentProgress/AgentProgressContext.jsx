@@ -134,6 +134,7 @@ export function AgentProgressProvider({ children }) {
       messages: initialMessages,
       status: "running",
       error: "",
+      errorDetail: null,
       canClose: false,
       minimized: false,
     });
@@ -222,6 +223,7 @@ export function AgentProgressProvider({ children }) {
         ...current,
         status: "error",
         error: error.message || "Agent task failed",
+        errorDetail: error.detail || null,
         canClose: true,
         stages: current.stages.map((stage) =>
           stage.status === "running" ? { ...stage, status: "error", detail: error.message || "" } : stage,

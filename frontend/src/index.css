@@ -943,6 +943,38 @@ textarea {
   font-size: 13px;
 }
 
+.agent-progress-error-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #fecaca;
+  color: #7f1d1d;
+}
+
+.agent-progress-error-detail-title {
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
+.agent-progress-error-detail dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.agent-progress-error-detail div {
+  display: contents;
+}
+
+.agent-progress-error-detail dt {
+  font-weight: 600;
+}
+
+.agent-progress-error-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .agent-progress-footer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
