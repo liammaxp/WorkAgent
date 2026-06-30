@@ -2351,6 +2351,69 @@ Repository analysis payload for exactly one repository:
     }
 
 
+def build_project_memory_status_summary(
+    project_memory_update: dict[str, Any],
+    *,
+    was_reanalyzed: bool,
+    scan_results: list[dict[str, Any]],
+    before_mtime: Optional[float],
+    after_mtime: Optional[float],
+) -> dict[str, Any]:
+    additions = project_memory_update.get("additions", [])
+    additions_count = len(additions) if isinstance(additions, list) else 0
+    updated = bool(project_memory_update.get("updated"))
+    usable_repo_count = sum(1 for result in scan_results if not result.get("error"))
+    changed_repo_count = sum(1 for result in scan_results if result.get("changed"))
+    fetched_repo_count = sum(
+        1
+        for result in scan_results
+        if result.get("cache_status") in {"fetch", "incremental"}
+    )
+
+    if updated:
+        status = "updated"
+        label_zh = f"项目记忆已更新：新增 {additions_count} 条事实" if additions_count else "项目记忆已更新"
+        label_en = f"Project Memory updated: {additions_count} new fact(s)" if additions_count else "Project Memory updated"
+        detail_zh = "GitHub 证据已重新分析，并写入 project_memory.json。"
+        detail_en = "GitHub evidence was reanalyzed and written to project_memory.json."
+    elif was_reanalyzed and usable_repo_count:
+        status = "checked_no_change"
+        label_zh = "项目记忆已检查：没有新增可写事实"
+        label_en = "Project Memory checked: no new writable facts"
+        detail_zh = "仓库证据已交给 agent 分析，但没有发现足够明确、可验证且需要写入的新事实，所以文件时间不会变化。"
+        detail_en = "Repository evidence was analyzed, but no clear verified facts needed to be written, so the file timestamp did not change."
+    elif was_reanalyzed:
+        status = "skipped_no_usable_evidence"
+        label_zh = "项目记忆未更新：没有可用仓库证据"
+        label_en = "Project Memory not updated: no usable repository evidence"
+        detail_zh = "本次没有可用于项目记忆分析的 GitHub 证据。"
+        detail_en = "This run did not produce usable GitHub evidence for Project Memory analysis."
+    else:
+        status = "skipped_cache"
+        label_zh = "项目记忆未重分析：仓库与分析提示未变化"
+        label_en = "Project Memory not reanalyzed: repository and prompt unchanged"
+        detail_zh = "本次复用了缓存证据；如果需要强制重新分析，可勾选重新分析缓存。"
+        detail_en = "Cached evidence was reused; enable cached reanalysis if you want the agent to inspect it again."
+
+    return {
+        "status": status,
+        "updated": updated,
+        "reanalyzed": bool(was_reanalyzed),
+        "additions_count": additions_count,
+        "usable_repository_count": usable_repo_count,
+        "changed_repository_count": changed_repo_count,
+        "fetched_repository_count": fetched_repo_count,
+        "before_mtime": before_mtime,
+        "after_mtime": after_mtime,
+        "label": label_zh,
+        "label_zh": label_zh,
+        "label_en": label_en,
+        "detail": detail_zh,
+        "detail_zh": detail_zh,
+        "detail_en": detail_en,
+    }
+
+
 def build_interview_prep_prompt(
     use_github_context: bool,
     language: str = "zh",
@@ -5135,6 +5198,11 @@ def fetch_github_context_api(
     scan_results = []
     prompt_hash = project_memory_prompt_hash()
     needs_project_memory_reanalysis = bool(reanalyze_cached)
+    project_memory_before_mtime = (
+        agent.PROJECT_MEMORY_PATH.stat().st_mtime
+        if agent.PROJECT_MEMORY_PATH.exists()
+        else None
+    )
     for repo in repos:
         assert_agent_task_not_cancelled()
         key = repo_state_key(repo)
@@ -5262,6 +5330,20 @@ def fetch_github_context_api(
             "message": "Repository commit SHAs and Project Memory analysis prompt are unchanged; reused cached GitHub context.",
         }
 
+    project_memory_after_mtime = (
+        agent.PROJECT_MEMORY_PATH.stat().st_mtime
+        if agent.PROJECT_MEMORY_PATH.exists()
+        else None
+    )
+    project_memory_status = build_project_memory_status_summary(
+        project_memory_update,
+        was_reanalyzed=needs_project_memory_reanalysis,
+        scan_results=scan_results,
+        before_mtime=project_memory_before_mtime,
+        after_mtime=project_memory_after_mtime,
+    )
+    project_memory_update["status_summary"] = project_memory_status
+
     assert_agent_task_not_cancelled()
     save_github_repo_scan_state(scan_state)
     return {
@@ -5270,6 +5352,7 @@ def fetch_github_context_api(
         "project_name": project_name.strip(),
         "project_id": project_id.strip(),
         "project_memory_update": project_memory_update,
+        "project_memory_status": project_memory_status,
         "scan_results": scan_results,
         "fetched_repository_count": len(fetched_contexts),
         "reused_repository_count": sum(1 for result in scan_results if result["cache_status"] == "reused"),

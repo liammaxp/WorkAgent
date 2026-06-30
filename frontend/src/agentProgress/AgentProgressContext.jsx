@@ -49,10 +49,15 @@ export function AgentProgressProvider({ children }) {
   const userMessagesRef = useRef([]);
   const waitingResolverRef = useRef(null);
   const errorCloseResolverRef = useRef(null);
+  const finishCloseTimerRef = useRef(null);
 
   const closeTask = useCallback(() => {
     errorCloseResolverRef.current?.();
     errorCloseResolverRef.current = null;
+    if (finishCloseTimerRef.current) {
+      window.clearTimeout(finishCloseTimerRef.current);
+      finishCloseTimerRef.current = null;
+    }
     waitingResolverRef.current?.reject?.(new AgentCancelledError());
     waitingResolverRef.current = null;
     activeTaskRef.current = null;
@@ -110,7 +115,7 @@ export function AgentProgressProvider({ children }) {
     modelStageIds = [],
     initialMessage = "",
     action,
-    completeDelayMs = 450,
+    completeDelayMs = 5000,
   }) => {
     if (activeTaskRef.current) return null;
 
@@ -130,6 +135,7 @@ export function AgentProgressProvider({ children }) {
       status: "running",
       error: "",
       canClose: false,
+      minimized: false,
     });
 
     const assertActive = () => {
@@ -195,15 +201,16 @@ export function AgentProgressProvider({ children }) {
       updateTask((current) => ({
         ...current,
         status: "success",
-        canClose: false,
+        canClose: true,
         stages: current.stages.map((stage) => ({
           ...stage,
           status: stage.status === "pending" || stage.status === "running" ? "done" : stage.status,
         })),
         messages: [...current.messages, createMessage("system", "任务已完成。")],
       }));
-      await new Promise((resolve) => window.setTimeout(resolve, completeDelayMs));
-      closeTask();
+      finishCloseTimerRef.current = window.setTimeout(() => {
+        if (activeTaskRef.current?.id === taskId) closeTask();
+      }, completeDelayMs);
       return result;
     } catch (error) {
       if (error?.name === "AbortError" || error?.name === "AgentCancelledError" || controller.signal.aborted) {
@@ -251,6 +258,14 @@ export function AgentProgressProvider({ children }) {
     });
     closeTask();
   }, [closeTask]);
+
+  const minimizeTask = useCallback(() => {
+    setTask((current) => (current ? { ...current, minimized: true } : current));
+  }, []);
+
+  const restoreTask = useCallback(() => {
+    setTask((current) => (current ? { ...current, minimized: false } : current));
+  }, []);
 
   const sendUserMessage = useCallback((content) => {
     const cleanContent = content.trim();
@@ -305,6 +320,8 @@ export function AgentProgressProvider({ children }) {
         task={task}
         onCancel={cancelTask}
         onClose={closeTask}
+        onMinimize={minimizeTask}
+        onRestore={restoreTask}
         onSend={sendUserMessage}
       />
     </AgentProgressContext.Provider>

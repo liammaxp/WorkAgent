@@ -681,6 +681,76 @@ textarea {
   color: var(--text);
 }
 
+.agent-progress-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 82;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-progress-fab:hover {
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
+}
+
+.agent-progress-fab strong,
+.agent-progress-fab small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-progress-fab strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.agent-progress-fab small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-progress-fab-dot {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.agent-progress-fab-dot.running {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.agent-progress-fab-dot.success {
+  background: var(--success);
+  box-shadow: 0 0 0 4px var(--success-soft);
+}
+
+.agent-progress-fab-dot.error {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px #fef2f2;
+}
+
+.agent-progress-fab-dot.cancelled {
+  background: var(--text-muted);
+}
+
 .agent-progress-body {
   min-height: 0;
   display: grid;
@@ -951,6 +1021,40 @@ th {
 .repo-item a {
   color: var(--accent);
   font-weight: 500;
+}
+
+.github-memory-status {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.github-memory-status-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.github-memory-status-detail {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.github-memory-status-updated {
+  border-color: rgba(5, 150, 105, 0.32);
+  background: var(--success-soft);
+}
+
+.github-memory-status-checked_no_change,
+.github-memory-status-skipped_cache {
+  border-color: rgba(102, 112, 133, 0.28);
+}
+
+.github-memory-status-skipped_no_usable_evidence {
+  border-color: rgba(217, 119, 6, 0.36);
+  background: #fffbeb;
 }
 
 .prompt-layout {

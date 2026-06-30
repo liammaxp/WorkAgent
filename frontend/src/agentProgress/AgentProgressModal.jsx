@@ -5,7 +5,7 @@ function stageIcon(status) {
   if (status === "waiting_for_user") return <span className="agent-progress-icon waiting" aria-hidden="true" />;
   if (status === "done") return <span className="agent-progress-icon done">✓</span>;
   if (status === "error") return <span className="agent-progress-icon error">×</span>;
-  if (status === "cancelled") return <span className="agent-progress-icon cancelled">−</span>;
+  if (status === "cancelled") return <span className="agent-progress-icon cancelled">-</span>;
   return <span className="agent-progress-icon pending" />;
 }
 
@@ -17,13 +17,30 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
-export default function AgentProgressModal({ task, onCancel, onClose, onSend }) {
+function statusLabel(status) {
+  if (status === "success") return "任务完成";
+  if (status === "error") return "任务失败";
+  if (status === "cancelled") return "已取消";
+  return "正在执行";
+}
+
+export default function AgentProgressModal({
+  task,
+  onCancel,
+  onClose,
+  onMinimize,
+  onRestore,
+  onSend,
+}) {
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef(null);
-  const isOpen = Boolean(task);
+  const isOpen = Boolean(task) && !task?.minimized;
   const running = task?.status === "running";
   const currentStage = useMemo(
-    () => task?.stages.find((stage) => stage.id === task.currentStageId) || task?.stages.find((stage) => stage.status === "running"),
+    () =>
+      task?.stages.find((stage) => stage.id === task.currentStageId) ||
+      task?.stages.find((stage) => stage.status === "running") ||
+      task?.stages.find((stage) => stage.status === "waiting_for_user"),
     [task],
   );
 
@@ -37,12 +54,13 @@ export default function AgentProgressModal({ task, onCancel, onClose, onSend }) 
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
     messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [task?.messages?.length]);
+  }, [isOpen, task?.messages?.length]);
 
   useEffect(() => {
-    if (!isOpen) setDraft("");
-  }, [isOpen]);
+    if (!task) setDraft("");
+  }, [task]);
 
   if (!task) return null;
 
@@ -53,13 +71,30 @@ export default function AgentProgressModal({ task, onCancel, onClose, onSend }) 
     setDraft("");
   };
 
-  const closeOrCancel = () => {
+  const closeOrMinimize = () => {
     if (running) {
-      onCancel();
+      onMinimize();
       return;
     }
     onClose();
   };
+
+  const currentStageLabel =
+    currentStage?.detail ||
+    currentStage?.label ||
+    (task.status === "success" ? "已完成，5 秒后自动关闭" : "正在调用 Agent");
+
+  if (task.minimized) {
+    return (
+      <button type="button" className="agent-progress-fab" onClick={onRestore} aria-label="重新打开 Agent 进度弹窗">
+        <span className={`agent-progress-fab-dot ${task.status}`} />
+        <span>
+          <strong>{task.title}</strong>
+          <small>{statusLabel(task.status)} · {currentStageLabel}</small>
+        </span>
+      </button>
+    );
+  }
 
   return (
     <div className="agent-progress-backdrop" role="presentation">
@@ -67,13 +102,16 @@ export default function AgentProgressModal({ task, onCancel, onClose, onSend }) 
         <header className="agent-progress-header">
           <div>
             <h2 id="agent-progress-title">{task.title}</h2>
-            <p>
-              当前阶段：
-              {currentStage?.detail || currentStage?.label || (task.status === "success" ? "已完成" : "正在调用 Agent")}
-            </p>
+            <p>当前阶段：{currentStageLabel}</p>
           </div>
-          <button type="button" className="agent-progress-close" aria-label="关闭" onClick={closeOrCancel}>
-            ×
+          <button
+            type="button"
+            className="agent-progress-close"
+            aria-label={running ? "最小化" : "关闭"}
+            title={running ? "最小化到右下角" : "关闭"}
+            onClick={closeOrMinimize}
+          >
+            {running ? "_" : "×"}
           </button>
         </header>
 

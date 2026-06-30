@@ -3,7 +3,6 @@ import { api } from "../api/client.js";
 import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import {
   Alert,
-  ConfirmDialog,
   LoadingBar,
   PageHeader,
   StatusBadge,
@@ -46,6 +45,58 @@ function resolveProjectMemoryUpdatedAt(githubConfig, status) {
     status?.file_metadata?.project_memory?.mtime ||
     null
   );
+}
+
+function formatGithubEvidenceStatus(result, language) {
+  const cacheStatus = result?.cache_status || "";
+  const reason = result?.change_reason || "";
+  const zhCacheLabels = {
+    fetch: "全量获取 GitHub 证据",
+    incremental: "增量获取 GitHub 证据",
+    reused: "复用本地 GitHub 证据缓存",
+    "remote-state-error": "远端状态检查失败",
+  };
+  const enCacheLabels = {
+    fetch: "full GitHub evidence fetch",
+    incremental: "incremental GitHub evidence fetch",
+    reused: "reused local GitHub evidence cache",
+    "remote-state-error": "remote state check failed",
+  };
+  const zhReasonLabels = {
+    "latest commit changed": "检测到最新 commit 变化",
+    "latest commit unchanged": "最新 commit 未变化",
+    unchanged: "远端未变化",
+    "default branch changed": "默认分支变化",
+    "remote state check failed": "远端状态检查失败",
+  };
+  const enReasonLabels = {
+    "latest commit changed": "latest commit changed",
+    "latest commit unchanged": "latest commit unchanged",
+    unchanged: "remote unchanged",
+    "default branch changed": "default branch changed",
+    "remote state check failed": "remote state check failed",
+  };
+  const cacheLabel = language === "en"
+    ? (enCacheLabels[cacheStatus] || cacheStatus || "unknown")
+    : (zhCacheLabels[cacheStatus] || cacheStatus || "未知状态");
+  const reasonLabel = language === "en"
+    ? (enReasonLabels[reason] || reason)
+    : (zhReasonLabels[reason] || reason);
+  return reasonLabel ? `${cacheLabel} · ${reasonLabel}` : cacheLabel;
+}
+
+function getProjectMemoryStatus(context, language) {
+  const summary = context?.project_memory_status || context?.project_memory_update?.status_summary;
+  if (!summary) return null;
+  return {
+    status: summary.status || "unknown",
+    label: language === "en"
+      ? (summary.label_en || summary.label)
+      : (summary.label_zh || summary.label),
+    detail: language === "en"
+      ? (summary.detail_en || summary.detail)
+      : (summary.detail_zh || summary.detail),
+  };
 }
 
 function normalizeProjectAlias(value) {
@@ -131,7 +182,6 @@ export default function GitHubContext() {
   const [projectScope, setProjectScope] = useState("");
   const [forceRefresh, setForceRefresh] = useState(false);
   const [reanalyzeCached, setReanalyzeCached] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [githubForm, setGithubForm] = useState({
     usernames: "",
     author_names: "",
@@ -235,9 +285,24 @@ export default function GitHubContext() {
         : reanalyzeCached
           ? "复用缓存并重新分析 Project Memory"
           : "优先复用 ETag/SHA 未变化的缓存";
+      const repositoryLines = (scan?.repos || [])
+        .map((repo) => `- ${repo.owner}/${repo.repo}`)
+        .join("\n");
+      const identityLines = [
+        ...((scan?.identities?.usernames || []).map((value) => `- GitHub username: ${value}`)),
+        ...((scan?.identities?.author_names || []).map((value) => `- Commit author name: ${value}`)),
+        ...((scan?.identities?.author_emails || []).map((value) => `- Commit author email: ${value}`)),
+      ].join("\n");
+      const fetchIntro = [
+        `Agent：我会读取 ${scopeLabel} 的 GitHub evidence。`,
+        `策略：${cacheMode}。`,
+        repositoryLines ? `将处理这些仓库：\n${repositoryLines}` : "",
+        `Token 状态：${tokenConfigured ? "已就绪" : "未配置"}`,
+        identityLines ? `将用这些身份匹配你的提交：\n${identityLines}` : "",
+      ].filter(Boolean).join("\n\n");
       const { data, githubConfig, status } = await runAgentWithProgress({
         title: language === "zh" ? "正在读取 GitHub 上下文" : "Fetching GitHub context",
-        initialMessage: `Agent：我会读取 ${scopeLabel} 的 GitHub evidence；策略：${cacheMode}。`,
+        initialMessage: fetchIntro,
         stages: [
           { id: "fetch", label: `获取 README/语言/提交/diff 证据：${scopeLabel}` },
           { id: "refresh", label: "读取 GitHub 配置和 Project Memory 更新时间" },
@@ -263,13 +328,16 @@ export default function GitHubContext() {
           progress.assertActive();
           progress.setStageStatus("apply", "done");
           progress.addAgentMessage("GitHub 上下文已更新。");
+          const memoryStatus = getProjectMemoryStatus(data, language);
+          if (memoryStatus?.label) {
+            progress.addAgentMessage(memoryStatus.detail ? `${memoryStatus.label}。${memoryStatus.detail}` : memoryStatus.label);
+          }
           return { data, githubConfig, status };
         },
       });
       setContext(data);
       setMemoryRepositories(githubConfig.memory_repositories || []);
       setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(githubConfig, status));
-      setConfirmOpen(false);
       return data;
     }, copy.fetched);
 
@@ -314,6 +382,7 @@ export default function GitHubContext() {
     language === "en" ? (copy.projectMemoryUpdatedAt || "Project Memory JSON updated: ") : "Project Memory JSON 更新：";
   const noRepositoryEvidence =
     language === "en" ? (copy.noMemoryRepositories || "No Chroma repository evidence yet") : "暂无 Chroma 仓库证据";
+  const projectMemoryStatus = getProjectMemoryStatus(context, language);
 
   return (
     <>
@@ -433,7 +502,7 @@ export default function GitHubContext() {
           <button type="button" className="btn btn-secondary" onClick={scanRepos} disabled={loading || agentActive}>
             {copy.scanRepos}
           </button>
-          <button type="button" className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={loading || agentActive || !scan?.repos?.length}>
+          <button type="button" className="btn btn-primary" onClick={approveFetchContext} disabled={loading || agentActive || !scan?.repos?.length}>
             {copy.confirmFetch}
           </button>
         </div>
@@ -490,13 +559,21 @@ export default function GitHubContext() {
       {context?.context && (
         <section className="card">
           <h2 className="card-title">{copy.contextSummary}</h2>
+          {projectMemoryStatus && (
+            <div className={`github-memory-status github-memory-status-${projectMemoryStatus.status}`}>
+              <div className="github-memory-status-title">{projectMemoryStatus.label}</div>
+              {projectMemoryStatus.detail && (
+                <div className="github-memory-status-detail">{projectMemoryStatus.detail}</div>
+              )}
+            </div>
+          )}
           {context.scan_results?.length ? (
             <div className="repo-list" style={{ marginBottom: 16 }}>
               {context.scan_results.map((result) => (
                 <div key={result.repository} className="repo-item">
                   <span>{result.repository}</span>
                   <span className="status-line">
-                    {result.cache_status}{result.change_reason ? ` · ${result.change_reason}` : ""}
+                    {formatGithubEvidenceStatus(result, language)}
                   </span>
                 </div>
               ))}
@@ -506,44 +583,6 @@ export default function GitHubContext() {
         </section>
       )}
 
-      <ConfirmDialog
-        open={confirmOpen}
-        title={copy.allowTitle}
-        confirmLabel={copy.allowConfirm}
-        loading={loading}
-        onCancel={() => setConfirmOpen(false)}
-        onConfirm={approveFetchContext}
-      >
-        <p>{copy.allowBody}</p>
-        <p className="helper-text">
-          {forceRefresh
-            ? (copy.forceRefreshConfirm || "Force refresh is on; WorkAgent will fetch full repository context even when the latest commit is unchanged.")
-            : (copy.cacheConfirm || "WorkAgent will first compare cached ETags and latest commit SHAs, then reuse cached context for unchanged repositories.")}
-        </p>
-        {reanalyzeCached && (
-          <p className="helper-text">
-            {copy.reanalyzeCachedConfirm || "Cached repository context will be reanalyzed into Project Memory without forcing a full GitHub refetch."}
-          </p>
-        )}
-        {scan?.repos?.length ? (
-          <ul>
-            {scan.repos.map((repo) => <li key={repo.url}>{repo.owner}/{repo.repo}</li>)}
-          </ul>
-        ) : (
-          <p>{copy.noReadableRepos}</p>
-        )}
-        <p className="status-line">
-          {copy.tokenStatus}<StatusBadge ready={scan?.token_configured} />
-        </p>
-        {identityItems.length > 0 && (
-          <>
-            <p>{copy.identityIntro}</p>
-            <ul>
-              {identityItems.map((item) => <li key={item}>{item}</li>)}
-            </ul>
-          </>
-        )}
-      </ConfirmDialog>
     </>
   );
 }
