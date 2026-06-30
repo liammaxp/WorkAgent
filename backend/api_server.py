@@ -17,6 +17,9 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -47,6 +50,12 @@ MAX_JOB_ANALYSIS_HISTORY = 20
 chat_session_lock = threading.Lock()
 TAILORED_RESUME_PDF_OUTPUT_DIR = agent.OUTPUT_DIR / "tailored_resume_pdfs"
 LATEX_BUILD_DIR = agent.OUTPUT_DIR / "latex_build"
+current_agent_task_id: ContextVar[str] = ContextVar("current_agent_task_id", default="")
+agent_task_lock = threading.Lock()
+agent_task_cancellations: dict[str, threading.Event] = {}
+agent_task_adapters: dict[str, list[Any]] = {}
+background_task_lock = threading.Lock()
+background_agent_tasks: dict[str, dict[str, Any]] = {}
 
 FILE_MAP = {
     "resume": agent.RESUME_PATH,
@@ -87,6 +96,10 @@ update an existing project's bullets, or add a better-matching memory project th
 If WorkAgent is relevant to the saved job description, treat it as a high-priority project because Project Memory
 identifies it as a local AI job application workspace connecting job analysis, tailored resumes, cover letters,
 interview preparation, memory, GitHub evidence, model configuration, and application tracking.
+Prefer a one-page resume. The Projects section should normally keep 2 projects, may keep 3 only when the
+third project is clearly job-critical, and must not keep more than 3. Higher-ranked projects should receive
+more bullets than lower-ranked projects: about 3 bullets for rank 1, 2 bullets for rank 2, and 1 concise
+bullet for rank 3.
 Tailor the Experience section for the saved job description: you may reorder factual bullets, rewrite bullets
 for relevance and clarity, and remove weaker or redundant bullets. Preserve the factual meaning of the source resume.
 Keep every existing Experience entry unless the user explicitly allows removing entire Experience entries.
@@ -95,10 +108,21 @@ Do not invent claims, technologies, metrics, responsibilities, employers, roles,
 
 Resume Bullet Writing Rules:
 - Project and Experience bullet wording must come from the mandatory ReAct bullet writer tool/process.
+- Every Project and Experience bullet must be STAR-grounded: Situation/problem or context, Task/personal ownership,
+  Action/technical implementation, and Result/verified impact. If all four cannot fit naturally, preserve the
+  strongest supported parts and never invent the missing parts.
 - The writer must first reason why the fact can be written, why it belongs in the project or experience,
   what business capability it demonstrates, and what technical capability it demonstrates.
-- Final bullets must follow this pattern: Used / Implemented / Automated / Debugged + technical method
-  + to + feature/problem + result or value.
+- Final bullets should use a strong action verb plus concrete technical method, substantive
+  logic/business capability, and result or value. Natural phrasing is allowed; do not force
+  every sentence into the same "to ..." template.
+- The technical method must be a concrete implementation approach, algorithm, data flow, debugging
+  approach, or system mechanism. A technology stack alone is not a technical method.
+- Never invent business scale, ownership level, QPS, latency, cost, users, accuracy, deployment,
+  production status, or before/after metrics. Use quantified results only when supported by resume,
+  Project Memory, GitHub evidence, logs/code/README, or explicit user guidance.
+- If metrics are missing and the user said no data/unknown, write conservative concrete results
+  such as reducing repetitive manual review or improving maintainability without fake percentages.
 - Before writing any project bullet, read the selected project's Project Memory fields in this order:
   1. identity.positioning
   2. identity.core_problem
@@ -112,10 +136,18 @@ Resume Bullet Writing Rules:
   3. technical implementation
   4. metrics, only if explicitly provided
 - Do not write bullets that only describe storage, CRUD, file handling, framework usage, or generic implementation.
+- Do not describe shallow UI or broad module work as the achievement, such as "added buttons",
+  "built a page", or "implemented a dashboard", unless the bullet explains the underlying
+  workflow, decision logic, validation, routing, matching, recovery, or quality-control capability.
+- Avoid empty stack-only phrasing such as "with FastAPI, React, and SQLite"; name the actual method,
+  such as vector retrieval, schema validation, state comparison, cache invalidation, chunked processing,
+  retry handling, dependency parsing, ranking/matching logic, or error recovery.
 - Prefer Used, Implemented, Automated, or Debugged as the bullet's main verb.
 - Avoid vague verbs such as leveraged, utilized, facilitated, enabled, supported unless necessary.
 - Technology names should support the story, not become the whole story.
-- Each project should have 3-4 bullets maximum.
+- The Projects section should usually contain 2 projects and at most 3 projects.
+- Allocate bullets by project rank instead of giving every project equal length: strongest project about 3 bullets,
+  second project about 2 bullets, optional third project about 1 concise bullet.
 - Each bullet should be concise, factual, and ATS-friendly.
 - Never invent metrics, technologies, deployment, users, business impact, ownership, or performance claims.
 
@@ -124,11 +156,14 @@ Bad:
 - Used SQLite to organize application records.
 - Implemented file-based resume and job-description handling.
 - Developed a FastAPI backend.
+- Implemented a FastAPI, React, and SQLite application to manage resumes.
+- Implemented resume buttons and pages to let users edit content.
+- Built a resume generation module to create resumes.
 
 Good:
-- Automated resume tailoring workflows with FastAPI, React, SQLite, and vector memory to generate role-specific application materials while preserving factual project evidence.
-- Implemented job-description analysis and project-selection logic to match application materials with role requirements and reduce unsupported resume claims.
-- Used GitHub-backed project evidence and Project Memory mapping to connect implementation details with ATS-friendly bullets for job applications.
+- Automated chunked resume-tailoring pipelines with vector memory retrieval and LaTeX block merging, reducing repetitive resume generation while preserving factual project evidence.
+- Implemented job-description keyword extraction and project-ranking logic for evidence-backed project selection and reduced unsupported resume claims.
+- Used GitHub evidence compression and Project Memory mapping to prevent generic resume bullets and connect implementation details with ATS-friendly application positioning.
 
 Return only LaTeX code with no Markdown fences and no analysis text.
 Save with save_tailored_resume when complete.
@@ -138,20 +173,46 @@ RESUME_BULLET_WRITER_PROMPT = """
 You are the mandatory ReAct resume bullet writer for WorkAgent.
 
 Use this mode for Project-section bullets and Experience-section bullets:
-1. Think: why this fact can be written in the resume without exaggeration.
-2. Reason: why this point belongs under this project or experience for the target job.
-3. Act: identify the business capability or product/workflow value shown.
-4. Act: identify the technical capability, stack, implementation method, bug fix, or feature delivery shown.
-5. Write: produce final resume bullets.
+1. STAR Check: identify Situation, Task, Action, and Result evidence for each candidate bullet.
+2. Think: why this fact can be written in the resume without exaggeration.
+3. Reason: why this point belongs under this project or experience for the target job.
+4. Act: identify the business capability or product/workflow value shown.
+5. Act: identify the technical capability, stack, implementation method, bug fix, or feature delivery shown.
+6. Write: produce final resume bullets.
 
-Final bullet pattern:
-Used / Implemented / Automated / Debugged + technical method + to + feature/problem + result or value.
+Final bullet shape:
+Use Used / Implemented / Automated / Debugged when natural, then name the concrete technical
+method, the substantive logic/workflow/business capability, and the result or value. Natural
+phrasing is allowed; do not force every bullet into an identical "to ..." sentence.
+Prefer: action verb + project/module + technical action + verified result/impact.
 
 Rules:
 - Use only supported facts from the original resume, Project Memory, staged candidates, and approved evidence.
 - Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, business impact, or performance claims.
+- STAR is mandatory for analysis. Each final bullet should be backed by:
+  Situation: problem, workflow, users, data, files, requests, applications, or business context.
+  Task: the user's personal module/ownership level such as led, independently built, collaborated on, or maintained.
+  Action: concrete technical design or implementation method.
+  Result: verified quantitative result when supported; otherwise a conservative qualitative result.
+- If Situation, Task, Action, or Result is missing, do not fabricate it. Use available user guidance if present.
+  If the user explicitly said no data/unknown, write without fake numbers and keep the result conservative.
+- Avoid final bullets that rely on vague phrases such as responsible for, worked on, helped with,
+  participated in, familiar with, used technology to develop system, or improved performance without support.
 - Prefer business-relevant technical writing: technology stack, technical solution, bug or feature implemented, and the business requirement or workflow value it supports.
 - Do not write generic bullets that only say storage, CRUD, framework usage, or file handling.
+- Do not make the implemented feature a shallow UI control or broad module. Write the underlying
+  logic or capability, such as preventing monotonous resume generation, selecting relevant projects,
+  validating supported claims, recovering from context-window overflow, or preserving factual evidence.
+- The technical method must explain how the work was implemented, not just which stack was used.
+- Prefer concrete methods such as algorithms, retrieval/ranking logic, parsing, schema validation,
+  state comparison, cache invalidation, chunked processing, retry/fallback handling, data flow
+  orchestration, or debugging/root-cause isolation when supported by evidence.
+- Each bullet should include at least 3 of these 5 elements: concrete method/tool, implemented
+  function/process, technical or process challenge, user/business/engineering value, and role-relevant keyword.
+- Use the provided role profile, JD requirements, evidence card, role lens, allowed claims, and forbidden claims;
+  do not infer stronger claims from vague evidence.
+- Reject stack-only bullets like "Implemented X with FastAPI, React, and SQLite" unless the bullet
+  also names the implementation method or system mechanism.
 - If a result is qualitative, phrase it as workflow value, reliability, clarity, maintainability, relevance, or user/application-preparation value without inventing numbers.
 - Return ONLY valid JSON.
 """
@@ -222,6 +283,7 @@ Rules:
   "project_memory": object
 """
 
+PREFERRED_RESUME_PROJECTS = 2
 MAX_STAGED_PROJECTS = 3
 MAX_STAGED_TEXT_CHARS = 12000
 MAX_PROMPT_FILES_PER_REPO = 12
@@ -287,6 +349,33 @@ class AgentAskBody(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
+
+
+class AgentProgressGuidanceBody(BaseModel):
+    title: str = ""
+    stage_label: str = ""
+    user_message: str
+    prior_messages: list[dict[str, Any]] = Field(default_factory=list)
+    language: str = "zh"
+    agent_task_id: str = ""
+
+
+class AgentCancelBody(BaseModel):
+    agent_task_id: str
+
+
+class AgentTaskStartBody(BaseModel):
+    task_id: str = ""
+    taskType: str = ""
+    task_type: str = ""
+    body: dict[str, Any] = Field(default_factory=dict)
+    language: str = "zh"
+
+
+class AgentTaskMessageBody(BaseModel):
+    content: str
 
 
 class JobDescriptionBody(BaseModel):
@@ -296,6 +385,8 @@ class JobDescriptionBody(BaseModel):
 class AnalyzeBody(BaseModel):
     use_github_context: bool = False
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class TailorBody(BaseModel):
@@ -304,18 +395,44 @@ class TailorBody(BaseModel):
     allow_experience_removal: bool = False
     include_application_hint: bool = False
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
+
+
+class ResumeStarCheckBody(BaseModel):
+    allow_project_selection: bool = True
+    asked_question_keys: list[str] = Field(default_factory=list)
+    language: str = "zh"
+    agent_task_id: str = ""
+
+
+class ResumeStarFactBody(BaseModel):
+    project_id: str = ""
+    project_name: str = ""
+    field_type: str
+    missing_info_type: str = ""
+    question_key: str = ""
+    raw_answer: str
+    normalized_fact: str = ""
+    confidence: str = "high"
+    language: str = "zh"
+    agent_task_id: str = ""
 
 
 class ResumeMemoryBody(BaseModel):
     resume_source: str = "resume"
     project_name: str = ""
     project_id: str = ""
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class ResumePdfToLatexBody(BaseModel):
     filename: str = "resume.pdf"
     data_base64: str
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class TailoredResumePdfBody(BaseModel):
@@ -328,17 +445,23 @@ class CoverLetterBody(BaseModel):
     style: str = "concise"
     include_application_hint: bool = False
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class InterviewPrepBody(BaseModel):
     use_github_context: bool = True
     language: str = "zh"
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class GitHubScanBody(BaseModel):
     resume_source: str = "resume"
     project_name: str = ""
     project_id: str = ""
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class GitHubContextBody(BaseModel):
@@ -348,6 +471,8 @@ class GitHubContextBody(BaseModel):
     project_id: str = ""
     force_refresh: bool = False
     reanalyze_cached: bool = False
+    agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_task_id: str = ""
 
 
 class GitHubConfigBody(BaseModel):
@@ -626,6 +751,22 @@ def get_adapter(provider: Optional[str] = None):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def output_application_metadata(path: Path, suffix: str) -> dict[str, str]:
+    stem = path.name
+    if suffix and stem.endswith(suffix):
+        stem = stem[: -len(suffix)]
+    stem = re.sub(r"_(\d+)$", "", stem).strip()
+    if re.match(r"^(tailored_resume|cover_letter|interview_prep|chat_session)(?:_|$)", stem):
+        return {"company": "", "role": ""}
+    parts = [part.strip() for part in stem.split("_") if part.strip()]
+    if len(parts) < 2:
+        return {"company": "", "role": ""}
+    return {
+        "company": parts[0],
+        "role": " ".join(parts[1:]).strip(),
+    }
+
+
 def list_output_files(directory: Path, suffix: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
     if not directory.exists():
         return []
@@ -644,6 +785,7 @@ def list_output_files(directory: Path, suffix: str, limit: Optional[int] = None)
             "path": str(path),
             "generated_at": datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds"),
             "generated_at_ms": int(path.stat().st_mtime * 1000),
+            **output_application_metadata(path, suffix),
         }
         for path in (files[:limit] if limit is not None else files)
     ]
@@ -1155,7 +1297,12 @@ def extract_pdf_resume_content(pdf_bytes: bytes) -> dict[str, Any]:
     }
 
 
-def build_pdf_to_latex_prompt(filename: str, extracted: dict[str, Any], language: str) -> str:
+def build_pdf_to_latex_prompt(
+    filename: str,
+    extracted: dict[str, Any],
+    language: str,
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+) -> str:
     links_text = "\n".join(
         f"- Page {link['page']}: {link['url']}" for link in extracted["links"]
     ) or "- None detected"
@@ -1174,7 +1321,7 @@ def build_pdf_to_latex_prompt(filename: str, extracted: dict[str, Any], language
         else ""
     )
 
-    return f"""
+    prompt = f"""
 Convert the extracted PDF resume into complete, compile-ready LaTeX resume code.
 
 Requirements:
@@ -1196,12 +1343,46 @@ Detected PDF hyperlinks:
 Extracted PDF text:
 {extracted["text"]}
 """.strip()
+    return append_agent_progress_guidance(prompt, agent_progress_messages or [])
 
 
 def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]]:
     commands = []
+    try:
+        tex_content = tex_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        tex_content = ""
+    prefers_pdftex = (
+        "glyphtounicode" in tex_content
+        or "\\pdfgentounicode" in tex_content
+        or "\\pdfglyphtounicode" in tex_content
+    )
 
     xelatex = shutil.which("xelatex")
+    pdflatex = shutil.which("pdflatex")
+    latexmk = shutil.which("latexmk")
+
+    if prefers_pdftex and latexmk:
+        commands.append(
+            [
+                latexmk,
+                "-pdf",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-outdir={build_dir}",
+                str(tex_path),
+            ]
+        )
+    if prefers_pdftex and pdflatex:
+        commands.append(
+            [
+                pdflatex,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-output-directory={build_dir}",
+                str(tex_path),
+            ]
+        )
     if xelatex:
         commands.append(
             [
@@ -1212,9 +1393,7 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
                 str(tex_path),
             ]
         )
-
-    pdflatex = shutil.which("pdflatex")
-    if pdflatex:
+    if not prefers_pdftex and pdflatex:
         commands.append(
             [
                 pdflatex,
@@ -1224,8 +1403,6 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
                 str(tex_path),
             ]
         )
-
-    latexmk = shutil.which("latexmk")
     if latexmk:
         commands.append(
             [
@@ -1250,10 +1427,26 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
     )
 
 
+def latex_document_for_pdf_export(document: str) -> str:
+    export_document = document
+    if "\\input{glyphtounicode}" in export_document and "\\ifdefined\\pdfglyphtounicode" not in export_document:
+        export_document = export_document.replace(
+            "\\input{glyphtounicode}",
+            "\\ifdefined\\pdfglyphtounicode\n\\input{glyphtounicode}\n\\fi",
+        )
+    if "\\pdfgentounicode=1" in export_document and "\\ifdefined\\pdfgentounicode" not in export_document:
+        export_document = export_document.replace(
+            "\\pdfgentounicode=1",
+            "\\ifdefined\\pdfgentounicode\n\\pdfgentounicode=1\n\\fi",
+        )
+    return export_document
+
+
 def compile_tailored_resume_pdf(latex: str, company: str = "", role: str = "") -> Path:
     document = agent.extract_latex_document(latex)
     if not document:
         raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
+    document = latex_document_for_pdf_export(document)
 
     TAILORED_RESUME_PDF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     LATEX_BUILD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1428,6 +1621,259 @@ def ensure_provider_supports_images(provider: str, images: list[dict[str, str]])
         )
 
 
+def agent_progress_guidance_text(messages: list[dict[str, Any]], max_messages: int = 8) -> str:
+    cleaned = []
+    for item in messages[-max_messages:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "user").strip().lower()
+        if role not in {"user", "agent", "system"}:
+            role = "user"
+        content = str(item.get("content") or item.get("text") or "").strip()
+        if not content:
+            continue
+        cleaned.append(f"- {role}: {truncate_text(content, 1200)}")
+    if not cleaned:
+        return ""
+    return (
+        "\n\nLive user guidance from the Agent progress modal:\n"
+        "Use these messages as additional user constraints for this stage and later stages. "
+        "Apply them only when they do not conflict with factuality, evidence, or safety rules. "
+        "Do not mention this guidance section in the final artifact unless the user explicitly asked for that.\n"
+        + "\n".join(cleaned)
+        + "\n"
+    )
+
+
+def append_agent_progress_guidance(prompt: str, messages: list[dict[str, Any]]) -> str:
+    return prompt + agent_progress_guidance_text(messages)
+
+
+class AgentTaskCancelled(RuntimeError):
+    pass
+
+
+def normalize_agent_task_id(task_id: str = "") -> str:
+    return re.sub(r"[^a-zA-Z0-9_.:-]", "", str(task_id or "").strip())[:120]
+
+
+def agent_task_event(task_id: str) -> Optional[threading.Event]:
+    task_id = normalize_agent_task_id(task_id)
+    if not task_id:
+        return None
+    with agent_task_lock:
+        event = agent_task_cancellations.get(task_id)
+        if event is None:
+            event = threading.Event()
+            agent_task_cancellations[task_id] = event
+        return event
+
+
+def register_agent_task_adapter(task_id: str, adapter: Any) -> None:
+    task_id = normalize_agent_task_id(task_id)
+    if not task_id:
+        return
+    with agent_task_lock:
+        agent_task_adapters.setdefault(task_id, []).append(adapter)
+
+
+def unregister_agent_task_adapter(task_id: str, adapter: Any) -> None:
+    task_id = normalize_agent_task_id(task_id)
+    if not task_id:
+        return
+    with agent_task_lock:
+        adapters = agent_task_adapters.get(task_id, [])
+        if adapter in adapters:
+            adapters.remove(adapter)
+        if not adapters:
+            agent_task_adapters.pop(task_id, None)
+
+
+def cancel_agent_task_id(task_id: str) -> bool:
+    task_id = normalize_agent_task_id(task_id)
+    if not task_id:
+        return False
+    with agent_task_lock:
+        event = agent_task_cancellations.setdefault(task_id, threading.Event())
+        event.set()
+    return True
+
+
+def assert_agent_task_not_cancelled() -> None:
+    task_id = current_agent_task_id.get("")
+    event = agent_task_event(task_id) if task_id else None
+    if event and event.is_set():
+        raise AgentTaskCancelled("Agent task was cancelled.")
+
+
+def utc_now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def background_message(role: str, content: str) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "role": role,
+        "content": content,
+        "timestamp": utc_now_iso(),
+    }
+
+
+def snapshot_background_task(task_id: str) -> dict[str, Any]:
+    task_id = normalize_agent_task_id(task_id)
+    with background_task_lock:
+        task = background_agent_tasks.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Agent task not found.")
+        return {
+            key: value
+            for key, value in task.items()
+            if key not in {"thread"}
+        }
+
+
+def update_background_task(task_id: str, **updates: Any) -> None:
+    task_id = normalize_agent_task_id(task_id)
+    with background_task_lock:
+        task = background_agent_tasks.get(task_id)
+        if not task:
+            return
+        task.update(updates)
+        task["updated_at"] = utc_now_iso()
+
+
+def append_background_task_message(task_id: str, role: str, content: str) -> None:
+    task_id = normalize_agent_task_id(task_id)
+    with background_task_lock:
+        task = background_agent_tasks.get(task_id)
+        if not task:
+            return
+        task.setdefault("messages", []).append(background_message(role, content))
+        task["updated_at"] = utc_now_iso()
+
+
+def set_background_stage(task_id: str, stage_id: str, status: str, detail: str = "") -> None:
+    task_id = normalize_agent_task_id(task_id)
+    with background_task_lock:
+        task = background_agent_tasks.get(task_id)
+        if not task:
+            return
+        task["stages"] = [
+            {**stage, "status": status, "detail": detail or stage.get("detail", "")}
+            if stage.get("id") == stage_id
+            else stage
+            for stage in task.get("stages", [])
+        ]
+        task["currentStage"] = stage_id
+        task["updated_at"] = utc_now_iso()
+
+
+def task_error_detail(error: Exception) -> str:
+    if isinstance(error, HTTPException):
+        detail = str(error.detail)
+    else:
+        detail = str(error)
+    if "524" in detail or "origin_response_timeout" in detail:
+        return "模型请求超时，可以稍后重试。Cloudflare 524 表示上游模型响应超过代理读取窗口。"
+    return detail or "Agent task failed."
+
+
+def run_background_agent_task(task_id: str) -> None:
+    task_snapshot = snapshot_background_task(task_id)
+    task_type = task_snapshot.get("taskType") or task_snapshot.get("task_type")
+    body = task_snapshot.get("body") or {}
+    try:
+        with agent_task_context(task_id, clear_existing=False):
+            if task_type == "resume_tailor":
+                set_background_stage(task_id, "generate", "running", "后台正在生成并合并简历内容")
+                append_background_task_message(task_id, "system", "后台任务已开始；HTTP start 请求已释放，不会等待完整模型结果。")
+                assert_agent_task_not_cancelled()
+                result = tailor_resume_task(TailorBody(**body))
+                assert_agent_task_not_cancelled()
+                set_background_stage(task_id, "generate", "done", "简历生成完成")
+                update_background_task(
+                    task_id,
+                    status="done",
+                    result=result,
+                    resultAvailable=True,
+                    currentStage="generate",
+                )
+                append_background_task_message(task_id, "agent", "定制简历已生成，可以读取最终结果。")
+                return
+            raise HTTPException(status_code=400, detail=f"Unsupported agent task type: {task_type}")
+    except HTTPException as error:
+        if error.status_code == 499:
+            set_background_stage(task_id, "generate", "cancelled", "任务已取消，结果已丢弃")
+            update_background_task(task_id, status="cancelled", result=None, resultAvailable=False, error="")
+            append_background_task_message(task_id, "system", "任务已取消。")
+            return
+        detail = task_error_detail(error)
+        set_background_stage(task_id, "generate", "error", detail)
+        update_background_task(task_id, status="error", error=detail, result=None, resultAvailable=False)
+        append_background_task_message(task_id, "agent", detail)
+    except Exception as error:
+        detail = task_error_detail(error)
+        set_background_stage(task_id, "generate", "error", detail)
+        update_background_task(task_id, status="error", error=detail, result=None, resultAvailable=False)
+        append_background_task_message(task_id, "agent", detail)
+
+
+def create_background_agent_task(body: AgentTaskStartBody) -> dict[str, Any]:
+    task_id = normalize_agent_task_id(body.task_id) or str(uuid.uuid4())
+    task_type = body.taskType or body.task_type
+    if not task_type:
+        raise HTTPException(status_code=400, detail="taskType is required.")
+    now = utc_now_iso()
+    with background_task_lock:
+        existing = background_agent_tasks.get(task_id)
+        if existing and existing.get("status") in {"started", "running", "waiting_for_user"}:
+            raise HTTPException(status_code=409, detail="Agent task is already running.")
+        background_agent_tasks[task_id] = {
+            "taskId": task_id,
+            "taskType": task_type,
+            "body": body.body,
+            "status": "started",
+            "stages": [
+                {"id": "generate", "label": "后台生成简历", "status": "pending", "detail": ""},
+            ],
+            "messages": [background_message("system", "后台 Agent 任务已创建。")],
+            "currentStage": "generate",
+            "result": None,
+            "resultAvailable": False,
+            "error": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+    thread = threading.Thread(target=run_background_agent_task, args=(task_id,), daemon=True)
+    with background_task_lock:
+        background_agent_tasks[task_id]["thread"] = thread
+        background_agent_tasks[task_id]["status"] = "running"
+    thread.start()
+    return {"taskId": task_id, "status": "started"}
+
+
+@contextmanager
+def agent_task_context(task_id: str = "", clear_existing: bool = True):
+    task_id = normalize_agent_task_id(task_id)
+    event = agent_task_event(task_id) if task_id else None
+    if clear_existing and event and event.is_set():
+        event.clear()
+    token = current_agent_task_id.set(task_id)
+    try:
+        assert_agent_task_not_cancelled()
+        yield
+        assert_agent_task_not_cancelled()
+    except AgentTaskCancelled as error:
+        raise HTTPException(status_code=499, detail=str(error)) from error
+    finally:
+        current_agent_task_id.reset(token)
+        if task_id:
+            with agent_task_lock:
+                if not agent_task_adapters.get(task_id):
+                    agent_task_adapters.pop(task_id, None)
+                    agent_task_cancellations.pop(task_id, None)
+
+
 def run_agent_task(
     message: str,
     provider: Optional[str] = None,
@@ -1436,21 +1882,36 @@ def run_agent_task(
 ) -> str:
     adapter, _ = get_adapter(provider)
     chosen_model = model or adapter.default_model()
+    task_id = current_agent_task_id.get("")
+    assert_agent_task_not_cancelled()
+    register_agent_task_adapter(task_id, adapter)
     try:
-        return agent.ask_agent(message, adapter=adapter, model=chosen_model, images=images)
+        result = agent.ask_agent(message, adapter=adapter, model=chosen_model, images=images)
+        assert_agent_task_not_cancelled()
+        return result
+    except AgentTaskCancelled as error:
+        raise HTTPException(status_code=499, detail=str(error)) from error
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
+        assert_agent_task_not_cancelled()
         raise_model_api_http_exception(error)
     except agent.transient_network_errors() as error:
+        assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
     except RuntimeError as error:
+        assert_agent_task_not_cancelled()
         raise HTTPException(status_code=500, detail=str(error)) from error
+    finally:
+        unregister_agent_task_adapter(task_id, adapter)
 
 
 def run_text_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
     adapter, _ = get_adapter(provider)
     chosen_model = model or adapter.default_model()
+    task_id = current_agent_task_id.get("")
+    assert_agent_task_not_cancelled()
+    register_agent_task_adapter(task_id, adapter)
     try:
         response = adapter.create_response(
             model=chosen_model,
@@ -1458,13 +1919,21 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
             tools=[],
             input_items=[{"role": "user", "content": message}],
         )
+        assert_agent_task_not_cancelled()
         return adapter.output_text(response)
+    except AgentTaskCancelled as error:
+        raise HTTPException(status_code=499, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
+        assert_agent_task_not_cancelled()
         raise_model_api_http_exception(error)
     except agent.transient_network_errors() as error:
+        assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
     except RuntimeError as error:
+        assert_agent_task_not_cancelled()
         raise HTTPException(status_code=500, detail=str(error)) from error
+    finally:
+        unregister_agent_task_adapter(task_id, adapter)
 
 
 APPLICATION_HINT_EXTRACTION_PROMPT = """
@@ -1667,7 +2136,12 @@ def merge_scoped_project_memory(
     return merged_memory
 
 
-def update_memory_from_resume_source(resume_source: str, project_name: str = "", project_id: str = "") -> dict[str, Any]:
+def update_memory_from_resume_source(
+    resume_source: str,
+    project_name: str = "",
+    project_id: str = "",
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     if resume_source == "tailored_resume":
         resume = agent.read_tailored_resume()
         source_label = "tailored_resume.txt"
@@ -1719,6 +2193,7 @@ Resume source: {source_label}
 Resume:
 {resume}
 """
+    prompt = append_agent_progress_guidance(prompt, agent_progress_messages or [])
     response = run_text_task(prompt)
     payload = extract_json_object(response)
     merged_memory = payload.get("memory")
@@ -1796,7 +2271,10 @@ def read_current_project_memory() -> dict[str, Any]:
     return current
 
 
-def update_project_memory_from_repo_analysis(repo_contexts: list[dict[str, Any]]) -> dict[str, Any]:
+def update_project_memory_from_repo_analysis(
+    repo_contexts: list[dict[str, Any]],
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     if not repo_contexts:
         return {
             "updated": False,
@@ -1843,6 +2321,7 @@ Current project_memory.json:
 Repository analysis payload for exactly one repository:
 {json.dumps(repo_analysis, ensure_ascii=False, indent=2)}
 """
+        prompt = append_agent_progress_guidance(prompt, agent_progress_messages or [])
         response = run_text_task(prompt)
         payload = extract_json_object(response)
         next_project_memory = payload.get("project_memory")
@@ -1872,7 +2351,11 @@ Repository analysis payload for exactly one repository:
     }
 
 
-def build_interview_prep_prompt(use_github_context: bool, language: str = "zh") -> str:
+def build_interview_prep_prompt(
+    use_github_context: bool,
+    language: str = "zh",
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+) -> str:
     try:
         job_description = agent.read_job_description()
     except (FileNotFoundError, ValueError) as error:
@@ -1927,7 +2410,10 @@ Memory:
 {memory}
 {github_section}
 """
-    return prompt + interview_prep_language_instruction(language)
+    return append_agent_progress_guidance(
+        prompt + interview_prep_language_instruction(language),
+        agent_progress_messages or [],
+    )
 
 
 def looks_like_interview_prep(content: str) -> bool:
@@ -2362,6 +2848,10 @@ def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "final_bullets": compact_value_for_prompt(bullets, 700, 4),
         "skills_to_emphasize": candidate.get("skills_to_emphasize", [])[:10],
         "risks": candidate.get("risks", [])[:6],
+        "role_profile": compact_value_for_prompt(candidate.get("role_profile", {}), 500, 6),
+        "jd_requirements": compact_value_for_prompt(candidate.get("jd_requirements", {}), 700, 8),
+        "evidence_card": compact_value_for_prompt(candidate.get("evidence_card", {}), 900, 8),
+        "role_lens": compact_value_for_prompt(candidate.get("role_lens", {}), 700, 8),
         "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
         "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
         "validation": validation_for_prompt(candidate.get("bullet_writer_validation"), candidate_id=candidate_id, project=str(project_name or "")),
@@ -2374,6 +2864,455 @@ def compact_bullet_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, 
 
 def compact_bullet_candidates_for_prompt(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [candidate_for_prompt(candidate) for candidate in candidates]
+
+
+ROLE_FAMILY_KEYWORDS = {
+    "software_engineering": [
+        "software",
+        "developer",
+        "engineer",
+        "api",
+        "backend",
+        "frontend",
+        "full stack",
+        "react",
+        "java",
+        "python",
+        "javascript",
+        "typescript",
+    ],
+    "infrastructure_devops": [
+        "devops",
+        "infrastructure",
+        "ci/cd",
+        "docker",
+        "kubernetes",
+        "terraform",
+        "jenkins",
+        "deployment",
+        "linux",
+        "scripting",
+        "automation",
+    ],
+    "it_analyst": [
+        "it analyst",
+        "technical support",
+        "troubleshoot",
+        "service desk",
+        "documentation",
+        "configuration",
+        "application support",
+        "requirements",
+    ],
+    "data_analyst": [
+        "data analyst",
+        "sql",
+        "reporting",
+        "dashboard",
+        "metrics",
+        "kpi",
+        "excel",
+        "data validation",
+        "analysis",
+    ],
+    "product_business_analyst": [
+        "business analyst",
+        "product",
+        "requirements",
+        "stakeholder",
+        "process",
+        "workflow",
+        "prioritization",
+        "user needs",
+    ],
+    "qa_testing": [
+        "qa",
+        "quality assurance",
+        "testing",
+        "test cases",
+        "automation testing",
+        "selenium",
+        "cypress",
+        "playwright",
+        "bug",
+    ],
+    "cybersecurity": [
+        "security",
+        "cybersecurity",
+        "vulnerability",
+        "incident",
+        "access control",
+        "risk",
+        "compliance",
+        "audit",
+    ],
+    "supply_chain_operations": [
+        "supply chain",
+        "operations",
+        "inventory",
+        "logistics",
+        "tracking",
+        "coordination",
+        "deadline",
+        "procurement",
+    ],
+    "healthcare_admin": [
+        "healthcare",
+        "health",
+        "patient",
+        "clinical",
+        "administrative",
+        "records",
+        "privacy",
+        "scheduling",
+    ],
+    "design_product": [
+        "design",
+        "ux",
+        "ui",
+        "prototype",
+        "figma",
+        "user research",
+        "wireframe",
+        "product design",
+    ],
+}
+
+ROLE_LENS_PRIORITIES = {
+    "software_engineering": ["api", "data model", "backend", "frontend", "integration", "validation", "testing", "git"],
+    "infrastructure_devops": ["script", "automation", "environment", "configuration", "ci/cd", "docker", "logging", "debugging"],
+    "it_analyst": ["troubleshooting", "documentation", "process support", "requirements", "application support", "automation", "configuration"],
+    "data_analyst": ["sql", "validation", "reporting", "metrics", "records", "analysis", "kpi"],
+    "product_business_analyst": ["requirements", "stakeholder", "documentation", "workflow", "user needs", "prioritization"],
+    "qa_testing": ["testing", "test cases", "automation", "bug", "validation", "quality"],
+    "cybersecurity": ["security", "risk", "access", "audit", "vulnerability", "incident"],
+    "supply_chain_operations": ["accuracy", "tracking", "reporting", "excel", "sql", "coordination", "deadline"],
+    "healthcare_admin": ["records", "privacy", "workflow", "documentation", "coordination", "accuracy"],
+    "design_product": ["prototype", "user needs", "workflow", "interaction", "research", "design"],
+}
+
+PROTECTED_UNSUPPORTED_TOOLS = [
+    "AWS",
+    "Azure",
+    "Kubernetes",
+    "Docker",
+    "Terraform",
+    "Jenkins",
+    "SAP",
+    "Oracle",
+    "Power BI",
+    "Microsoft 365",
+]
+
+
+def keyword_hits(text: str, keywords: list[str], limit: int = 20) -> list[str]:
+    lower_text = str(text or "").lower()
+    hits = []
+    for keyword in keywords:
+        if keyword.lower() in lower_text:
+            append_unique(hits, keyword, limit)
+    return hits
+
+
+def classify_role_family(jd_text: str) -> dict[str, Any]:
+    text = str(jd_text or "")
+    scores = []
+    for family, keywords in ROLE_FAMILY_KEYWORDS.items():
+        hits = keyword_hits(text, keywords, 30)
+        if hits:
+            score = len(hits)
+            if family == "software_engineering" and keyword_hits(text, ["backend", "frontend", "api", "developer", "software"], 5):
+                score += 1
+            if family == "infrastructure_devops" and hits == ["automation"]:
+                score -= 1
+            scores.append((score, family, hits))
+    scores.sort(key=lambda item: (-item[0], item[1]))
+    primary = scores[0][1] if scores else "software_engineering"
+    secondary = [family for _, family, _ in scores[1:4]]
+    role_focus = []
+    for _, _, hits in scores[:3]:
+        for hit in hits:
+            append_unique(role_focus, hit, 12)
+    high_priority = role_focus[:10]
+    low_priority = []
+    for family, keywords in ROLE_FAMILY_KEYWORDS.items():
+        if family != primary and family not in secondary:
+            for keyword in keywords[:2]:
+                append_unique(low_priority, keyword, 10)
+    return {
+        "role_family": primary,
+        "secondary_role_families": secondary,
+        "role_focus": role_focus,
+        "resume_strategy": (
+            f"Emphasize {primary.replace('_', ' ')} evidence first, then support it with "
+            "role-relevant methods, artifacts, and business/workflow value."
+        ),
+        "high_priority_keywords": high_priority,
+        "low_priority_keywords": low_priority,
+    }
+
+
+def jd_requirements_for_prompt(jd_text: str) -> dict[str, Any]:
+    text = str(jd_text or "")
+    core = jd_core_for_prompt(text)
+    role_profile = classify_role_family(text)
+    all_skill_keywords = sorted({keyword for values in ROLE_FAMILY_KEYWORDS.values() for keyword in values})
+    tool_keywords = [
+        "Python", "Java", "JavaScript", "TypeScript", "React", "FastAPI", "SQL", "SQLite", "MongoDB",
+        "Excel", "Power BI", "Tableau", "Git", "GitHub", "Docker", "Kubernetes", "Terraform", "Jenkins",
+        "AWS", "Azure", "Linux", "PowerShell", "SAP", "Oracle", "Microsoft 365",
+    ]
+    soft_keywords = ["communication", "collaboration", "documentation", "deadline", "team", "stakeholder", "problem solving", "critical thinking"]
+    action_verbs = ["analyze", "build", "coordinate", "debug", "document", "implement", "improve", "maintain", "report", "support", "test", "troubleshoot", "validate"]
+    repeated = []
+    words = re.findall(r"[A-Za-z][A-Za-z+#./-]{2,}", text.lower())
+    for word in sorted(set(words)):
+        if words.count(word) >= 2 and word not in {"and", "the", "with", "for", "you", "will", "our"}:
+            append_unique(repeated, word, 20)
+    tools = keyword_hits(text, tool_keywords, 30)
+    responsibilities = core.get("responsibilities", [])
+    return {
+        "job_title": core.get("job_title", ""),
+        "company": core.get("company", ""),
+        "must_have_skills": keyword_hits(text, all_skill_keywords + tool_keywords, 30),
+        "nice_to_have_skills": keyword_hits(text, ["asset", "preferred", "nice to have", "familiarity", "experience with"], 10),
+        "responsibilities": responsibilities,
+        "tools_platforms": tools,
+        "domain_knowledge": keyword_hits(text, ["healthcare", "finance", "education", "supply chain", "operations", "security", "game", "inventory"], 15),
+        "soft_skills": keyword_hits(text, soft_keywords, 15),
+        "repeated_ats_keywords": repeated,
+        "action_verbs": keyword_hits(text, action_verbs, 15),
+        "evidence_types_to_emphasize": ROLE_LENS_PRIORITIES.get(role_profile["role_family"], [])[:10],
+    }
+
+
+def list_from_nested(value: Any, keys: list[str], limit: int = 20) -> list[str]:
+    values = []
+    if isinstance(value, dict):
+        for key in keys:
+            item = value.get(key)
+            if isinstance(item, list):
+                for entry in item:
+                    append_unique(values, str(entry), limit)
+            elif isinstance(item, str):
+                append_unique(values, item, limit)
+    return values
+
+
+def infer_structural_results_from_code(evidence_items: list[Any], methods: list[str], features: list[str]) -> list[str]:
+    combined = " ".join(
+        [
+            json.dumps(evidence_items, ensure_ascii=False).lower(),
+            " ".join(str(item).lower() for item in methods + features),
+        ]
+    )
+    inferred = []
+    patterns = [
+        (
+            ["cache", "caching", "memo", "reuse", "dedup", "skip unchanged", "unchanged"],
+            "Reduced repeated work by reusing cached or unchanged evidence paths; no specific latency/QPS metric is verified.",
+        ),
+        (
+            ["index", "sqlite", "query", "where ", "select ", "retrieval", "ranking", "match"],
+            "Improved retrieval or matching path with structured lookup/ranking logic; no exact request-speed metric is verified.",
+        ),
+        (
+            ["batch", "chunk", "queue", "parallel", "concurrent", "async", "pipeline"],
+            "Restructured processing into chunked, batched, or pipeline steps to reduce manual/repetitive processing; no exact throughput metric is verified.",
+        ),
+        (
+            ["retry", "fallback", "abort", "cancel", "timeout", "error handling", "validation"],
+            "Improved reliability and recovery paths through validation, retry/fallback, cancellation, or error handling; no exact error-rate metric is verified.",
+        ),
+        (
+            ["compress", "truncate", "context", "token", "prompt"],
+            "Reduced prompt/context overhead through compression or scoped payload construction; no exact cost/token saving is verified.",
+        ),
+        (
+            ["automation", "automated", "workflow", "orchestration"],
+            "Reduced repetitive manual steps by automating the workflow; no exact time saving is verified.",
+        ),
+    ]
+    for needles, claim in patterns:
+        if any(needle in combined for needle in needles):
+            append_unique(inferred, claim, 6)
+    return inferred
+
+
+def build_project_evidence_card(
+    name: str,
+    section_type: str,
+    source_facts: dict[str, Any],
+    prompt_evidence: Any,
+) -> dict[str, Any]:
+    evidence_items = prompt_evidence if isinstance(prompt_evidence, list) else [prompt_evidence]
+    technologies = list_from_nested(source_facts, ["tech_stack", "technologies", "skills", "languages_frameworks_detected"], 20)
+    methods = list_from_nested(source_facts, ["workflows", "methods", "confirmed_features"], 20)
+    features = list_from_nested(source_facts, ["confirmed_features", "features", "core_features"], 20)
+    artifacts = []
+    source_refs = []
+    allowed_claims = []
+    forbidden_claims = []
+    testing = []
+    debugging = []
+    documentation = []
+    automation = []
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        nested_evidence_text = json.dumps(item.get("contribution_evidence", []), ensure_ascii=False)
+        for signal in re.findall(r"added [A-Za-z0-9 _/-]{3,80}|implemented [A-Za-z0-9 _/-]{3,80}|debugged [A-Za-z0-9 _/-]{3,80}", nested_evidence_text, re.IGNORECASE):
+            append_unique(methods, signal, 25)
+        for tech in item.get("languages_frameworks_detected", []):
+            append_unique(technologies, str(tech), 20)
+        for signal in item.get("diff_signals", []) + item.get("resume_relevant_keywords", []):
+            signal_text = str(signal)
+            append_unique(methods, signal_text, 25)
+            lower = signal_text.lower()
+            if "test" in lower:
+                append_unique(testing, signal_text, 10)
+            if "debug" in lower or "error" in lower:
+                append_unique(debugging, signal_text, 10)
+            if "document" in lower or "readme" in lower:
+                append_unique(documentation, signal_text, 10)
+            if "automation" in lower or "script" in lower:
+                append_unique(automation, signal_text, 10)
+        for file_path in item.get("changed_file_paths", []):
+            append_unique(artifacts, str(file_path), 20)
+        for claim in item.get("allowed_claims", []):
+            append_unique(allowed_claims, str(claim), MAX_PROMPT_CLAIMS)
+        for claim in item.get("forbidden_claims", []):
+            append_unique(forbidden_claims, str(claim), MAX_PROMPT_CLAIMS)
+        if item.get("url"):
+            append_unique(source_refs, str(item.get("url")), 8)
+        if item.get("repository"):
+            append_unique(source_refs, str(item.get("repository")), 8)
+    identity = source_facts.get("identity") if isinstance(source_facts.get("identity"), dict) else {}
+    business_value = list_from_nested(identity, ["core_value", "core_problem", "positioning"], 10)
+    data_or_scale = list_from_nested(source_facts, ["metrics", "data_or_scale"], 10)
+    inferred_results = infer_structural_results_from_code(evidence_items, methods, features)
+    confidence = "high" if allowed_claims or artifacts else "medium" if technologies or methods else "low"
+    return {
+        "name": name,
+        "type": section_type,
+        "technologies": technologies,
+        "methods": methods[:20],
+        "features": features,
+        "artifacts": artifacts,
+        "data_or_scale": data_or_scale,
+        "collaboration_signals": list_from_nested(source_facts, ["collaboration", "team", "agile"], 10),
+        "testing_signals": testing,
+        "debugging_signals": debugging,
+        "documentation_signals": documentation,
+        "automation_signals": automation,
+        "business_or_user_value": business_value,
+        "inferred_results": inferred_results,
+        "source_refs": source_refs,
+        "confidence": confidence,
+        "allowed_claims": allowed_claims,
+        "forbidden_claims": forbidden_claims,
+    }
+
+
+def apply_role_lens(evidence_card: dict[str, Any], role_profile: dict[str, Any]) -> dict[str, Any]:
+    families = [role_profile.get("role_family", "software_engineering")] + list(role_profile.get("secondary_role_families", []))
+    lens_terms = []
+    for family in families:
+        for term in ROLE_LENS_PRIORITIES.get(str(family), []):
+            append_unique(lens_terms, term, 30)
+    searchable_fields = (
+        evidence_card.get("technologies", [])
+        + evidence_card.get("methods", [])
+        + evidence_card.get("features", [])
+        + evidence_card.get("testing_signals", [])
+        + evidence_card.get("debugging_signals", [])
+        + evidence_card.get("documentation_signals", [])
+        + evidence_card.get("automation_signals", [])
+        + evidence_card.get("business_or_user_value", [])
+    )
+    ranked = []
+    for item in searchable_fields:
+        text = str(item)
+        score = sum(1 for term in lens_terms if term.lower() in text.lower())
+        if score:
+            ranked.append((score, text))
+    ranked.sort(key=lambda item: (-item[0], item[1].lower()))
+    priorities = []
+    for _, item in ranked:
+        append_unique(priorities, item, 12)
+    return {
+        "role_family": role_profile.get("role_family"),
+        "secondary_role_families": role_profile.get("secondary_role_families", []),
+        "lens_terms": lens_terms[:15],
+        "ranked_evidence_priorities": priorities,
+        "bullet_guidance": (
+            "Use the highest-ranked evidence priorities first. Emphasize method + implemented "
+            "function/process + role-specific value, while respecting allowed/forbidden claims."
+        ),
+    }
+
+
+def validate_bullet_quality(bullet: str, evidence_card: dict[str, Any], role_profile: dict[str, Any]) -> dict[str, Any]:
+    text = str(bullet or "")
+    lower = text.lower()
+    issues = []
+    unsupported_claims = []
+    evidence_text = json.dumps(evidence_card, ensure_ascii=False).lower()
+    role_keywords = [str(item).lower() for item in role_profile.get("high_priority_keywords", []) + role_profile.get("role_focus", [])]
+    method_terms = ["cache", "caching", "compare", "comparison", "retrieval", "ranking", "validation", "schema", "parsing", "retry", "fallback", "automation", "orchestration", "sql", "reporting"]
+    has_tool_or_method = any(str(item).lower() in lower for item in evidence_card.get("technologies", []) + evidence_card.get("methods", [])) or any(term in lower for term in method_terms)
+    has_function = any(str(item).lower() in lower for item in evidence_card.get("features", []) + evidence_card.get("artifacts", [])) or any(word in lower for word in ["workflow", "validation", "reporting", "routing", "selection", "tracking", "analysis", "automation", "scan", "scans", "repository", "records"])
+    has_challenge = any(word in lower for word in ["debug", "validate", "prevent", "reduce", "recover", "unsupported", "context", "consistency", "accuracy", "error"])
+    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "support", "streamline", "prevent", "clarify", "prioritize", "relevance", "reliability", "accuracy"])
+    has_role_keyword = not role_keywords or any(keyword and keyword in lower for keyword in role_keywords)
+    element_count = sum([has_tool_or_method, has_function, has_challenge, has_value, has_role_keyword])
+    vague_terms = [
+        "various",
+        "multiple",
+        "improved functionality",
+        "helped",
+        "worked on",
+        "responsible for",
+        "participated in",
+        "familiar with",
+        "built a system",
+        "used python",
+        "used technology",
+        "developed system",
+        "tasks",
+    ]
+    if not has_tool_or_method:
+        issues.append("lacks a concrete supported tool or method")
+    if not has_function:
+        issues.append("lacks a specific implemented function, process, or artifact")
+    if not has_role_keyword:
+        issues.append("lacks target-role relevance")
+    if element_count < 3:
+        issues.append("does not include at least 3 of method/tool, function, challenge, value, and role keyword")
+    if any(term in lower for term in vague_terms):
+        issues.append("uses vague or generic wording")
+    for tool in PROTECTED_UNSUPPORTED_TOOLS:
+        if tool.lower() in lower and tool.lower() not in evidence_text:
+            unsupported_claims.append(tool)
+    if re.search(r"\b\d+%|\$\d+|\b\d+x\b", lower) and not evidence_card.get("data_or_scale"):
+        issues.append("may invent unsupported metrics")
+    for forbidden in evidence_card.get("forbidden_claims", []):
+        forbidden_text = str(forbidden).lower()
+        for tool in PROTECTED_UNSUPPORTED_TOOLS:
+            if tool.lower() in lower and tool.lower() in forbidden_text:
+                unsupported_claims.append(tool)
+    specificity_score = max(0, min(100, element_count * 22 - len([i for i in issues if "vague" in i]) * 20))
+    jd_alignment_score = 80 if has_role_keyword else 45
+    evidence_support_score = 90 if has_tool_or_method and not unsupported_claims else 35 if unsupported_claims else 65
+    return {
+        "is_strong": not issues and not unsupported_claims,
+        "issues": issues,
+        "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+        "unsupported_claims": sorted(set(unsupported_claims)),
+        "jd_alignment_score": jd_alignment_score,
+        "specificity_score": specificity_score,
+        "evidence_support_score": evidence_support_score,
+    }
 
 
 def jd_core_for_prompt(jd: dict[str, Any] | str) -> dict[str, Any]:
@@ -2763,6 +3702,7 @@ def compact_project_for_prompt(project: dict[str, Any]) -> dict[str, Any]:
         "workflows": project.get("workflows", []),
         "confirmed_features": project.get("confirmed_features", []),
         "real_metrics": project.get("real_metrics", {}),
+        "star_facts": project.get("star_facts", []),
         "recent_changes": project.get("recent_changes", []),
         "rag_refs": project.get("rag_refs", {}),
     }
@@ -2780,6 +3720,313 @@ def retrieve_evidence_for_project(project: dict[str, Any]) -> list[dict[str, Any
     if not query:
         return []
     return agent.MEMORY_STORE.read_github_contexts(query=query)
+
+
+STAR_FIELD_LABELS = {
+    "situation": "Situation / 业务背景",
+    "task": "Task / 个人贡献",
+    "action": "Action / 技术动作",
+    "result": "Result / 结果数据",
+}
+
+
+def project_display_name(project: dict[str, Any]) -> str:
+    return str(project.get("project_name") or project.get("name") or project.get("project_id") or "Project").strip()
+
+
+def normalize_star_field(field_type: str) -> str:
+    field = str(field_type or "").strip().lower()
+    aliases = {
+        "metric": "result",
+        "metrics": "result",
+        "business_context": "situation",
+        "contribution_scope": "task",
+        "technical_detail": "action",
+    }
+    return aliases.get(field, field if field in STAR_FIELD_LABELS else "result")
+
+
+def project_star_facts(project: dict[str, Any]) -> list[dict[str, Any]]:
+    facts = project.get("star_facts", [])
+    if isinstance(facts, list):
+        return [fact for fact in facts if isinstance(fact, dict)]
+    return []
+
+
+def fact_matches_field(fact: dict[str, Any], field_type: str) -> bool:
+    return normalize_star_field(str(fact.get("field_type") or "")) == field_type
+
+
+def fact_is_no_data(fact: dict[str, Any]) -> bool:
+    text = f"{fact.get('raw_answer', '')} {fact.get('normalized_fact', '')}".lower()
+    return any(token in text for token in ["no data", "not sure", "unknown", "不知道", "没有数据", "没有量化", "无数据"])
+
+
+def star_fact_question_key(project: dict[str, Any], field_type: str, missing_info_type: str = "") -> str:
+    project_key = str(project.get("project_id") or project_display_name(project)).strip().lower()
+    project_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", project_key).strip("-")
+    return f"{project_key}:{field_type}:{missing_info_type or field_type}"
+
+
+def star_field_status(project: dict[str, Any], evidence_card: dict[str, Any], field_type: str) -> dict[str, Any]:
+    facts = [fact for fact in project_star_facts(project) if fact_matches_field(fact, field_type)]
+    if facts:
+        latest = facts[-1]
+        status = "not_needed" if field_type == "result" and fact_is_no_data(latest) else "user_confirmed"
+        return {
+            "status": status,
+            "source": latest.get("source", "user_confirmed"),
+            "summary": str(latest.get("normalized_fact") or latest.get("raw_answer") or "")[:220],
+        }
+
+    identity = project.get("identity") if isinstance(project.get("identity"), dict) else {}
+    if field_type == "situation":
+        values = [
+            identity.get("core_problem"),
+            identity.get("core_value"),
+            identity.get("background"),
+            identity.get("positioning"),
+            *(project.get("workflows", []) if isinstance(project.get("workflows"), list) else []),
+        ]
+        summary = "; ".join(str(value).strip() for value in values if str(value or "").strip())[:220]
+        if summary:
+            return {"status": "found_in_memory", "source": "project_memory", "summary": summary}
+    if field_type == "task":
+        values = []
+        for key in ["ownership", "contribution_scope", "collaboration", "team"]:
+            value = project.get(key)
+            if isinstance(value, list):
+                values.extend(value)
+            elif value:
+                values.append(value)
+        if not values and (evidence_card.get("allowed_claims") or evidence_card.get("artifacts")):
+            return {
+                "status": "inferred_from_code",
+                "source": "project_memory_and_code",
+                "summary": "本地项目记忆和代码证据可支持用户参与实现，但不会夸大为独立负责/主导。",
+            }
+        summary = "; ".join(str(value).strip() for value in values if str(value or "").strip())[:220]
+        if summary:
+            return {"status": "found_in_memory", "source": "project_memory", "summary": summary}
+    if field_type == "action":
+        values = (
+            evidence_card.get("methods", [])
+            + evidence_card.get("technologies", [])
+            + evidence_card.get("features", [])
+            + evidence_card.get("artifacts", [])
+        )
+        summary = "; ".join(str(value).strip() for value in values if str(value or "").strip())[:220]
+        if summary:
+            return {"status": "found_in_code", "source": "project_memory_and_code", "summary": summary}
+    if field_type == "result":
+        values = []
+        for key in ["real_metrics", "metrics", "results", "impact", "data_or_scale"]:
+            value = project.get(key)
+            if isinstance(value, dict):
+                values.extend(f"{k}: {v}" for k, v in value.items() if str(v or "").strip())
+            elif isinstance(value, list):
+                values.extend(value)
+            elif value:
+                values.append(value)
+        values.extend(evidence_card.get("data_or_scale", []))
+        summary = "; ".join(str(value).strip() for value in values if str(value or "").strip())[:220]
+        if summary:
+            return {"status": "found_in_memory", "source": "project_memory", "summary": summary}
+        inferred_results = evidence_card.get("inferred_results", [])
+        if inferred_results:
+            summary = "; ".join(str(value).strip() for value in inferred_results if str(value or "").strip())[:220]
+            return {
+                "status": "inferred_from_code",
+                "source": "local_diff_and_code_evidence",
+                "summary": summary,
+            }
+    return {"status": "missing", "source": "", "summary": ""}
+
+
+def build_star_completion(project: dict[str, Any], evidence_card: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        field: star_field_status(project, evidence_card, field)
+        for field in ["situation", "task", "action", "result"]
+    }
+    missing = [field for field, payload in fields.items() if payload["status"] == "missing"]
+    return {"fields": fields, "missing_fields": missing}
+
+
+def star_question_for_project(
+    project: dict[str, Any],
+    completion: dict[str, Any],
+    asked_question_keys: set[str],
+) -> Optional[dict[str, Any]]:
+    priority = ["result", "task", "situation", "action"]
+    project_name = project_display_name(project)
+    found_summaries = [
+        payload["summary"]
+        for payload in completion["fields"].values()
+        if payload.get("summary")
+    ][:3]
+    found_text = "；".join(found_summaries) if found_summaries else "我已经先检查了本地项目记忆、已保存 STAR facts 和可用代码证据。"
+    for field_type in priority:
+        if field_type not in completion["missing_fields"]:
+            continue
+        missing_info_type = "time_saved_or_verified_impact" if field_type == "result" else field_type
+        question_key = star_fact_question_key(project, field_type, missing_info_type)
+        if question_key in asked_question_keys:
+            continue
+        if field_type == "result":
+            question = (
+                f"我正在完善 {project_name} 这个项目的 Result 部分。"
+                f"我已经先检查到：{found_text}\n\n"
+                "现在只缺一个关键信息：有没有真实的结果或对比数据？例如生成/处理时间、人工修改时间、准确率、错误率、请求速度或成本。"
+                "没有数据也可以直接说“没有数据/不知道”，我会保守写成具体技术产出，不编造百分比。"
+            )
+            detail = "等待补充：Result / 结果数据"
+        elif field_type == "task":
+            question = (
+                f"我正在确认 {project_name} 这个项目的 Task / 个人贡献。"
+                f"本地证据里已经看到：{found_text}\n\n"
+                "这里你是独立负责核心模块、主导设计开发，还是和别人协作？我需要确认能否写 Led / Built / Designed，避免夸大贡献。"
+            )
+            detail = "等待补充：Task / 个人贡献"
+        elif field_type == "situation":
+            question = (
+                f"我正在补齐 {project_name} 的 Situation / 业务背景。"
+                f"我已经先读取到：{found_text}\n\n"
+                "这个项目主要解决你投递、学习、业务或用户流程里的哪个具体问题？一句话说明场景就可以。"
+            )
+            detail = "等待补充：Situation / 业务背景"
+        else:
+            question = (
+                f"我正在核对 {project_name} 的 Action / 技术动作。"
+                f"我已经先检查到：{found_text}\n\n"
+                "这个项目最能代表你的一个关键技术实现是什么？例如检索、缓存、并发、索引、RAG、API 设计、自动化 pipeline 或错误处理。"
+            )
+            detail = "等待补充：Action / 技术动作"
+        return {
+            "project_id": str(project.get("project_id") or ""),
+            "project_name": project_name,
+            "field_type": field_type,
+            "missing_info_type": missing_info_type,
+            "question_key": question_key,
+            "stage_id": f"complete-star-{question_key}",
+            "stage_label": f"补全 STAR：{project_name}",
+            "stage_detail": detail,
+            "context_label": f"Agent · {project_name}",
+            "prompt": question,
+        }
+    return None
+
+
+def build_resume_star_check(body: ResumeStarCheckBody) -> dict[str, Any]:
+    try:
+        job_description = agent.read_job_description()
+        resume = agent.read_resume()
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    project_memory = read_current_project_memory()
+    selected_projects = select_staged_projects(job_description, resume, project_memory, body.allow_project_selection)
+    asked_keys = {str(key) for key in body.asked_question_keys if str(key).strip()}
+    stages = []
+    summaries = []
+    next_question = None
+    for project in selected_projects:
+        assert_agent_task_not_cancelled()
+        project_name = project_display_name(project)
+        evidence = retrieve_evidence_for_project(project)
+        evidence_card = build_project_evidence_card(project_name, "project", compact_project_for_prompt(project), compact_github_evidence_for_prompt(evidence))
+        completion = build_star_completion(project, evidence_card)
+        missing_labels = [STAR_FIELD_LABELS[field] for field in completion["missing_fields"]]
+        stage_id = f"complete-star-{str(project.get('project_id') or project_name).lower().replace(' ', '-')}"
+        stage = {
+            "id": stage_id,
+            "label": f"补全 STAR：{project_name}",
+            "status": "done" if not completion["missing_fields"] else "pending",
+            "detail": "本地信息已足够" if not completion["missing_fields"] else f"待核对：{' / '.join(missing_labels)}",
+            "projectName": project_name,
+        }
+        question = star_question_for_project(project, completion, asked_keys)
+        if question and next_question is None:
+            stage.update({
+                "id": question["stage_id"],
+                "status": "waiting_for_user",
+                "detail": question["stage_detail"],
+                "fieldType": question["field_type"],
+            })
+            next_question = question
+        stages.append(stage)
+        found = [
+            f"{STAR_FIELD_LABELS[field]}={payload['status']}"
+            for field, payload in completion["fields"].items()
+            if payload["status"] != "missing"
+        ]
+        summaries.append(f"{project_name}: " + ("; ".join(found) if found else "暂无可用 STAR 信息"))
+    return {
+        "stages": stages,
+        "next_question": next_question,
+        "messages": [
+            "我已先读取 job_description.txt、resume.txt、project_memory.json 和可用 GitHub/代码证据。",
+            "STAR 扫描结果：" + "；".join(summaries[:4]),
+        ],
+    }
+
+
+def save_resume_star_fact(body: ResumeStarFactBody) -> dict[str, Any]:
+    field_type = normalize_star_field(body.field_type)
+    raw_answer = body.raw_answer.strip()
+    if not raw_answer:
+        raise HTTPException(status_code=400, detail="raw_answer is required.")
+    project_memory = read_current_project_memory()
+    projects = project_list_from_memory(project_memory)
+    target_project = None
+    for project in projects:
+        if project_matches(project, project_name=body.project_name, project_id=body.project_id):
+            target_project = project
+            break
+    if target_project is None:
+        target_project = {"project_id": body.project_id, "project_name": body.project_name or "Project"}
+        projects.append(target_project)
+        project_memory["projects"] = projects
+    no_data = fact_is_no_data({"raw_answer": raw_answer, "normalized_fact": body.normalized_fact})
+    normalized_fact = body.normalized_fact.strip() or (
+        "No quantified result is available; use a conservative qualitative result without invented metrics."
+        if no_data and field_type == "result"
+        else raw_answer
+    )
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    question_key = body.question_key or star_fact_question_key(target_project, field_type, body.missing_info_type)
+    fact = {
+        "question_key": question_key,
+        "project_id": str(target_project.get("project_id") or body.project_id or ""),
+        "project_name": project_display_name(target_project),
+        "field_type": field_type,
+        "missing_info_type": body.missing_info_type or field_type,
+        "raw_answer": raw_answer,
+        "normalized_fact": normalized_fact,
+        "source": "user_confirmed",
+        "confidence": body.confidence or "high",
+        "created_at": now,
+        "updated_at": now,
+    }
+    facts = project_star_facts(target_project)
+    replaced = False
+    for index, existing in enumerate(facts):
+        if existing.get("question_key") == question_key:
+            fact["created_at"] = existing.get("created_at") or now
+            facts[index] = fact
+            replaced = True
+            break
+    if not replaced:
+        facts.append(fact)
+    target_project["star_facts"] = facts
+    agent.write_project_memory_file(project_memory)
+    return {
+        "saved": True,
+        "project_id": fact["project_id"],
+        "project_name": fact["project_name"],
+        "field_type": field_type,
+        "question_key": question_key,
+        "replaced": replaced,
+        "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+    }
 
 
 def select_staged_projects(
@@ -2800,8 +4047,11 @@ Select the strongest Project Memory projects for this job application.
 
 Rules:
 - Use only the job description, original resume, and Project Memory project summaries.
-- Select at most {MAX_STAGED_PROJECTS} projects.
+- Prefer exactly {PREFERRED_RESUME_PROJECTS} projects for a one-page resume.
+- Select {MAX_STAGED_PROJECTS} projects only when the third project is clearly job-critical and can still fit a one-page resume.
+- Never select more than {MAX_STAGED_PROJECTS} projects.
 - Prefer projects already in the resume unless another Project Memory project is clearly stronger.
+- Return selected_indices in strongest-to-weakest order; higher-ranked projects receive more resume bullet space later.
 - Return ONLY valid JSON with exactly this shape:
   {{"selected_indices": [0], "reason": "short explanation"}}
 
@@ -2849,6 +4099,10 @@ def run_resume_bullet_writer_tool(
 ) -> dict[str, Any]:
     prompt_source_facts = compact_value_for_prompt(source_facts, 1200, 8)
     prompt_evidence = compact_github_evidence_for_prompt(evidence)
+    role_profile = classify_role_family(job_description)
+    jd_requirements = jd_requirements_for_prompt(job_description)
+    evidence_card = build_project_evidence_card(source_name, section_type, source_facts, prompt_evidence)
+    role_lens = apply_role_lens(evidence_card, role_profile)
     allowed_claims = []
     forbidden_claims = []
     for item in prompt_evidence if isinstance(prompt_evidence, list) else [prompt_evidence]:
@@ -2858,6 +4112,10 @@ def run_resume_bullet_writer_tool(
             append_unique(allowed_claims, claim, MAX_PROMPT_CLAIMS)
         for claim in item.get("forbidden_claims", []):
             append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
+    for claim in evidence_card.get("allowed_claims", []):
+        append_unique(allowed_claims, claim, MAX_PROMPT_CLAIMS)
+    for claim in evidence_card.get("forbidden_claims", []):
+        append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
     prompt = f"""
 {RESUME_BULLET_WRITER_PROMPT}
 
@@ -2865,6 +4123,7 @@ Return JSON with exactly these keys:
   "section_type": "project" | "experience",
   "source_name": string,
   "job_alignment": string,
+  "star_analysis": array of objects with keys "candidate_fact", "situation", "task", "action", "result", "missing_star_fields", "evidence_source",
   "react_analysis": array of objects with keys "candidate_fact", "why_writable", "why_it_belongs", "business_capability", "technical_capability", "risk_avoided",
   "final_bullets": array of objects with keys "bullet", "evidence", "confidence",
   "skills_to_emphasize": array of strings,
@@ -2882,8 +4141,11 @@ Source name:
 Extra rules:
 {extra_rules}
 
-Job description:
-{truncate_text(job_description, 12000)}
+Role profile:
+{json.dumps(role_profile, ensure_ascii=False, indent=2)}
+
+Structured JD requirements:
+{json.dumps(jd_requirements, ensure_ascii=False, indent=2)}
 
 Original resume:
 {truncate_text(resume, 22000)}
@@ -2891,22 +4153,39 @@ Original resume:
 Source facts:
 {json.dumps(prompt_source_facts, ensure_ascii=False, indent=2)}
 
+Project / experience evidence card:
+{json.dumps(evidence_card, ensure_ascii=False, indent=2)}
+
+Role lens priorities:
+{json.dumps(role_lens, ensure_ascii=False, indent=2)}
+
 Existing bullets:
 {json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
-
-Supporting evidence:
-{json.dumps(prompt_evidence, ensure_ascii=False, indent=2)}
 
 Allowed resume claims from compressed evidence:
 {json.dumps(allowed_claims, ensure_ascii=False, indent=2)}
 
 Forbidden / unsupported resume claims:
 {json.dumps(forbidden_claims, ensure_ascii=False, indent=2)}
+
+STAR enforcement:
+- Populate star_analysis before final_bullets.
+- If a metric, ownership level, business scale, or result is not supported, list it in missing_star_fields.
+- final_bullets must not include unsupported numbers, inflated ownership, or generic stack-only wording.
+- evidence_card.inferred_results may be used as conservative qualitative Result evidence from local diff/code
+  analysis, but never convert it into verified QPS, P99, latency, cost, accuracy, or percentage claims unless
+  data_or_scale or user-confirmed star_facts explicitly supports the number.
+- Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
     payload = extract_json_object(run_text_task(prompt))
-    for key in ["react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
+    for key in ["star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    bullet_quality = []
+    for item in payload["final_bullets"]:
+        bullet = item.get("bullet") if isinstance(item, dict) else str(item)
+        quality = validate_bullet_quality(str(bullet or ""), evidence_card, role_profile)
+        bullet_quality.append({"bullet": str(bullet or ""), **quality})
 
     validation = json.loads(
         agent.write_resume_bullets(
@@ -2926,11 +4205,29 @@ Forbidden / unsupported resume claims:
         "issues": validation.get("issues", []),
         "required_mode": validation.get("required_mode", ""),
         "required_pattern": validation.get("required_pattern", ""),
+        "role_family": role_profile.get("role_family"),
+        "bullet_quality": bullet_quality,
     }
+    quality_issues = []
+    unsupported_claims = []
+    for quality in bullet_quality:
+        if not quality.get("is_strong"):
+            quality_issues.extend(quality.get("issues", []))
+        unsupported_claims.extend(quality.get("unsupported_claims", []))
+    if quality_issues or unsupported_claims:
+        payload["bullet_writer_validation"]["accepted"] = False
+        payload["bullet_writer_validation"]["issues"].extend(sorted(set(quality_issues)))
+        payload["bullet_writer_validation"]["unsupported_claims"] = sorted(set(unsupported_claims))
     if validation.get("issues"):
         payload["risks"].extend(validation["issues"])
+    if quality_issues:
+        payload["risks"].extend(sorted(set(quality_issues)))
     payload["allowed_claims"] = allowed_claims
     payload["forbidden_claims"] = forbidden_claims
+    payload["role_profile"] = role_profile
+    payload["jd_requirements"] = jd_requirements
+    payload["evidence_card"] = evidence_card
+    payload["role_lens"] = role_lens
     return payload
 
 
@@ -2940,6 +4237,7 @@ def build_project_resume_candidate(
     project: dict[str, Any],
     evidence: list[dict[str, Any]],
     language: str,
+    progress_guidance: str = "",
 ) -> dict[str, Any]:
     source_facts = compact_project_for_prompt(project)
     payload = run_resume_bullet_writer_tool(
@@ -2953,8 +4251,10 @@ def build_project_resume_candidate(
         language=language,
         extra_rules=(
             "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
-            "Select 3-4 bullets maximum. The first bullet must explain what the project is and what "
-            "workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
+            "Select only the strongest concise bullets; final layout will allocate more bullets to higher-ranked "
+            "projects and fewer bullets to lower-ranked projects. The first bullet must explain what the project is "
+            "and what workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
+            + progress_guidance
         ),
     )
     payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
@@ -2972,6 +4272,7 @@ def build_skills_resume_candidate(
     project_memory: dict[str, Any],
     project_candidates: list[dict[str, Any]],
     language: str,
+    progress_guidance: str = "",
 ) -> dict[str, Any]:
     prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
     prompt_project_memory = compact_value_for_prompt(project_memory, 1200, 8)
@@ -3007,6 +4308,7 @@ Project Memory:
 
 Staged project candidates:
 {json.dumps(prompt_project_candidates, ensure_ascii=False, indent=2)}
+{progress_guidance}
 """
     payload = extract_json_object(run_text_task(prompt))
     for key in ["skills_to_emphasize", "skills_to_deemphasize", "skills_to_add_if_supported", "skills_to_remove_or_avoid", "risks"]:
@@ -3023,6 +4325,7 @@ def build_experience_resume_candidate(
     skills_candidate: dict[str, Any],
     allow_experience_removal: bool,
     language: str,
+    progress_guidance: str = "",
 ) -> dict[str, Any]:
     prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
     prompt_skills_candidate = compact_value_for_prompt(skills_candidate, 900, 8)
@@ -3048,6 +4351,7 @@ def build_experience_resume_candidate(
             "invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership. "
             "Return experience_strategy, entry_recommendations, bullets_to_emphasize, bullets_to_deemphasize, "
             "and unsupported_claims_to_avoid if possible."
+            + progress_guidance
         ),
     )
     final_bullets = payload.get("final_bullets", [])
@@ -3077,6 +4381,7 @@ def build_summary_resume_candidate(
     skills_candidate: dict[str, Any],
     experience_candidate: dict[str, Any],
     language: str,
+    progress_guidance: str = "",
 ) -> dict[str, Any]:
     prompt_project_memory = compact_value_for_prompt(project_memory, 1200, 8)
     prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
@@ -3121,6 +4426,7 @@ Staged Skills candidate:
 
 Staged Experience candidate:
 {json.dumps(prompt_experience_candidate, ensure_ascii=False, indent=2)}
+{progress_guidance}
 """
     payload = extract_json_object(run_text_task(prompt))
     for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
@@ -3170,6 +4476,9 @@ Loop step:
 - Use only this one project candidate for this step.
 - Do not request or infer raw Chroma evidence.
 - Do not create project bullet claims outside this candidate's final_bullets / recommended_bullets.
+- Preserve the STAR grounding from the staged candidate. Do not add metrics, ownership level,
+  scale, or results that are not present in star_analysis, final_bullets, user guidance, or evidence.
+- Reject generic stack-only wording such as "used X to develop Y"; keep action + module + technical method + supported result/value.
 - Project selection allowed: {payload["allow_project_selection"]}
 - If project selection is not allowed, keep the existing resume project list and only update factual wording.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
@@ -3229,6 +4538,9 @@ Rules:
 - Keep all previous edits already present in the current LaTeX resume.
 - Use only this staged {section_name} candidate for this step.
 - For Project and Experience bullet wording, use only ReAct bullet writer candidates already present in the staged data.
+- Preserve STAR grounding. Do not add unsupported business scale, ownership level, before/after metrics,
+  users, latency, QPS, cost, accuracy, or production claims during the merge.
+- For Experience bullets, keep the user's personal contribution explicit and supported.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Entire Experience entry removal allowed: {payload["allow_experience_removal"]}
 - Return only LaTeX code with no Markdown fences and no analysis text.
@@ -3251,6 +4563,165 @@ One staged {section_name} candidate:
     return answer
 
 
+def project_bullet_budget(index: int, total: int) -> int:
+    if total <= 1:
+        return 3
+    if total == 2:
+        return 3 if index == 1 else 2
+    if index == 1:
+        return 3
+    if index == 2:
+        return 2
+    return 1
+
+
+def project_layout_candidates_for_prompt(project_candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    layout_candidates = []
+    total = len(project_candidates)
+    for index, candidate in enumerate(project_candidates, start=1):
+        compact_candidate = compact_bullet_candidate_for_prompt(candidate)
+        layout_candidates.append(
+            {
+                **compact_candidate,
+                "rank": index,
+                "target_bullet_count": project_bullet_budget(index, total),
+            }
+        )
+    return layout_candidates
+
+
+def apply_projects_section_layout(
+    job_description: str,
+    current_resume: str,
+    project_candidates: list[dict[str, Any]],
+    body: TailorBody,
+) -> str:
+    if not body.allow_project_selection:
+        return current_resume
+
+    layout_candidates = project_layout_candidates_for_prompt(project_candidates[:MAX_STAGED_PROJECTS])
+    normal_payload = {
+        "section_name": "Project-section",
+        "job_description": job_description,
+        "current_resume": current_resume,
+        "candidate": {
+            "selected_project_candidates": layout_candidates,
+            "preferred_project_count": PREFERRED_RESUME_PROJECTS,
+            "maximum_project_count": MAX_STAGED_PROJECTS,
+            "ranking_rule": "Higher-ranked selected projects should receive more bullets than lower-ranked projects.",
+            "one_page_rule": "Prefer a one-page resume; remove weak or non-selected projects before expanding content.",
+        },
+        "block_hint": "Projects",
+        "allow_project_selection": body.allow_project_selection,
+        "allow_experience_removal": body.allow_experience_removal,
+        "language": body.language,
+    }
+
+    def call_layout_model(payload: dict[str, Any]) -> str:
+        if payload.get("retry"):
+            retry_payload = payload["retry_payload"]
+            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
+
+        prompt_candidate = compact_value_for_prompt(payload["candidate"], 2400, 10)
+        prompt = (
+            output_language_instruction(body.language)
+            + original_resume_language_instruction("tailored_resume")
+            + f"""
+Apply final Projects-section layout constraints to the current LaTeX resume.
+
+Rules:
+- Return the complete updated LaTeX resume.
+- Keep the resume optimized for one page.
+- Prefer exactly {PREFERRED_RESUME_PROJECTS} Projects-section entries.
+- Keep {MAX_STAGED_PROJECTS} Projects-section entries only when the third selected project is clearly job-critical and the resume can still fit one page.
+- Never keep more than {MAX_STAGED_PROJECTS} Projects-section entries.
+- Remove projects that are not in selected_project_candidates when project selection is allowed.
+- Preserve selected_project_candidates ranking order from strongest to weakest.
+- Higher-ranked projects must have more bullets than lower-ranked projects when multiple projects are shown.
+- Use target_bullet_count for each selected project: rank 1 usually 3 bullets, rank 2 usually 2 bullets, rank 3 usually 1 bullet.
+- Lower-ranked project bullets should be compact and only keep the most job-relevant factual claim.
+- Do not create new bullet wording outside the selected candidates' final_bullets / recommended_bullets.
+- Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
+- Preserve LaTeX validity and existing section style.
+- Return only LaTeX code with no Markdown fences and no analysis text.
+
+Job description:
+{truncate_text(payload["job_description"], 12000)}
+
+Current LaTeX resume:
+{truncate_text(payload["current_resume"], 30000)}
+
+Projects-section layout candidate data:
+{json.dumps(prompt_candidate, ensure_ascii=False, indent=2)}
+"""
+        )
+        return run_text_task(prompt)
+
+    answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_layout_model)
+    if not agent.looks_like_latex_resume(answer):
+        raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code after Projects-section layout step.")
+    return answer
+
+
+def build_resume_gap_report(
+    role_profile: dict[str, Any],
+    jd_requirements: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence_text = json.dumps(
+        [candidate.get("evidence_card", {}) for candidate in project_candidates],
+        ensure_ascii=False,
+    ).lower()
+    missing_evidence = []
+    for keyword in jd_requirements.get("must_have_skills", [])[:20]:
+        if str(keyword).lower() not in evidence_text:
+            append_unique(missing_evidence, f"No strong project evidence found for `{keyword}`.", 12)
+    weak_sections = []
+    for candidate in project_candidates:
+        validation = candidate.get("bullet_writer_validation", {})
+        if not isinstance(validation, dict):
+            continue
+        weak_bullets = [
+            item
+            for item in validation.get("bullet_quality", [])
+            if isinstance(item, dict) and not item.get("is_strong")
+        ]
+        if weak_bullets:
+            append_unique(
+                weak_sections,
+                f"{candidate.get('project_name') or candidate.get('source_name')}: {len(weak_bullets)} weak/generic bullet candidates.",
+                12,
+            )
+    recommended_updates = []
+    family = role_profile.get("role_family", "")
+    if family == "it_analyst" and "powershell" in [str(item).lower() for item in jd_requirements.get("must_have_skills", [])]:
+        if "powershell" not in evidence_text:
+            recommended_updates.append("Add a real PowerShell/setup/support automation script before claiming stronger PowerShell experience.")
+    if family == "data_analyst" and "sql" in [str(item).lower() for item in jd_requirements.get("must_have_skills", [])]:
+        if "sql" not in evidence_text:
+            recommended_updates.append("Add a concrete SQL query/reporting artifact before emphasizing SQL analysis experience.")
+    safe_keywords = []
+    for candidate in project_candidates:
+        card = candidate.get("evidence_card", {})
+        if not isinstance(card, dict):
+            continue
+        for value in card.get("technologies", []) + card.get("methods", []) + card.get("features", []):
+            if str(value).lower() in [str(keyword).lower() for keyword in jd_requirements.get("must_have_skills", [])]:
+                append_unique(safe_keywords, str(value), 15)
+    unsafe_keywords = []
+    for tool in PROTECTED_UNSUPPORTED_TOOLS:
+        if tool.lower() in json.dumps(jd_requirements, ensure_ascii=False).lower() and tool.lower() not in evidence_text:
+            append_unique(unsafe_keywords, tool, 15)
+    return {
+        "missing_evidence": missing_evidence,
+        "weak_sections": weak_sections,
+        "recommended_project_updates": recommended_updates,
+        "safe_keywords_to_add": safe_keywords,
+        "unsafe_keywords_to_avoid": unsafe_keywords,
+    }
+
+
 def merge_staged_resume(
     job_description: str,
     resume: str,
@@ -3270,6 +4741,13 @@ def merge_staged_resume(
             index,
             len(project_candidates),
         )
+
+    current_resume = apply_projects_section_layout(
+        job_description,
+        current_resume,
+        project_candidates,
+        body,
+    )
 
     current_resume = apply_resume_section_candidate(
         "Skills-section",
@@ -3308,6 +4786,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="project_memory.json is not valid JSON.") from error
 
     application_hint = resolve_saved_application_hint(job_description)
+    progress_guidance = agent_progress_guidance_text(body.agent_progress_messages)
     selected_projects = select_staged_projects(job_description, resume, project_memory, body.allow_project_selection)
     if not selected_projects:
         raise HTTPException(
@@ -3319,9 +4798,23 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     selected_project_memory = {"projects": [compact_project_for_prompt(project) for project in selected_projects]}
     for project in selected_projects:
         evidence = retrieve_evidence_for_project(project)
-        candidates.append(build_project_resume_candidate(job_description, resume, project, evidence, body.language))
+        candidates.append(build_project_resume_candidate(
+            job_description,
+            resume,
+            project,
+            evidence,
+            body.language,
+            progress_guidance,
+        ))
 
-    skills_candidate = build_skills_resume_candidate(job_description, resume, selected_project_memory, candidates, body.language)
+    skills_candidate = build_skills_resume_candidate(
+        job_description,
+        resume,
+        selected_project_memory,
+        candidates,
+        body.language,
+        progress_guidance,
+    )
     experience_candidate = build_experience_resume_candidate(
         job_description,
         resume,
@@ -3330,6 +4823,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         skills_candidate,
         body.allow_experience_removal,
         body.language,
+        progress_guidance,
     )
     summary_candidate = build_summary_resume_candidate(
         job_description,
@@ -3339,7 +4833,11 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         skills_candidate,
         experience_candidate,
         body.language,
+        progress_guidance,
     )
+    role_profile = classify_role_family(job_description)
+    jd_requirements = jd_requirements_for_prompt(job_description)
+    gap_report = build_resume_gap_report(role_profile, jd_requirements, candidates)
 
     answer = merge_staged_resume(job_description, resume, candidates, skills_candidate, experience_candidate, summary_candidate, body)
     if not agent.looks_like_latex_resume(answer):
@@ -3359,6 +4857,9 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         "staged_skills_candidate": skills_candidate,
         "staged_experience_candidate": experience_candidate,
         "staged_summary_candidate": summary_candidate,
+        "role_profile": role_profile,
+        "jd_requirements": jd_requirements,
+        "gap_report": gap_report,
     }
     if body.include_application_hint:
         response["application_hint"] = application_hint
@@ -3606,6 +5107,7 @@ def fetch_github_context_api(
     project_id: str = "",
     force_refresh: bool = False,
     reanalyze_cached: bool = False,
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     if not approved:
         return {"saved": False, "message": "GitHub context fetch was not approved."}
@@ -3634,6 +5136,7 @@ def fetch_github_context_api(
     prompt_hash = project_memory_prompt_hash()
     needs_project_memory_reanalysis = bool(reanalyze_cached)
     for repo in repos:
+        assert_agent_task_not_cancelled()
         key = repo_state_key(repo)
         previous_state = repositories_state.get(key, {})
         if not isinstance(previous_state, dict):
@@ -3733,12 +5236,17 @@ def fetch_github_context_api(
         )
         repo_contexts.append(repo_context)
 
+    assert_agent_task_not_cancelled()
     path = agent.CHROMA_DB_PATH
     if fetched_contexts:
         path = agent.save_github_context_output(fetched_contexts)
 
     if needs_project_memory_reanalysis:
-        project_memory_update = update_project_memory_from_repo_analysis(repo_contexts)
+        assert_agent_task_not_cancelled()
+        project_memory_update = update_project_memory_from_repo_analysis(
+            repo_contexts,
+            agent_progress_messages=agent_progress_messages,
+        )
         for result in scan_results:
             key = result["repository"]
             if key in repositories_state and not result.get("error"):
@@ -3754,6 +5262,7 @@ def fetch_github_context_api(
             "message": "Repository commit SHAs and Project Memory analysis prompt are unchanged; reused cached GitHub context.",
         }
 
+    assert_agent_task_not_cancelled()
     save_github_repo_scan_state(scan_state)
     return {
         "saved": agent.has_usable_repo_context(repo_contexts),
@@ -4017,40 +5526,135 @@ def put_prompt(body: PromptBody):
 
 @app.post("/api/agent/ask")
 def agent_ask(body: AgentAskBody):
-    if body.provider:
-        agent.current_provider = body.provider.lower().strip()
-        agent.current_adapter = get_adapter(body.provider)[0]
-    if body.model:
-        agent.current_model = body.model.strip()
+    with agent_task_context(body.agent_task_id):
+        if body.provider:
+            agent.current_provider = body.provider.lower().strip()
+            agent.current_adapter = get_adapter(body.provider)[0]
+        if body.model:
+            agent.current_model = body.model.strip()
 
-    images = validate_agent_images(body.images)
-    ensure_provider_supports_images(body.provider or agent.current_provider, images)
-    message = body.message.strip()
-    if not message and not images:
-        raise HTTPException(status_code=400, detail="Message or image attachment is required.")
-    if not message:
-        message = "Please inspect the attached image and describe what you can do with it."
+        images = validate_agent_images(body.images)
+        ensure_provider_supports_images(body.provider or agent.current_provider, images)
+        message = body.message.strip()
+        if not message and not images:
+            raise HTTPException(status_code=400, detail="Message or image attachment is required.")
+        if not message:
+            message = "Please inspect the attached image and describe what you can do with it."
 
-    answer = run_agent_task(
-        message
-        + output_language_instruction(body.language)
-        + original_resume_language_instruction_for_request(message),
-        body.provider,
-        body.model,
-        images,
-    )
+        answer = run_agent_task(
+            message
+            + output_language_instruction(body.language)
+            + original_resume_language_instruction_for_request(message)
+            + agent_progress_guidance_text(body.agent_progress_messages),
+            body.provider,
+            body.model,
+            images,
+        )
+        return {
+            "answer": answer,
+            "artifacts": {
+                "analysis_path": None,
+                "tailored_resume_path": str(agent.latest_tailored_resume_path())
+                if agent.file_is_ready(agent.latest_tailored_resume_path())
+                else None,
+                "cover_letter_path": str(agent.COVER_LETTER_PATH)
+                if agent.file_is_ready(agent.COVER_LETTER_PATH)
+                else None,
+            },
+        }
+
+
+@app.post("/api/agent/progress-guidance")
+def handle_agent_progress_guidance(body: AgentProgressGuidanceBody):
+    with agent_task_context(body.agent_task_id):
+        guidance = body.user_message.strip()
+        if not guidance:
+            raise HTTPException(status_code=400, detail="Guidance message is required.")
+
+        prior = agent_progress_guidance_text(body.prior_messages)
+        prompt = f"""
+The user sent live guidance while an Agent task was already in its final model stage.
+
+Task title: {body.title or "Agent task"}
+Current stage: {body.stage_label or "final stage"}
+
+Latest user guidance:
+{guidance}
+{prior}
+
+Respond briefly to the user inside the progress modal.
+- Acknowledge the guidance.
+- Explain that the current in-flight final-stage generation may not be changed unless the user cancels and reruns.
+- If useful, summarize exactly how this guidance should be applied on a rerun.
+- Do not save files, modify artifacts, or claim the current result has changed.
+{output_language_instruction(body.language)}
+"""
+        answer = run_text_task(prompt)
+        return {"answer": answer}
+
+
+@app.post("/api/agent/cancel")
+def cancel_agent_task(body: AgentCancelBody):
+    canceled = cancel_agent_task_id(body.agent_task_id)
+    return {"cancelled": canceled, "agent_task_id": normalize_agent_task_id(body.agent_task_id)}
+
+
+@app.post("/api/agent-tasks/start")
+def start_agent_task(body: AgentTaskStartBody):
+    return create_background_agent_task(body)
+
+
+@app.get("/api/agent-tasks/{task_id}/status")
+def get_agent_task_status(task_id: str):
+    task = snapshot_background_task(task_id)
     return {
-        "answer": answer,
-        "artifacts": {
-            "analysis_path": None,
-            "tailored_resume_path": str(agent.latest_tailored_resume_path())
-            if agent.file_is_ready(agent.latest_tailored_resume_path())
-            else None,
-            "cover_letter_path": str(agent.COVER_LETTER_PATH)
-            if agent.file_is_ready(agent.COVER_LETTER_PATH)
-            else None,
-        },
+        "taskId": task["taskId"],
+        "status": task["status"],
+        "stages": task.get("stages", []),
+        "messages": task.get("messages", []),
+        "currentStage": task.get("currentStage", ""),
+        "resultAvailable": bool(task.get("resultAvailable")),
+        "error": task.get("error", ""),
+        "created_at": task.get("created_at", ""),
+        "updated_at": task.get("updated_at", ""),
     }
+
+
+@app.post("/api/agent-tasks/{task_id}/message")
+def post_agent_task_message(task_id: str, body: AgentTaskMessageBody):
+    task = snapshot_background_task(task_id)
+    if task.get("status") in {"done", "error", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Agent task is not accepting messages.")
+    append_background_task_message(task_id, "user", body.content.strip())
+    return {"saved": True, "taskId": normalize_agent_task_id(task_id)}
+
+
+@app.post("/api/agent-tasks/{task_id}/cancel")
+def cancel_background_agent_task(task_id: str):
+    task_id = normalize_agent_task_id(task_id)
+    canceled = cancel_agent_task_id(task_id)
+    update_background_task(task_id, status="cancelled", result=None, resultAvailable=False, error="")
+    with background_task_lock:
+        task = background_agent_tasks.get(task_id)
+        if task:
+            task["stages"] = [
+                {**stage, "status": "cancelled" if stage.get("status") in {"pending", "running", "waiting_for_user"} else stage.get("status")}
+                for stage in task.get("stages", [])
+            ]
+    append_background_task_message(task_id, "system", "任务已取消。")
+    return {"cancelled": canceled, "taskId": task_id}
+
+
+@app.get("/api/agent-tasks/{task_id}/result")
+def get_agent_task_result(task_id: str):
+    task = snapshot_background_task(task_id)
+    if task.get("status") == "cancelled":
+        raise HTTPException(status_code=409, detail="Agent task was cancelled.")
+    if task.get("status") == "error":
+        raise HTTPException(status_code=500, detail=task.get("error") or "Agent task failed.")
+    if task.get("status") != "done" or not task.get("resultAvailable"):
+        raise HTTPException(status_code=409, detail="Agent task result is not ready.")
+    return task.get("result")
 
 
 @app.post("/api/job-description")
@@ -4077,6 +5681,11 @@ def save_job_description(body: JobDescriptionBody):
 
 @app.post("/api/job-description/analyze")
 def analyze_job_description(body: AnalyzeBody):
+    with agent_task_context(body.agent_task_id):
+        return analyze_job_description_task(body)
+
+
+def analyze_job_description_task(body: AnalyzeBody):
     try:
         job_description = agent.read_job_description()
     except (FileNotFoundError, ValueError) as error:
@@ -4100,6 +5709,7 @@ Rules for this response:
 - Do not wrap the JSON in Markdown fences.
 """
     )
+    message = append_agent_progress_guidance(message, body.agent_progress_messages)
     answer = run_agent_task(message)
     try:
         payload = extract_json_object(answer)
@@ -4134,6 +5744,23 @@ Rules for this response:
 
 @app.post("/api/resume/tailor")
 def tailor_resume(body: TailorBody):
+    with agent_task_context(body.agent_task_id):
+        return tailor_resume_task(body)
+
+
+@app.post("/api/resume/star-check")
+def resume_star_check(body: ResumeStarCheckBody):
+    with agent_task_context(body.agent_task_id):
+        return build_resume_star_check(body)
+
+
+@app.post("/api/resume/star-fact")
+def resume_star_fact(body: ResumeStarFactBody):
+    with agent_task_context(body.agent_task_id):
+        return save_resume_star_fact(body)
+
+
+def tailor_resume_task(body: TailorBody):
     if body.use_github_context:
         return tailor_resume_staged(body)
 
@@ -4164,6 +5791,7 @@ Project Memory, read first and use as the primary project source:
         "\nBefore writing or modifying any Project-section or Experience-section bullet, call "
         "write_resume_bullets and use its ReAct analysis plus final_bullets as the source of bullet wording."
     )
+    prompt = append_agent_progress_guidance(prompt, body.agent_progress_messages)
     job_description = (
         agent.read_text_file(agent.JOB_DESCRIPTION_PATH)
         if agent.file_is_ready(agent.JOB_DESCRIPTION_PATH)
@@ -4189,11 +5817,17 @@ Project Memory, read first and use as the primary project source:
 
 @app.post("/api/resume/update-memory")
 def update_resume_memory(body: ResumeMemoryBody):
+    with agent_task_context(body.agent_task_id):
+        return update_resume_memory_task(body)
+
+
+def update_resume_memory_task(body: ResumeMemoryBody):
     try:
         return update_memory_from_resume_source(
             body.resume_source,
             project_name=body.project_name,
             project_id=body.project_id,
+            agent_progress_messages=body.agent_progress_messages,
         )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -4201,9 +5835,19 @@ def update_resume_memory(body: ResumeMemoryBody):
 
 @app.post("/api/resume/pdf-to-latex")
 def resume_pdf_to_latex(body: ResumePdfToLatexBody):
+    with agent_task_context(body.agent_task_id):
+        return resume_pdf_to_latex_task(body)
+
+
+def resume_pdf_to_latex_task(body: ResumePdfToLatexBody):
     pdf_bytes = validate_resume_pdf(body)
     extracted = extract_pdf_resume_content(pdf_bytes)
-    prompt = build_pdf_to_latex_prompt(body.filename, extracted, body.language)
+    prompt = build_pdf_to_latex_prompt(
+        body.filename,
+        extracted,
+        body.language,
+        body.agent_progress_messages,
+    )
     answer = run_text_task(prompt)
     latex = agent.extract_latex_document(answer)
     if not latex or not agent.looks_like_latex_resume(latex):
@@ -4255,6 +5899,11 @@ def export_tailored_resume_pdf(body: TailoredResumePdfBody):
 
 @app.post("/api/cover-letter/generate")
 def generate_cover_letter(body: CoverLetterBody):
+    with agent_task_context(body.agent_task_id):
+        return generate_cover_letter_task(body)
+
+
+def generate_cover_letter_task(body: CoverLetterBody):
     style_hint = f"\nPreferred style: {body.style}."
     prompt = (
         agent.COVER_LETTER_AGENT_PROMPT
@@ -4266,6 +5915,7 @@ def generate_cover_letter(body: CoverLetterBody):
         prompt += "\nUse resume.txt instead of tailored_resume.txt if the user requested it."
     if body.use_github_context:
         prompt += "\nYou may use GitHub context conservatively when it supports a specific claim."
+    prompt = append_agent_progress_guidance(prompt, body.agent_progress_messages)
     cover_letter_mtime = (
         agent.COVER_LETTER_PATH.stat().st_mtime_ns
         if agent.COVER_LETTER_PATH.exists()
@@ -4295,7 +5945,16 @@ def generate_cover_letter(body: CoverLetterBody):
 
 @app.post("/api/interview-prep/generate")
 def generate_interview_prep(body: InterviewPrepBody):
-    prompt = build_interview_prep_prompt(body.use_github_context, body.language)
+    with agent_task_context(body.agent_task_id):
+        return generate_interview_prep_task(body)
+
+
+def generate_interview_prep_task(body: InterviewPrepBody):
+    prompt = build_interview_prep_prompt(
+        body.use_github_context,
+        body.language,
+        body.agent_progress_messages,
+    )
     application_hint = resolve_saved_application_hint()
     answer = run_text_task(prompt)
     if not looks_like_interview_prep(answer):
@@ -4317,6 +5976,11 @@ def generate_interview_prep(body: InterviewPrepBody):
 
 @app.post("/api/github/scan")
 def github_scan(body: GitHubScanBody):
+    with agent_task_context(body.agent_task_id):
+        return github_scan_task(body)
+
+
+def github_scan_task(body: GitHubScanBody):
     try:
         repo_source = read_github_repo_source(
             body.resume_source,
@@ -4361,12 +6025,20 @@ def save_github_config(body: GitHubConfigBody):
 
 @app.post("/api/github/context")
 def github_context(body: GitHubContextBody):
+    with agent_task_context(body.agent_task_id):
+        return github_context_task(body)
+
+
+def github_context_task(body: GitHubContextBody):
     try:
         return fetch_github_context_api(
             body.approved,
             body.resume_source,
             project_name=body.project_name,
             project_id=body.project_id,
+            force_refresh=body.force_refresh,
+            reanalyze_cached=body.reanalyze_cached,
+            agent_progress_messages=body.agent_progress_messages,
         )
     except agent.transient_network_errors() as error:
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error

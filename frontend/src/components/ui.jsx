@@ -74,6 +74,9 @@ export function useAsyncAction() {
       if (successMessage) setSuccess(successMessage);
       return result;
     } catch (err) {
+      if (err?.name === "AgentCancelledError" || err?.name === "AbortError") {
+        return null;
+      }
       setError(err.message || "Operation failed");
       return null;
     } finally {
@@ -96,11 +99,48 @@ export function StatusBadge({ ready }) {
   );
 }
 
+function outputBaseName(value = "") {
+  return String(value || "").split(/[\\/]/).pop() || "";
+}
+
+function outputSequenceSuffix(rawName = "") {
+  const withoutExtension = String(rawName || "").replace(/\.[^.\\/]+$/, "");
+  const match = withoutExtension.match(/_(\d+)$/);
+  return match ? ` (${match[1]})` : "";
+}
+
+function cleanOutputFallbackName(rawName = "") {
+  return String(rawName || "")
+    .replace(/\.[^.\\/]+$/, "")
+    .replace(/_(\d+)$/, " ($1)")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseCompanyRoleFromOutputName(rawName = "") {
+  const withoutExtension = String(rawName || "").replace(/\.[^.\\/]+$/, "");
+  const stem = withoutExtension.replace(/_(\d+)$/, "").trim();
+  if (/^(tailored_resume|cover_letter|interview_prep|chat_session)(?:_|$)/i.test(stem)) return "";
+  const parts = stem.split("_").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return "";
+  return `${parts[0]} / ${parts.slice(1).join(" ")}`;
+}
+
 function outputDisplayName(file) {
-  const rawName = file.name || file.path || file.generated_at_display || file.updated_at_display || "-";
-  const withoutExtension = rawName.replace(/\.[^.\\/]+$/, "");
-  const withSequence = withoutExtension.replace(/_(\d+)$/, " ($1)");
-  return withSequence.replace(/_/g, " ").replace(/\s+/g, " ").trim() || rawName;
+  const rawName = outputBaseName(file.name || file.path || "");
+  const company = String(file.company || file.employer || "").trim();
+  const role = String(file.role || file.position || file.job_title || "").trim();
+  const sequence = outputSequenceSuffix(rawName);
+
+  if (company || role) {
+    return `${[company, role].filter(Boolean).join(" / ")}${sequence}`;
+  }
+
+  const parsedName = parseCompanyRoleFromOutputName(rawName);
+  if (parsedName) return `${parsedName}${sequence}`;
+
+  return cleanOutputFallbackName(rawName) || file.generated_at_display || file.updated_at_display || "-";
 }
 
 export function OutputFileSelect({
@@ -117,7 +157,7 @@ export function OutputFileSelect({
 }) {
   const { language } = useLanguage();
   const label = customLabel || (language === "zh" ? "历史输出" : "Output history");
-  const placeholder = customPlaceholder || (language === "zh" ? "选择生成时间以查看内容" : "Choose a generated time to view");
+  const placeholder = customPlaceholder || (language === "zh" ? "选择公司 / 职位以查看内容" : "Choose a company / role to view");
   const openLabel = language === "zh" ? "打开" : "Open";
   const deleteLabel = language === "zh" ? "删除" : "Delete";
 

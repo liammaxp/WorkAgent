@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
@@ -20,6 +21,7 @@ export default function InterviewPrep() {
   const [outputPath, setOutputPath] = useState("");
   const [outputFiles, setOutputFiles] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
   const refreshOutput = useCallback(() => {
     run(async () => {
@@ -62,8 +64,27 @@ export default function InterviewPrep() {
     setContent("");
     setOutputPath("");
     return run(async () => {
-      const data = await api.generateInterviewPrep(useGithub);
-      const status = await api.getStatus();
+      const { data, status } = await runAgentWithProgress({
+        title: copy.generating || "正在生成面试准备",
+        initialMessage: `Agent：我会读取 job_description.txt、${useGithub ? "tailored_resume/resume、memory 和 GitHub context" : "tailored_resume/resume 和 memory"}，生成面试准备。`,
+        stages: [
+          { id: "generate", label: "发送职位/简历/记忆生成面试六部分内容" },
+          { id: "refresh", label: "读取 interview_prep 输出文件" },
+        ],
+        modelStageIds: ["generate"],
+        action: async (progress) => {
+          const data = await progress.runStage("generate", `正在发送 use_github_context=${useGithub}；后端会合并 Role focus、技术题、项目讲述、STAR、准备缺口、反问问题`, () =>
+            api.generateInterviewPrep(useGithub, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          const status = await progress.runStage("refresh", "正在读取 interview_prep.txt 和 outputs/interview_prep 最新文件", () => api.getStatus());
+          progress.addAgentMessage("面试准备内容已生成。");
+          return { data, status };
+        },
+      });
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       setOutputFiles(status.outputs?.interview_prep || []);
@@ -85,7 +106,7 @@ export default function InterviewPrep() {
           {copy.useGithub}
         </label>
         <div className="btn-row">
-          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading || agentActive}>
             {loading ? copy.generating : copy.generate}
           </button>
         </div>

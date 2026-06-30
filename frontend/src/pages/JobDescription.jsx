@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import {
   Alert,
   EditorCard,
@@ -32,6 +33,7 @@ export default function JobDescription() {
   const [outputPath, setOutputPath] = useState("");
   const [routeError, setRouteError] = useState("");
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
   useEffect(() => {
     const nextRouteError = location.state?.routeError;
@@ -74,12 +76,36 @@ export default function JobDescription() {
 
   const analyze = () =>
     run(async () => {
-      if (content.trim()) {
-        const result = await api.saveJobDescription(content);
-        notifyJobDescriptionSaved(result);
-      }
-      const data = await api.analyzeJob(false);
-      const status = await api.getStatus();
+      const { data, status } = await runAgentWithProgress({
+        title: copy.analyzing || "正在分析职位",
+        initialMessage: "Agent：我会保存当前 JD，并把 job_description.txt 发送给职位分析 Agent。",
+        stages: [
+          { id: "save", label: "保存 job_description.txt" },
+          { id: "analyze", label: "发送 JD 生成职位分析 JSON" },
+          { id: "refresh", label: "读取分析历史和输出文件" },
+        ],
+        modelStageIds: ["analyze"],
+        action: async (progress) => {
+          if (content.trim()) {
+            await progress.runStage("save", `正在保存 ${content.trim().length} 个字符到 job_description.txt`, async () => {
+              const result = await api.saveJobDescription(content);
+              notifyJobDescriptionSaved(result);
+            });
+          } else {
+            progress.setStageStatus("save", "done");
+          }
+          const data = await progress.runStage("analyze", "正在发送 job_description.txt，要求 Agent 返回 analysis/company/role JSON", () =>
+            api.analyzeJob(false, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          const status = await progress.runStage("refresh", "正在读取 outputs/analysis 最新文件和状态元数据", () => api.getStatus());
+          progress.addAgentMessage("职位分析已完成。");
+          return { data, status };
+        },
+      });
       setAnalysis(data.analysis || "");
       setOutputPath(data.analysis_path || "");
       setOutputFiles(status.outputs?.analysis || []);
@@ -110,7 +136,7 @@ export default function JobDescription() {
           <button type="button" className="btn btn-secondary" onClick={save} disabled={loading}>
             {text[language].common.save}
           </button>
-          <button type="button" className="btn btn-primary" onClick={analyze} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={analyze} disabled={loading || agentActive}>
             {loading ? copy.analyzing : copy.analyze}
           </button>
           <OutputFileSelect

@@ -13,8 +13,10 @@ The project is designed for truthful, conservative job-search writing. It helps 
 
 - Analyze a saved job description and summarize requirements, skills, responsibilities, expectations, and fit.
 - Edit a base resume and generate a tailored LaTeX resume for the current role.
-- Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory.
+- Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory. The tailored Projects section now prefers 2 projects for a one-page resume, allows 3 only when the third is job-critical, and gives higher-ranked projects more bullet space.
+- Let the agent tailor Project and Experience bullets through a stricter ReAct bullet writer that rejects stack-only, CRUD-only, UI-control-only, or broad-module-only wording unless the bullet names a concrete implementation method, substantive workflow capability, and value.
 - Let the agent tailor Experience bullets for the job description by reordering, rewriting, or removing weak and redundant bullets while preserving factual meaning. Removing an entire Experience entry requires explicit user approval.
+- Return a staged resume-tailoring summary with role profile, extracted JD requirements, and a gap report that highlights missing or weak evidence and unsupported keywords to avoid.
 - Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
 - Delete a specific durable-memory fact through Agent Chat; project deletion is synchronized across Chroma profile memory and Project Memory.
 - Attach JPG, PNG, GIF, or WebP images in Agent Chat for supported vision models to inspect and act on.
@@ -135,6 +137,7 @@ GitHub extraction
 -> project branch: README / repository metadata / languages / root files / code-file summary -> project_memory.json
 -> resume generation: JD + original resume + project_memory.json
 -> map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details
+-> classify role family, extract JD requirements, rank projects, and report evidence gaps
 -> resume bullets
 ```
 
@@ -203,7 +206,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 
 - Dashboard: provider/model status, API key setup, file readiness, recent outputs, and quick-start links.
 - Job Description: edit, save, and analyze the current job description.
-- Resume: edit the base resume, switch or delete text-output versions by readable file name, export and manage PDF versions, open PDFs with the desktop default application, update Chroma vector memory, and generate a tailored LaTeX resume with optional JD-based project selection.
+- Resume: edit the base resume, switch or delete text-output versions by readable file name, export and manage PDF versions, open PDFs with the desktop default application, update Chroma vector memory, and generate a tailored LaTeX resume with JD-based project selection, role/JD analysis metadata, and evidence-gap reporting.
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
@@ -271,9 +274,9 @@ Agent Chat image requests use data URLs:
 
 `GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions. Output history lists readable file names rather than timestamps and omits reserved current-working files. When analysis, tailored resume, cover letter, or interview prep generation produces unchanged content for the same company and role, WorkAgent reuses the matching history file instead of creating a duplicate numbered version.
 
-`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. The staged tailoring path also returns `role_profile`, `jd_requirements`, and `gap_report` so the UI can show role classification, extracted requirements, missing evidence, weak bullet candidates, and unsafe unsupported keywords. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
 
-`POST /api/resume/pdf-to-latex` converts an uploaded PDF resume into editable LaTeX and saves it as the base resume. `POST /api/resume/tailored/pdf` compiles the current tailored LaTeX resume into a PDF output file.
+`POST /api/resume/pdf-to-latex` converts an uploaded PDF resume into editable LaTeX and saves it as the base resume. `POST /api/resume/tailored/pdf` compiles the current tailored LaTeX resume into a PDF output file. PDF export now guards `glyphtounicode`/`pdfgentounicode` commands for engine compatibility and tries PDF-oriented LaTeX commands first when the resume requests those settings.
 
 `POST /api/cover-letter/generate` also accepts `include_application_hint` and can return the same extracted application fields.
 
@@ -639,6 +642,7 @@ GitHub extraction
 -> project branch: README / repository metadata / languages / root files / code-file summary -> project_memory.json
 -> resume generation: JD + original resume + project_memory.json
 -> map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details
+-> classify role family, extract JD requirements, rank projects, and report evidence gaps
 -> resume bullets
 ```
 
@@ -707,7 +711,7 @@ background/prompt.example.txt
 
 - Dashboard：查看 provider/model 状态、配置 API Key、检查文件状态、查看最近输出和快速入口。
 - Job Description：编辑、保存并分析当前职位描述。
-- Resume：编辑基础简历，按可读文件名切换或删除文本输出版本，导出和管理 PDF 版本，使用桌面默认应用打开 PDF，更新 Chroma 向量记忆，并生成定制版 LaTeX 简历。
+- Resume：编辑基础简历，按可读文件名切换或删除文本输出版本，导出和管理 PDF 版本，使用桌面默认应用打开 PDF，更新 Chroma 向量记忆，并生成带 JD 项目选择、角色/JD 分析元数据和证据缺口报告的定制版 LaTeX 简历。
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
@@ -775,9 +779,9 @@ Agent Chat 图片请求使用 data URL：
 
 `GET /api/output-file`、`POST /api/output-file/launch` 和 `DELETE /api/output-file` 让前端读取、用桌面默认应用打开或删除生成输出文件，例如定制简历文本版本和导出的 PDF 版本。输出历史按可读文件名展示，而不是按时间戳展示，并且会排除保留的当前工作文件。当职位分析、定制简历、求职信或面试准备在同一公司和岗位下生成出未变化的内容时，WorkAgent 会复用匹配的历史文件，而不是创建重复的编号版本。
 
-`POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
+`POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。分阶段定制流程还会返回 `role_profile`、`jd_requirements` 和 `gap_report`，用于展示角色分类、提取出的 JD 要求、缺失证据、较弱 bullet 候选和应避免的 unsupported keywords。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
 
-`POST /api/resume/pdf-to-latex` 会把上传的 PDF 简历转换为可编辑 LaTeX，并保存为基础简历。`POST /api/resume/tailored/pdf` 会把当前定制版 LaTeX 简历编译成 PDF 输出文件。
+`POST /api/resume/pdf-to-latex` 会把上传的 PDF 简历转换为可编辑 LaTeX，并保存为基础简历。`POST /api/resume/tailored/pdf` 会把当前定制版 LaTeX 简历编译成 PDF 输出文件。PDF 导出会为 `glyphtounicode`/`pdfgentounicode` 命令加上引擎兼容保护，并在简历需要这些设置时优先尝试 PDF-oriented LaTeX 编译命令。
 
 `POST /api/cover-letter/generate` 也接受 `include_application_hint`，并可以返回同样的投递记录字段。
 

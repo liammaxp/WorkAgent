@@ -10,6 +10,7 @@ import GitHubContext from "./pages/GitHubContext.jsx";
 import PromptSettings from "./pages/PromptSettings.jsx";
 import Chat from "./pages/Chat.jsx";
 import { api } from "./api/client.js";
+import { AgentProgressProvider } from "./agentProgress/AgentProgressContext.jsx";
 import {
   LANGUAGES,
   LanguageContext,
@@ -79,6 +80,7 @@ export default function App() {
 
   return (
     <LanguageContext.Provider value={languageValue}>
+      <AgentProgressProvider>
       <div className="app-shell">
         <aside className="sidebar">
           <div className="brand">
@@ -129,6 +131,7 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      </AgentProgressProvider>
     </LanguageContext.Provider>
   );
 }

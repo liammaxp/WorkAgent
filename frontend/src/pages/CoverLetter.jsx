@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
@@ -34,6 +35,7 @@ export default function CoverLetter() {
   const [outputPath, setOutputPath] = useState("");
   const [outputFiles, setOutputFiles] = useState([]);
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
   const loadCoverLetter = useCallback(() => {
     run(async () => {
@@ -88,13 +90,33 @@ export default function CoverLetter() {
 
   const generate = () =>
     run(async () => {
-      const jobData = await api.getFile("job_description");
-      const data = await api.generateCoverLetter({
-        use_tailored_resume: true,
-        use_github_context: useGithub,
-        style,
+      const { data, status, jobData } = await runAgentWithProgress({
+        title: copy.generating || "正在生成求职信",
+        initialMessage: `Agent：我会读取 job_description.txt，并用 ${useGithub ? "tailored_resume.txt + GitHub context" : "tailored_resume.txt"} 生成 ${style} 风格求职信。`,
+        stages: [
+          { id: "inspect", label: "读取 job_description.txt" },
+          { id: "generate", label: `发送职位/简历上下文生成 ${style} 求职信` },
+          { id: "refresh", label: "读取 cover_letters 输出文件" },
+        ],
+        modelStageIds: ["generate"],
+        action: async (progress) => {
+          const jobData = await progress.runStage("inspect", "正在读取 job_description.txt，用于公司/岗位和语言判断", () => api.getFile("job_description"));
+          const data = await progress.runStage("generate", `正在发送 use_tailored_resume=true、style=${style}、use_github_context=${useGithub}`, () =>
+            api.generateCoverLetter({
+              use_tailored_resume: true,
+              use_github_context: useGithub,
+              style,
+            }, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          const status = await progress.runStage("refresh", "正在读取 cover_letter.txt 和 outputs/cover_letters 最新文件", () => api.getStatus());
+          progress.addAgentMessage("求职信已生成。");
+          return { data, status, jobData };
+        },
       });
-      const status = await api.getStatus();
       setContent(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       setOutputFiles(status.outputs?.cover_letters || []);
@@ -145,7 +167,7 @@ export default function CoverLetter() {
           {copy.useGithub}
         </label>
         <div className="btn-row">
-          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading || agentActive}>
             {loading ? copy.generating : copy.generate}
           </button>
         </div>

@@ -291,12 +291,21 @@ class OpenAIResponsesAdapter(ModelAdapter):
             client_options["api_key"] = api_key
         if base_url:
             client_options["base_url"] = base_url
-        self.client = OpenAI(**client_options)
+        self._client_options = client_options
+        self.client = OpenAI(**self._client_options)
 
     def default_model(self):
         return os.getenv(self.model_env, self.fallback_model)
 
+    def ensure_client_alive(self):
+        is_closed = getattr(self.client, "is_closed", False)
+        if callable(is_closed):
+            is_closed = is_closed()
+        if is_closed:
+            self.client = OpenAI(**self._client_options)
+
     def create_response(self, model, instructions, tools, input_items):
+        self.ensure_client_alive()
         return self.client.responses.create(
             model=model,
             instructions=instructions,
@@ -338,11 +347,19 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
             client_options["api_key"] = api_key
         if base_url:
             client_options["base_url"] = base_url
-        self.client = OpenAI(**client_options)
+        self._client_options = client_options
+        self.client = OpenAI(**self._client_options)
         self.messages = []
 
     def default_model(self):
         return os.getenv(self.model_env, self.fallback_model)
+
+    def ensure_client_alive(self):
+        is_closed = getattr(self.client, "is_closed", False)
+        if callable(is_closed):
+            is_closed = is_closed()
+        if is_closed:
+            self.client = OpenAI(**self._client_options)
 
     def convert_tools(self, tools):
         return [
@@ -358,6 +375,7 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
         ]
 
     def create_response(self, model, instructions, tools, input_items):
+        self.ensure_client_alive()
         if not self.messages:
             self.messages = [{"role": "system", "content": instructions}]
             self.messages.extend(openai_chat_input_item(item) for item in input_items)
@@ -413,7 +431,8 @@ class DeepSeekAdapter(OpenAIChatCompletionsAdapter):
             fallback_model="deepseek-v4-pro",
         )
         if not os.getenv("DEEPSEEK_BASE_URL"):
-            self.client.base_url = "https://api.deepseek.com"
+            self._client_options["base_url"] = "https://api.deepseek.com"
+            self.client = OpenAI(**self._client_options)
 
 
 class ClaudeMessagesAdapter(ModelAdapter):
@@ -650,9 +669,8 @@ def clear_interview_prep():
 
 def clear_tailored_resume():
     TAILORED_RESUME_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for path in TAILORED_RESUME_OUTPUT_DIR.glob("*.txt"):
-        if path.is_file():
-            path.unlink()
+    if OUTPUT_RESUME_PATH.exists():
+        OUTPUT_RESUME_PATH.unlink()
     if LEGACY_OUTPUT_RESUME_PATH.exists():
         LEGACY_OUTPUT_RESUME_PATH.unlink()
 
@@ -1165,6 +1183,138 @@ def write_resume_bullets(
     final_bullets = final_bullets or []
     allowed_sections = {"project", "experience"}
     allowed_verbs = ("Used ", "Implemented ", "Automated ", "Debugged ")
+    generic_stack_terms = {
+        "api",
+        "backend",
+        "database",
+        "frontend",
+        "framework",
+        "react",
+        "fastapi",
+        "sqlite",
+        "python",
+        "javascript",
+        "typescript",
+        "node",
+        "html",
+        "css",
+    }
+    method_indicators = {
+        "algorithm",
+        "analysis",
+        "backoff",
+        "cache",
+        "caching",
+        "chunk",
+        "chunked",
+        "classification",
+        "comparison",
+        "compression",
+        "deduplication",
+        "diff",
+        "embedding",
+        "extraction",
+        "fallback",
+        "filter",
+        "filtering",
+        "heuristic",
+        "index",
+        "indexing",
+        "matching",
+        "mapping",
+        "merge",
+        "orchestration",
+        "parser",
+        "parsing",
+        "pipeline",
+        "ranking",
+        "retrieval",
+        "retry",
+        "routing",
+        "schema",
+        "scoring",
+        "state",
+        "validation",
+        "vector",
+        "workflow",
+    }
+    shallow_feature_terms = {
+        "button",
+        "buttons",
+        "page",
+        "pages",
+        "screen",
+        "screens",
+        "form",
+        "forms",
+        "modal",
+        "modals",
+        "tab",
+        "tabs",
+        "dropdown",
+        "dropdowns",
+        "panel",
+        "panels",
+    }
+    capability_indicators = {
+        "accuracy",
+        "application",
+        "automation",
+        "claim",
+        "claims",
+        "consistency",
+        "context",
+        "decision",
+        "evidence",
+        "generation",
+        "matching",
+        "quality",
+        "relevance",
+        "reliability",
+        "repository",
+        "repositories",
+        "routing",
+        "scan",
+        "scans",
+        "scanning",
+        "selection",
+        "tailoring",
+        "unsupported",
+        "validation",
+        "workflow",
+    }
+    value_indicators = {
+        "avoid",
+        "avoiding",
+        "clarify",
+        "clarifying",
+        "improve",
+        "improving",
+        "preserve",
+        "preserving",
+        "prevent",
+        "preventing",
+        "prioritize",
+        "prioritizing",
+        "reduce",
+        "reducing",
+        "streamline",
+        "streamlining",
+        "support",
+        "supporting",
+    }
+    goal_connectors = [
+        " to ",
+        " for ",
+        " so ",
+        " that ",
+        ", reducing ",
+        ", improving ",
+        ", preserving ",
+        ", preventing ",
+        ", streamlining ",
+        ", supporting ",
+    ]
     issues = []
 
     if section_type not in allowed_sections:
@@ -1196,9 +1346,48 @@ def write_resume_bullets(
             issues.append(
                 "Bullet must start with one of: Used, Implemented, Automated, Debugged."
             )
-        if " to " not in bullet:
+        bullet_lower = bullet.lower().replace("-", " ")
+        method_part = bullet_lower
+        for connector in goal_connectors:
+            if connector in bullet_lower:
+                method_part = bullet_lower.split(connector, 1)[0]
+                break
+        for verb in allowed_verbs:
+            if method_part.startswith(verb.lower()):
+                method_part = method_part[len(verb) :]
+                break
+        has_method_signal = any(
+            indicator in method_part for indicator in method_indicators
+        )
+        method_words = [
+            token.strip(".,;:()[]{}")
+            for token in method_part.split()
+            if token.strip(".,;:()[]{}")
+        ]
+        non_generic_words = [
+            token
+            for token in method_words
+            if token not in generic_stack_terms and token not in {"with", "and", "using"}
+        ]
+        if not has_method_signal or len(non_generic_words) < 2:
             issues.append(
-                "Bullet should follow: verb + technical method + to + function/problem + result/value."
+                "Bullet technical method must name a concrete implementation method, algorithm, data flow, "
+                "or debugging approach; a technology stack alone is not enough."
+            )
+        has_substantive_capability = any(
+            indicator in bullet_lower for indicator in capability_indicators
+        )
+        has_value_signal = any(indicator in bullet_lower for indicator in value_indicators)
+        has_shallow_feature = any(term in bullet_lower.split() for term in shallow_feature_terms)
+        if not has_substantive_capability or not has_value_signal:
+            issues.append(
+                "Bullet must describe a substantive logic, workflow, or business capability and its value; "
+                "do not describe only broad modules or UI features."
+            )
+        if has_shallow_feature and not has_substantive_capability:
+            issues.append(
+                "Bullet feature target is too shallow; buttons, pages, forms, or UI controls are not enough "
+                "unless tied to a substantive workflow or logic capability."
             )
         normalized_bullets.append(normalized)
 
@@ -1213,8 +1402,19 @@ def write_resume_bullets(
                 "business capability, identify technical signal, then write resume bullets."
             ),
             "required_pattern": (
-                "Used / Implemented / Automated / Debugged + technical method + "
-                "to implement a feature or solve a problem + result or value"
+                "Use a strong action verb plus concrete technical method, substantive logic/business "
+                "capability, and result or value. The sentence may use natural phrasing and does not "
+                "need to force a fixed 'to' template."
+            ),
+            "technical_method_requirement": (
+                "The technical method must name a concrete implementation method, algorithm, "
+                "data flow, system mechanism, or debugging approach. A technology stack alone "
+                "is not enough."
+            ),
+            "substantive_capability_requirement": (
+                "The feature/problem must be a logic, workflow, or business capability such as "
+                "resume quality control, evidence-backed tailoring, project selection, validation, "
+                "or context management; UI controls or broad modules alone are too shallow."
             ),
             "job_alignment": job_alignment,
             "source_facts": source_facts,
@@ -2457,7 +2657,10 @@ TOOLS = [
             "Call this tool before producing or modifying any project or Experience bullet. "
             "The tool records why each bullet is factual, why it belongs in the resume, "
             "what business capability it shows, what technical signal it shows, and the final "
-            "bullet text using the required pattern."
+            "bullet text using the required pattern. Final bullets must name a concrete "
+            "implementation method, algorithm, data flow, system mechanism, or debugging "
+            "approach instead of only listing technologies, and must describe a substantive "
+            "logic/workflow/business capability rather than only a UI control or broad module."
         ),
         "parameters": {
             "type": "object",
@@ -2501,8 +2704,14 @@ TOOLS = [
                 "final_bullets": {
                     "type": "array",
                     "description": (
-                        "Final resume bullets. Each bullet must follow: Used / Implemented / Automated / "
-                        "Debugged + technical method + to + feature/problem + result or value."
+                        "Final resume bullets. Prefer Used / Implemented / Automated / Debugged, but use "
+                        "natural phrasing instead of forcing every sentence into a fixed 'to' template. "
+                        "Each bullet must include a concrete technical method, a substantive logic/workflow/"
+                        "business capability, and a result or value. The method should explain how the work "
+                        "was implemented, such as retrieval/ranking, parsing, schema validation, state "
+                        "comparison, caching, retry/fallback handling, chunked processing, orchestration, "
+                        "or root-cause debugging. Stack-only, button/page-only, or broad module-only bullets "
+                        "are not enough."
                     ),
                     "items": {"type": "object"},
                 },
@@ -2779,9 +2988,9 @@ For cover letters, read tailored_resume.txt first and use resume.txt only as a f
 Project Memory is the primary source of project truth. GitHub context is an evidence library only.
 Resume tailoring order for projects: first call read_project_memory to understand each project's background, purpose, scope, tech stack, workflows, confirmed features, and metrics; then call read_project_evidence_map to map each Project Memory project one-to-one to Chroma github_evidence for code/file/commit/diff details; then modify the resume.
 Do not write resume bullets directly from retrieved GitHub evidence. Use Project Memory to decide which projects and claims are valid, and use the per-project evidence map only to add implementation details and proof.
-Mandatory bullet-writing tool rule: whenever the user asks to write, rewrite, tailor, generate, or modify Project-section bullets or Experience-section bullets, you must call write_resume_bullets before showing final bullet wording or before saving a modified resume. Use its ReAct fields to explain privately in the tool call why each bullet can be written, why it belongs in the project or experience, what business capability it shows, and what technical capability it shows. Final bullets must follow: Used / Implemented / Automated / Debugged + technical method + to + feature/problem + result or value.
+Mandatory bullet-writing tool rule: whenever the user asks to write, rewrite, tailor, generate, or modify Project-section bullets or Experience-section bullets, you must call write_resume_bullets before showing final bullet wording or before saving a modified resume. Use its ReAct fields to explain privately in the tool call why each bullet can be written, why it belongs in the project or experience, what business capability it shows, and what technical capability it shows. Prefer Used / Implemented / Automated / Debugged, but allow natural sentence structure instead of forcing every bullet into the same "to" template. Final bullets must combine a concrete technical method, a substantive logic/workflow/business capability, and a result or value. The technical method must explain how the work was implemented, such as retrieval/ranking logic, parsing, schema validation, state comparison, caching, retry/fallback handling, chunked processing, orchestration, or root-cause debugging. The implemented feature/problem should be substantive, such as reducing monotonous resume generation, selecting relevant projects, validating supported claims, recovering from context-window overflow, or preserving factual evidence; a technology stack, button, page, CRUD flow, or broad module alone is not enough.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals only as supporting evidence for facts already represented in Project Memory.
-When tailoring a resume, compare the current resume projects with factual projects from project_memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching Project Memory project. Project Memory rag_refs are candidates for Chroma evidence lookup, not permission to invent claims.
+When tailoring a resume, compare the current resume projects with factual projects from project_memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching Project Memory project. Prefer a one-page resume: the Projects section should normally keep 2 projects, may keep 3 only when the third project is clearly job-critical, and must not keep more than 3. Rank projects strongest-to-weakest and give higher-ranked projects more bullets than lower-ranked projects, usually about 3 bullets for rank 1, 2 bullets for rank 2, and 1 concise bullet for an optional rank 3 project. Project Memory rag_refs are candidates for Chroma evidence lookup, not permission to invent claims.
 When tailoring resume Experience entries, you may reorder factual bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. Preserve each existing Experience entry unless the user explicitly allows removing an entire entry. Never invent or change employers, roles, dates, responsibilities, technologies, or metrics.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.

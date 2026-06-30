@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import {
   Alert,
   LoadingBar,
@@ -13,6 +14,9 @@ const FLOW_TARGETS = {
   job_description: { route: "/job", zh: "职位描述", en: "Job Description" },
   resume: { route: "/resume", zh: "简历", en: "Resume" },
 };
+
+const STAR_DETAILS_QUESTION =
+  "为了按 STAR 法则写简历 bullet，请先补充：项目/经历解决了什么问题，你负责哪个模块，使用了哪些关键技术，有没有项目规模或优化前后数据，以及最终结果。没有量化数据也可以直接说“没有数据/不知道”，我不会编造数字。";
 
 function includesAny(value, patterns) {
   return patterns.some((pattern) => pattern.test(value));
@@ -88,6 +92,7 @@ export default function Chat({ session, setSession }) {
   const imageInputRef = useRef(null);
   const [supportsImages, setSupportsImages] = useState(true);
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
   const updateSession = (update) =>
     setSession((current) => ({
       ...current,
@@ -244,8 +249,10 @@ export default function Chat({ session, setSession }) {
     });
   };
 
-  const runApplicationMaterialFlow = async (flow) => {
-    const missing = await missingFlowPrerequisite();
+  const runApplicationMaterialFlow = async (flow, progress = null) => {
+    const missing = progress
+      ? await progress.runStage("check", "检查 /status 中 job_description、resume 是否已保存且 JD 是本次会话内容", () => missingFlowPrerequisite())
+      : await missingFlowPrerequisite();
     if (missing) {
       pauseFlow(flow, missing);
       return null;
@@ -255,23 +262,58 @@ export default function Chat({ session, setSession }) {
     let resumeData = null;
     let coverLetterData = null;
     let applicationHint = null;
+    if (flow.outputs.resume && progress) {
+      await progress.runStage("star", "检查简历 bullet 是否具备 STAR 信息", async () => {
+        const answer = await progress.askUserAndWait(
+          STAR_DETAILS_QUESTION,
+          "star",
+          "等待用户补充 STAR 信息；回复没有数据也可以继续",
+        );
+        if (/没有|不知道|no data|not sure|none|没有数据/i.test(answer)) {
+          progress.addAgentMessage("明白，我不会编造数字；会用真实技术动作和保守结果表达来写 bullet。");
+        } else {
+          progress.addAgentMessage("收到，我会把这些 STAR 信息带入定制简历生成。");
+        }
+      });
+    }
     if (flow.outputs.resume) {
-      resumeData = await api.tailorResume(true, true, false, true);
+      resumeData = progress
+        ? await progress.runStage("resume", "发送 job_description.txt + resume.txt + Project Memory + GitHub context，生成 tailored_resume 并返回 application_hint", () =>
+          api.tailorResume(true, true, false, true, {
+            signal: progress.signal,
+            agentProgressMessages: progress.getUserMessages(),
+            agentTaskId: progress.agentTaskId,
+          }),
+        )
+        : await api.tailorResume(true, true, false, true);
       applicationHint = resumeData?.application_hint || applicationHint;
       pages.push(language === "zh" ? "简历" : "Resume");
     }
     if (flow.outputs.coverLetter) {
-      coverLetterData = await api.generateCoverLetter({
-        use_tailored_resume: Boolean(flow.outputs.resume || resumeData),
-        use_github_context: false,
-        style: "concise",
-        include_application_hint: !applicationHint,
-      });
+      coverLetterData = progress
+        ? await progress.runStage("coverLetter", `发送 ${flow.outputs.resume ? "刚生成的 tailored_resume" : "现有 tailored_resume/resume"} + job_description，生成 cover_letter`, () =>
+          api.generateCoverLetter({
+            use_tailored_resume: Boolean(flow.outputs.resume || resumeData),
+            use_github_context: false,
+            style: "concise",
+            include_application_hint: !applicationHint,
+          }, {
+            signal: progress.signal,
+            agentProgressMessages: progress.getUserMessages(),
+            agentTaskId: progress.agentTaskId,
+          }),
+        )
+        : await api.generateCoverLetter({
+          use_tailored_resume: Boolean(flow.outputs.resume || resumeData),
+          use_github_context: false,
+          style: "concise",
+          include_application_hint: !applicationHint,
+        });
       applicationHint = coverLetterData?.application_hint || applicationHint;
       pages.push(language === "zh" ? "求职信" : "Cover Letter");
     }
 
-    await api.createApplication({
+    const createRecord = () => api.createApplication({
       company: applicationHint?.company?.trim() || (language === "zh" ? "未知公司" : "Unknown company"),
       role: applicationHint?.role?.trim() || (language === "zh" ? "未知岗位" : "Unknown role"),
       link: applicationHint?.link?.trim() || "",
@@ -281,6 +323,13 @@ export default function Chat({ session, setSession }) {
       cover_letter_version: coverLetterData?.output_path || coverLetterData?.path || "",
       notes: language === "zh" ? "由 Agent Chat 自动添加。" : "Added automatically from Agent Chat.",
     });
+
+    if (progress) {
+      await progress.runStage("record", `写入申请记录：${applicationHint?.company || "Unknown company"} / ${applicationHint?.role || "Unknown role"}`, createRecord);
+      progress.addAgentMessage("Application materials are ready.");
+    } else {
+      await createRecord();
+    }
 
     const pageText = formatPageList(pages, language);
     addHistory({
@@ -311,14 +360,50 @@ export default function Chat({ session, setSession }) {
 
       const requestedOutputs = detectApplicationMaterialRequest(trimmed);
       if (requestedOutputs && attachedImages.length === 0) {
-        return runApplicationMaterialFlow({
-          message: trimmed,
-          outputs: requestedOutputs,
-          userEntry,
+        const stages = [
+          { id: "check", label: "检查 JD 和基础简历是否可用" },
+          ...(requestedOutputs.resume ? [{ id: "star", label: "补全 STAR bullet 信息" }] : []),
+          ...(requestedOutputs.resume ? [{ id: "resume", label: "生成 tailored_resume.txt" }] : []),
+          ...(requestedOutputs.coverLetter ? [{ id: "coverLetter", label: "生成 cover_letter.txt" }] : []),
+          { id: "record", label: "写入 applications 历史记录" },
+        ];
+        return runAgentWithProgress({
+          title: flowCopy.generating,
+          initialMessage: `User: ${trimmed}`,
+          stages,
+          modelStageIds: [
+            ...(requestedOutputs.resume ? ["resume"] : []),
+            ...(requestedOutputs.coverLetter ? ["coverLetter"] : []),
+          ],
+          action: (progress) => runApplicationMaterialFlow({
+            message: trimmed,
+            outputs: requestedOutputs,
+            userEntry,
+          }, progress),
         });
       }
 
-      const data = await api.askAgent(trimmed, attachedImages);
+      const data = await runAgentWithProgress({
+        title: language === "zh" ? "正在调用 Agent" : "Calling Agent",
+        initialMessage: `User: ${trimmed || copy.imageOnlyMessage}`,
+        stages: [
+          { id: "send", label: `准备用户消息${attachedImages.length ? `和 ${attachedImages.length} 张图片` : ""}` },
+          { id: "answer", label: "发送消息到 Agent 并生成回复" },
+        ],
+        modelStageIds: ["answer"],
+        action: async (progress) => {
+          progress.setStageStatus("send", "done");
+          const data = await progress.runStage("answer", `正在发送 ${trimmed.length} 个字符${attachedImages.length ? ` + ${attachedImages.length} 张图片` : ""} 给 Agent`, () =>
+            api.askAgent(trimmed, attachedImages, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          progress.addAgentMessage(data.answer || "");
+          return data;
+        },
+      });
       const agentEntry = { role: "agent", text: data.answer || "" };
       updateSession((current) => ({ history: [...current.history, agentEntry] }));
       return data;
@@ -327,7 +412,23 @@ export default function Chat({ session, setSession }) {
   const continueFlow = () =>
     run(async () => {
       if (!pendingFlow) return null;
-      return runApplicationMaterialFlow(pendingFlow);
+      const stages = [
+        { id: "check", label: "重新检查 JD 和基础简历" },
+        ...(pendingFlow.outputs.resume ? [{ id: "star", label: "补全 STAR bullet 信息" }] : []),
+        ...(pendingFlow.outputs.resume ? [{ id: "resume", label: "生成 tailored_resume.txt" }] : []),
+        ...(pendingFlow.outputs.coverLetter ? [{ id: "coverLetter", label: "生成 cover_letter.txt" }] : []),
+        { id: "record", label: "写入 applications 历史记录" },
+      ];
+      return runAgentWithProgress({
+        title: flowCopy.generating,
+        initialMessage: pendingFlow.message ? `User: ${pendingFlow.message}` : flowCopy.generating,
+        stages,
+        modelStageIds: [
+          ...(pendingFlow.outputs.resume ? ["resume"] : []),
+          ...(pendingFlow.outputs.coverLetter ? ["coverLetter"] : []),
+        ],
+        action: (progress) => runApplicationMaterialFlow(pendingFlow, progress),
+      });
     });
 
   const cancelFlow = () => {
@@ -379,7 +480,7 @@ export default function Chat({ session, setSession }) {
               <button type="button" className="btn btn-secondary" onClick={cancelFlow} disabled={loading}>
                 {flowCopy.cancel}
               </button>
-              <button type="button" className="btn btn-primary" onClick={continueFlow} disabled={loading}>
+              <button type="button" className="btn btn-primary" onClick={continueFlow} disabled={loading || agentActive}>
                 {loading ? flowCopy.generating : flowCopy.continue}
               </button>
             </div>
@@ -436,7 +537,7 @@ export default function Chat({ session, setSession }) {
                   }
                   imageInputRef.current?.click();
                 }}
-                disabled={loading || !supportsImages || images.length >= 4}
+                disabled={loading || agentActive || !supportsImages || images.length >= 4}
               >
                 {supportsImages ? copy.addImage : copy.imageUploadDisabled}
               </button>
@@ -444,7 +545,7 @@ export default function Chat({ session, setSession }) {
                 type="button"
                 className="btn btn-primary"
                 onClick={send}
-                disabled={loading || (!message.trim() && (!supportsImages || images.length === 0))}
+                disabled={loading || agentActive || (!message.trim() && (!supportsImages || images.length === 0))}
               >
                 {loading ? copy.thinking : copy.send}
               </button>

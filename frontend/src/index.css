@@ -616,6 +616,291 @@ textarea {
   margin-top: 18px;
 }
 
+.agent-progress-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.48);
+  overscroll-behavior: contain;
+}
+
+.agent-progress-modal {
+  width: clamp(720px, 76vw, 900px);
+  max-width: 85vw;
+  height: min(78vh, 760px);
+  max-height: 85vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 28px 70px rgba(16, 24, 40, 0.26);
+}
+
+.agent-progress-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-progress-header h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.agent-progress-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.agent-progress-close {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.agent-progress-close:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.agent-progress-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.32fr) minmax(0, 1fr);
+}
+
+.agent-progress-stages {
+  min-width: 0;
+  padding: 16px 14px;
+  border-right: 1px solid var(--border);
+  background: #fbfcfd;
+  overflow-y: auto;
+}
+
+.agent-progress-section-label {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-progress-stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.agent-progress-stage.active,
+.agent-progress-stage.running {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.agent-progress-stage.waiting_for_user {
+  background: #fffbeb;
+  color: var(--text);
+}
+
+.agent-progress-stage span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.agent-progress-stage > div {
+  min-width: 0;
+}
+
+.agent-progress-stage small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agent-progress-icon,
+.agent-progress-spinner {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.agent-progress-icon.pending {
+  border: 1px solid #cbd5e1;
+  background: var(--surface);
+}
+
+.agent-progress-icon.done {
+  color: var(--success);
+}
+
+.agent-progress-icon.error {
+  color: var(--danger);
+}
+
+.agent-progress-icon.waiting {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #f59e0b;
+  position: relative;
+}
+
+.agent-progress-icon.waiting::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #d97706;
+}
+
+.agent-progress-icon.cancelled {
+  color: var(--text-muted);
+}
+
+.agent-progress-spinner {
+  border: 2px solid #bfdbfe;
+  border-top-color: var(--accent);
+  animation: agent-progress-spin 0.8s linear infinite;
+}
+
+@keyframes agent-progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.agent-progress-chat {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-progress-messages {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overscroll-behavior: contain;
+}
+
+.agent-progress-message {
+  max-width: 78%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-progress-message.agent {
+  align-self: flex-start;
+  background: var(--surface-muted);
+}
+
+.agent-progress-message.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.agent-progress-message.system {
+  align-self: center;
+  max-width: 88%;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.agent-progress-message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-progress-message.system .agent-progress-message-meta {
+  display: none;
+}
+
+.agent-progress-error {
+  margin: 0 18px 12px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.agent-progress-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.agent-progress-footer textarea {
+  width: 100%;
+  min-height: 58px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.agent-progress-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: end;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -932,5 +1217,36 @@ th {
   .section-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .agent-progress-backdrop {
+    padding: 12px;
+  }
+
+  .agent-progress-modal {
+    width: 90vw;
+    max-width: 90vw;
+    height: 80vh;
+    max-height: 85vh;
+  }
+
+  .agent-progress-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .agent-progress-stages {
+    max-height: 150px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agent-progress-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-progress-actions {
+    flex-direction: row;
+    justify-content: flex-end;
   }
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import {
   Alert,
   ConfirmDialog,
@@ -142,6 +143,7 @@ export default function GitHubContext() {
   const [projectOptions, setProjectOptions] = useState([]);
   const [projectMemoryUpdatedAt, setProjectMemoryUpdatedAt] = useState(null);
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
   const loadGithubConfig = () =>
     run(async () => {
@@ -194,8 +196,30 @@ export default function GitHubContext() {
 
   const scanRepos = () =>
     run(async () => {
-      const data = await api.scanGithub(source, {
-        project_name: projectScope.trim(),
+      const scopeLabel = projectScope.trim() || "全部可识别项目";
+      const data = await runAgentWithProgress({
+        title: language === "zh" ? "正在扫描 GitHub 仓库" : "Scanning GitHub repositories",
+        initialMessage: `Agent：我会从 ${source} 中扫描 GitHub 链接，项目范围：${scopeLabel}。`,
+        stages: [
+          { id: "scan", label: `扫描仓库链接：${source}` },
+          { id: "apply", label: "整理 owner/repo、身份和 token 状态" },
+        ],
+        action: async (progress) => {
+          const data = await progress.runStage("scan", `正在发送 resume_source=${source}、project_name=${projectScope.trim() || "(空)"}`, () =>
+            api.scanGithub(source, {
+              project_name: projectScope.trim(),
+            }, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          progress.setStageStatus("apply", "running", "正在整理 repos 列表、GitHub identities 和 token_configured");
+          progress.assertActive();
+          progress.setStageStatus("apply", "done");
+          progress.addAgentMessage("GitHub 仓库扫描完成。");
+          return data;
+        },
       });
       setScan(data);
       setContext(null);
@@ -205,12 +229,43 @@ export default function GitHubContext() {
 
   const approveFetchContext = () =>
     run(async () => {
-      const data = await api.fetchGithubContext(true, source, {
-        project_name: projectScope.trim(),
-        force_refresh: forceRefresh,
-        reanalyze_cached: reanalyzeCached,
+      const scopeLabel = projectScope.trim() || "全部已扫描仓库";
+      const cacheMode = forceRefresh
+        ? "强制刷新远端仓库"
+        : reanalyzeCached
+          ? "复用缓存并重新分析 Project Memory"
+          : "优先复用 ETag/SHA 未变化的缓存";
+      const { data, githubConfig, status } = await runAgentWithProgress({
+        title: language === "zh" ? "正在读取 GitHub 上下文" : "Fetching GitHub context",
+        initialMessage: `Agent：我会读取 ${scopeLabel} 的 GitHub evidence；策略：${cacheMode}。`,
+        stages: [
+          { id: "fetch", label: `获取 README/语言/提交/diff 证据：${scopeLabel}` },
+          { id: "refresh", label: "读取 GitHub 配置和 Project Memory 更新时间" },
+          { id: "apply", label: "整理缓存状态和仓库证据预览" },
+        ],
+        modelStageIds: ["fetch"],
+        action: async (progress) => {
+          const data = await progress.runStage("fetch", `正在发送 approved=true、source=${source}、force_refresh=${forceRefresh}、reanalyze_cached=${reanalyzeCached}`, () =>
+            api.fetchGithubContext(true, source, {
+              project_name: projectScope.trim(),
+              force_refresh: forceRefresh,
+              reanalyze_cached: reanalyzeCached,
+            }, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          const [githubConfig, status] = await progress.runStage("refresh", "正在读取 /github/config 和 /status，用于刷新 evidence DB 与 project_memory 时间", () =>
+            Promise.all([api.getGithubConfig(), api.getStatus()]),
+          );
+          progress.setStageStatus("apply", "running", "正在整理 scan_results、cache_status、context JSON 预览");
+          progress.assertActive();
+          progress.setStageStatus("apply", "done");
+          progress.addAgentMessage("GitHub 上下文已更新。");
+          return { data, githubConfig, status };
+        },
       });
-      const [githubConfig, status] = await Promise.all([api.getGithubConfig(), api.getStatus()]);
       setContext(data);
       setMemoryRepositories(githubConfig.memory_repositories || []);
       setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(githubConfig, status));
@@ -375,10 +430,10 @@ export default function GitHubContext() {
           </p>
         </div>
         <div className="btn-row">
-          <button type="button" className="btn btn-secondary" onClick={scanRepos} disabled={loading}>
+          <button type="button" className="btn btn-secondary" onClick={scanRepos} disabled={loading || agentActive}>
             {copy.scanRepos}
           </button>
-          <button type="button" className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={loading || !scan?.repos?.length}>
+          <button type="button" className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={loading || agentActive || !scan?.repos?.length}>
             {copy.confirmFetch}
           </button>
         </div>

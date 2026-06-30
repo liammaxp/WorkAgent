@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
+import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
 import {
   Alert,
@@ -20,6 +21,8 @@ const EMPTY_APPLICATION_FORM = {
   link: "",
   notes: "",
 };
+
+const MAX_STAR_QUESTIONS_PER_RUN = 6;
 
 function fingerprint(value) {
   let hash = 0;
@@ -52,6 +55,51 @@ function rememberHandledJobDescription(jobFingerprint) {
   );
 }
 
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForBackendAgentTask(taskId, progress, stageId = "generate") {
+  const seenMessageIds = new Set();
+  while (true) {
+    progress.assertActive();
+    const status = await api.getAgentTaskStatus(taskId, { signal: progress.signal });
+    for (const message of status.messages || []) {
+      if (!message.id || seenMessageIds.has(message.id)) continue;
+      seenMessageIds.add(message.id);
+      if (message.role === "agent") {
+        progress.addAgentMessage(message.content);
+      } else if (message.role === "user") {
+        progress.addSystemMessage(`User: ${message.content}`);
+      } else {
+        progress.addSystemMessage(message.content);
+      }
+    }
+    const backendStage = (status.stages || []).find((stage) => stage.id === stageId) || status.stages?.[0];
+    if (backendStage) {
+      progress.updateStage(stageId, {
+        status: backendStage.status || (status.status === "running" ? "running" : "pending"),
+        detail: backendStage.detail || status.currentStage || "",
+      });
+    }
+    if (status.status === "done" && status.resultAvailable) {
+      progress.setStageStatus(stageId, "done", "后台任务完成，正在读取最终结果");
+      return api.getAgentTaskResult(taskId, { signal: progress.signal });
+    }
+    if (status.status === "cancelled") {
+      progress.setStageStatus(stageId, "cancelled", "后台任务已取消");
+      const error = new Error("Agent task cancelled");
+      error.name = "AgentCancelledError";
+      throw error;
+    }
+    if (status.status === "error") {
+      progress.setStageStatus(stageId, "error", status.error || "Agent task failed");
+      throw new Error(status.error || "Agent task failed");
+    }
+    await wait(1500);
+  }
+}
+
 const JD_SAVED_EVENT = "workagent-jd-saved";
 
 export default function Resume() {
@@ -81,6 +129,7 @@ export default function Resume() {
   const pdfInputRef = useRef(null);
   const loadingRef = useRef(false);
   const { loading, error, success, run } = useAsyncAction();
+  const { active: agentActive, runAgentWithProgress } = useAgentProgress();
   const [activeAction, setActiveAction] = useState("");
 
   useEffect(() => {
@@ -171,19 +220,44 @@ export default function Resume() {
     if (!file) return;
 
     runResumeAction("pdfToLatex", async () => {
-      if (file.type && file.type !== "application/pdf") {
-        throw new Error(copy.pdfInvalidType || "Please choose a PDF file.");
-      }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error(copy.pdfReadFailed || "Could not read the PDF file."));
-        reader.readAsDataURL(file);
-      });
-      const base64 = dataUrl.split(",")[1] || "";
-      const data = await api.convertResumePdfToLatex({
-        filename: file.name,
-        data_base64: base64,
+      const data = await runAgentWithProgress({
+        title: copy.pdfConverting || "正在转换 PDF 简历",
+        initialMessage: `Agent：我会读取 ${file.name}，提取文本和链接后发送给 LaTeX 转换 Agent。`,
+        stages: [
+          { id: "read", label: `读取 PDF：${file.name}` },
+          { id: "convert", label: "发送 PDF 文本和链接生成 LaTeX" },
+          { id: "apply", label: "把 LaTeX 写入原始简历编辑器" },
+        ],
+        modelStageIds: ["convert"],
+        action: async (progress) => {
+          if (file.type && file.type !== "application/pdf") {
+            throw new Error(copy.pdfInvalidType || "Please choose a PDF file.");
+          }
+          const dataUrl = await progress.runStage("read", `正在用 FileReader 读取 ${file.name} 并转为 base64`, () =>
+            new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result || ""));
+              reader.onerror = () => reject(new Error(copy.pdfReadFailed || "Could not read the PDF file."));
+              reader.readAsDataURL(file);
+            }),
+          );
+          const base64 = dataUrl.split(",")[1] || "";
+          const data = await progress.runStage("convert", "正在发送 filename/data_base64，后端会抽取 PDF 文本、链接并生成完整 LaTeX resume", () =>
+            api.convertResumePdfToLatex({
+              filename: file.name,
+              data_base64: base64,
+            }, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          progress.setStageStatus("apply", "running", "正在把返回的 LaTeX content 写入 resume 编辑器状态");
+          progress.assertActive();
+          progress.setStageStatus("apply", "done");
+          progress.addAgentMessage("PDF 简历转换完成。");
+          return data;
+        },
       });
       setResume(data.content || "");
       return data;
@@ -192,9 +266,33 @@ export default function Resume() {
 
   const updateMemory = () =>
     runResumeAction("memory", async () => {
-      await api.saveFile("resume", resume);
-      const data = await api.updateMemoryFromResume("resume", {
-        project_name: memoryProject.trim(),
+      const memoryScope = memoryProject.trim() || "全部项目和简历事实";
+      const data = await runAgentWithProgress({
+        title: copy.memoryUpdating || "正在更新简历记忆",
+        initialMessage: `Agent：我会保存 resume.txt，并从当前简历提取“${memoryScope}”相关的长期记忆。`,
+        stages: [
+          { id: "save", label: "保存 resume.txt" },
+          { id: "extract", label: `发送 resume.txt 提取记忆：${memoryScope}` },
+          { id: "summarize", label: "合并 Chroma/Profile Memory 新增事实" },
+        ],
+        modelStageIds: ["extract"],
+        action: async (progress) => {
+          await progress.runStage("save", `正在保存 ${resume.trim().length} 个字符到 resume.txt`, () => api.saveFile("resume", resume));
+          const data = await progress.runStage("extract", `正在发送 resume_source=resume 和 project_name=${memoryProject.trim() || "(空，扫描全部)"}`, () =>
+            api.updateMemoryFromResume("resume", {
+              project_name: memoryProject.trim(),
+            }, {
+              signal: progress.signal,
+              agentProgressMessages: progress.getUserMessages(),
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          progress.setStageStatus("summarize", "running", "正在比对返回 memory 与现有记忆，并整理 additions 列表");
+          progress.assertActive();
+          progress.setStageStatus("summarize", "done");
+          progress.addAgentMessage("简历记忆更新完成。");
+          return data;
+        },
       });
       const additions = data.additions || [];
       if (data.updated && additions.length) {
@@ -230,18 +328,114 @@ export default function Resume() {
 
   const generate = () =>
     runResumeAction("generate", async () => {
-      const jobData = await api.getFile("job_description");
-      const jobFingerprint = fingerprint(jobData.content || "");
-      const needsApplicationHint = Boolean(
-        jobData.content?.trim() && !hasHandledJobDescription(jobFingerprint),
-      );
-      const data = await api.tailorResume(
-        useGithub,
-        allowProjectSelection,
-        allowExperienceRemoval,
-        needsApplicationHint,
-      );
-      const status = await api.getStatus();
+      const contextLabel = useGithub ? "job_description.txt + resume.txt + Project Memory + GitHub Evidence" : "job_description.txt + resume.txt + Project Memory";
+      const { data, status, jobFingerprint, needsApplicationHint } = await runAgentWithProgress({
+        title: copy.generating || "正在生成定制简历",
+        initialMessage: `Agent：我会用 ${contextLabel} 生成定制简历，并合并 Projects / Skills / Experience / Summary。`,
+        stages: [
+          { id: "inspect", label: "读取 job_description.txt 并判断申请记录提示" },
+          { id: "star-scan", label: "扫描本地项目库、记忆和 STAR facts" },
+          { id: "generate", label: "发送简历上下文并合并简历各 section" },
+          { id: "refresh", label: "读取 tailored_resume 输出和 PDF 历史" },
+        ],
+        modelStageIds: ["generate"],
+        action: async (progress) => {
+          const jobData = await progress.runStage("inspect", "正在读取 job_description.txt，计算本次 JD fingerprint", () => api.getFile("job_description"));
+          const jobFingerprint = fingerprint(jobData.content || "");
+          const needsApplicationHint = Boolean(
+            jobData.content?.trim() && !hasHandledJobDescription(jobFingerprint),
+          );
+          const askedQuestionKeys = [];
+          const fixedStages = {
+            inspect: { id: "inspect", label: "读取 job_description.txt 并判断申请记录提示", status: "done", detail: "已读取 JD 并计算 fingerprint" },
+            generate: { id: "generate", label: "发送简历上下文并合并简历各 section", status: "pending" },
+            refresh: { id: "refresh", label: "读取 tailored_resume 输出和 PDF 历史", status: "pending" },
+          };
+          const applyStarCheck = (starCheck) => {
+            const starStages = starCheck.stages?.length
+              ? starCheck.stages
+              : [{ id: "star-scan", label: "扫描本地项目库、记忆和 STAR facts", status: "done", detail: "没有发现需要用户补充的 STAR 缺口" }];
+            progress.replaceStages(
+              [fixedStages.inspect, ...starStages, fixedStages.generate, fixedStages.refresh],
+              starCheck.next_question?.stage_id || "generate",
+            );
+          };
+          let starCheck = await progress.runStage("star-scan", "正在先读取 Project Memory、已保存 STAR facts 和可用代码证据", () =>
+            api.checkResumeStarFacts({
+              allow_project_selection: allowProjectSelection,
+              asked_question_keys: askedQuestionKeys,
+            }, {
+              signal: progress.signal,
+              agentTaskId: progress.agentTaskId,
+            }),
+          );
+          applyStarCheck(starCheck);
+          for (const message of starCheck.messages || []) {
+            progress.addSystemMessage(message);
+          }
+          let question = starCheck.next_question;
+          let questionCount = 0;
+          while (question && questionCount < MAX_STAR_QUESTIONS_PER_RUN) {
+            questionCount += 1;
+            const answer = await progress.askUserAndWait(
+              question.prompt,
+              question.stage_id,
+              question.stage_detail,
+              { contextLabel: question.context_label },
+            );
+            await api.saveResumeStarFact({
+              project_id: question.project_id,
+              project_name: question.project_name,
+              field_type: question.field_type,
+              missing_info_type: question.missing_info_type,
+              question_key: question.question_key,
+              raw_answer: answer,
+            }, {
+              signal: progress.signal,
+              agentTaskId: progress.agentTaskId,
+            });
+            askedQuestionKeys.push(question.question_key);
+            progress.setStageStatus(question.stage_id, "done", "已保存用户确认信息");
+            if (/没有|不知道|no data|not sure|none|没有数据|没有量化|无数据/i.test(answer)) {
+              progress.addAgentMessage("明白，我已保存为“无量化数据”。后续 bullet 会使用具体技术动作和保守结果表达，不编造数字。", { contextLabel: question.context_label });
+            } else {
+              progress.addAgentMessage("收到，我已把这条信息保存到本地项目 STAR facts，继续检查下一个具体缺口。", { contextLabel: question.context_label });
+            }
+            starCheck = await api.checkResumeStarFacts({
+              allow_project_selection: allowProjectSelection,
+              asked_question_keys: askedQuestionKeys,
+            }, {
+              signal: progress.signal,
+              agentTaskId: progress.agentTaskId,
+            });
+            applyStarCheck(starCheck);
+            question = starCheck.next_question;
+          }
+          if (question) {
+            progress.addSystemMessage("本轮已达到 STAR 追问上限；剩余缺口会使用本地证据和保守表达继续生成。");
+          } else {
+            progress.addAgentMessage("STAR 检查完成：我会使用本地记忆、代码证据和刚保存的用户确认信息继续生成。");
+          }
+          const data = await progress.runStage("generate", `正在创建后台任务：${contextLabel}；后端会选择/更新项目、写 resume bullets、合并 Skills/Experience/Summary`, async () => {
+            const task = await api.startTailorResumeTask(
+              useGithub,
+              allowProjectSelection,
+              allowExperienceRemoval,
+              needsApplicationHint,
+              {
+                signal: progress.signal,
+                agentProgressMessages: progress.getUserMessages(),
+                agentTaskId: progress.agentTaskId,
+              },
+            );
+            progress.addSystemMessage(`后台任务已启动：${task.taskId}`);
+            return waitForBackendAgentTask(task.taskId, progress, "generate");
+          });
+          const status = await progress.runStage("refresh", "正在读取 tailored_resumes 和 tailored_resume_pdfs 最新输出列表", () => api.getStatus());
+          progress.addAgentMessage("定制简历已生成。");
+          return { data, status, jobFingerprint, needsApplicationHint };
+        },
+      });
       setTailored(data.content || "");
       setOutputPath(data.output_path || data.path || "");
       setOutputFiles([
@@ -306,7 +500,7 @@ export default function Resume() {
               accept="application/pdf,.pdf"
               onChange={convertPdfToLatex}
             />
-            <button type="button" className="btn btn-secondary" onClick={openPdfPicker} disabled={loading}>
+          <button type="button" className="btn btn-secondary" onClick={openPdfPicker} disabled={loading || agentActive}>
               {activeAction === "pdfToLatex" ? copy.pdfConverting || "Converting..." : copy.pdfToLatex || "PDF to LaTeX"}
             </button>
           </>
@@ -327,7 +521,7 @@ export default function Resume() {
           <p className="helper-text">{copy.memoryProjectHint || "Optional. Specify a project name or ID to update only that project's memory."}</p>
         </div>
         <div className="btn-row">
-          <button type="button" className="btn btn-secondary" onClick={updateMemory} disabled={loading}>
+          <button type="button" className="btn btn-secondary" onClick={updateMemory} disabled={loading || agentActive}>
             {activeAction === "memory" ? copy.memoryUpdating : copy.memoryUpdate}
           </button>
         </div>
@@ -362,7 +556,7 @@ export default function Resume() {
         </label>
         <p className="helper-text">{copy.experienceTailoringHint}</p>
         <div className="btn-row">
-          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={generate} disabled={loading || agentActive}>
             {activeAction === "generate" ? copy.generating : copy.generate}
           </button>
         </div>
