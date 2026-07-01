@@ -1,0 +1,332 @@
+{
+  "a5a211f25d130b19b2eb21579f52d926affe6918dca04136a8fcd34dd2c1b2f7": {
+    "id": "a5a211f25d130b19b2eb21579f52d926affe6918dca04136a8fcd34dd2c1b2f7",
+    "project_name": "liammaxp/WorkAgent",
+    "repo_name": "liammaxp/WorkAgent",
+    "source_hash": "1b0e0ab99cefa2c9a471ea1c55ea4bc8f501be92ea90d8b12084df1b8e1127c6",
+    "compact_facts_json": {
+      "projectName": "liammaxp/WorkAgent",
+      "repoName": "liammaxp/WorkAgent",
+      "projectSummary": "Local single-user AI workspace for managing job application workflows, including job description analysis, resume and cover letter generation, interview preparation, application tracking, and GitHub evidence review.",
+      "technicalStack": [
+        "Python",
+        "FastAPI",
+        "JavaScript",
+        "React",
+        "Vite",
+        "Chroma",
+        "SQLite",
+        "OpenAI/OpenAI-compatible APIs",
+        "DeepSeek",
+        "Anthropic",
+        "Gemini"
+      ],
+      "keyModules": [
+        "FastAPI backend API layer",
+        "CLI agent logic",
+        "Chroma-backed memory and semantic retrieval",
+        "SQLite application tracking",
+        "GitHub context extraction and evidence workflow",
+        "React/Vite dashboard and workflow pages",
+        "Agent progress UI"
+      ],
+      "resumeRelevantClaims": [
+        "Built or contributed to a Python and JavaScript application combining a local AI backend with a React web interface.",
+        "Implemented job-application workflow features including job description analysis, tailored resume generation, cover letter generation, interview preparation, and application records.",
+        "Used Chroma vector memory, semantic retrieval, and SQLite to support local persistence and context retrieval.",
+        "Integrated GitHub evidence workflows for reviewing repositories, commits, file changes, and diff signals.",
+        "Updated FastAPI backend code and React frontend components for agent progress and GitHub context functionality."
+      ],
+      "metricCandidates": [
+        "Recent commit modified 5 files.",
+        "Recent commit included 344 additions and 63 deletions."
+      ],
+      "evidenceSources": [
+        "README.md",
+        "backend/api_server.py",
+        "frontend/src/agentProgress/AgentProgressContext.jsx",
+        "frontend/src/agentProgress/AgentProgressModal.jsx",
+        "frontend/src/pages/GitHubContext.jsx",
+        "recent commit e589179"
+      ],
+      "recommendedResumeAngles": [
+        "Full-stack AI workflow tool using FastAPI and React.",
+        "Local-first application with Chroma vector memory and SQLite persistence.",
+        "Job application automation features tailored to resumes, cover letters, interview prep, and tracking.",
+        "GitHub evidence analysis workflow for conservative repository and commit review.",
+        "Multi-provider LLM integration across OpenAI-compatible APIs, DeepSeek, Anthropic, and Gemini."
+      ],
+      "riskFlags": [
+        "README describes project capabilities but does not prove individual ownership of all features.",
+        "Repository chunk does not include full source code for all described backend modules.",
+        "No deployment, user count, performance, or production usage evidence is provided.",
+        "Avoid claiming production usage, external users, or measured performance improvements."
+      ],
+      "chunkCount": 1
+    },
+    "created_at": "2026-07-01T18:46:57",
+    "updated_at": "2026-07-01T18:46:57"
+  },
+  "3f8c214c39013b284967b0ba9b77debc8b96730fb6a00d567244a33bfce80b78": {
+    "id": "3f8c214c39013b284967b0ba9b77debc8b96730fb6a00d567244a33bfce80b78",
+    "project_name": "liammaxp/Event-Lottery-System-Application",
+    "repo_name": "liammaxp/Event-Lottery-System-Application",
+    "source_hash": "fd03c60559c37f620db358f3d4a8cae8261b6e4f99b345b1ea09d2bd9cfc8d65",
+    "compact_facts_json": {
+      "projectName": "liammaxp/Event-Lottery-System-Application",
+      "repoName": "liammaxp/Event-Lottery-System-Application",
+      "projectSummary": "Android event lottery platform with Entrant, Organizer, and Admin personas, supporting role-based login/routing, event browsing, event management, waitlists, lottery-related flows, notifications, profiles, QR scanning, and map-related event views.",
+      "technicalStack": [
+        "Java 11",
+        "Android",
+        "AndroidX",
+        "Firebase Firestore",
+        "Material Components",
+        "RecyclerView",
+        "Navigation",
+        "XML layouts",
+        "ZXing",
+        "CameraX",
+        "OSMDroid",
+        "Google location services",
+        "ONNX Runtime Android"
+      ],
+      "keyModules": [
+        "Role-based Entrant, Organizer, and Admin flows",
+        "Firestore collections for users, events, notifications, comments, and app configuration",
+        "Organizer event details, entrant list, enrolled entrants, and notification screens",
+        "Entrant browsing, filtering, search, waitlist actions, invitations, QR scanning, notifications, profile management, and history",
+        "Organizer event creation/editing, waitlist management, lottery flows, poster upload, and event map views",
+        "On-device semantic search described in README using a quantized MiniLM ONNX model with lexical ranking",
+        "Unit and instrumentation tests described for entrant, organizer, admin, signup/login, and cross-role behavior"
+      ],
+      "resumeRelevantClaims": [
+        "Contributed to an Android event lottery application using Java, Firebase Firestore, AndroidX, and role-based app flows.",
+        "Implemented organizer-facing event and entrant management screens, including enrolled entrant display functionality.",
+        "Built RecyclerView-style adapter, item model, and XML layouts for enrolled entrant UI screens.",
+        "Modified organizer event details, entrant list, notification activity, and manifest files to support organizer workflows.",
+        "Worked with Firebase-backed app data for users, events, notifications, comments, and configuration."
+      ],
+      "metricCandidates": [
+        "Java 11",
+        "minSdk 24",
+        "target/compileSdk 36",
+        "Commit 3a195e1 changed 13 files with 630 additions and 23 deletions",
+        "Recent commit evidence includes 20 files changed with 1094 additions and 155 deletions"
+      ],
+      "evidenceSources": [
+        "README.md",
+        "Commit 3a195e155453e0d3a9ef8ec26262949e65e9de49: finish US02.07.02",
+        "app/src/main/java/com/example/wecookproject/OrganizerEnrolledEntrantsActivity.java",
+        "app/src/main/java/com/example/wecookproject/OrganizerEnrolledEntrantAdapter.java",
+        "app/src/main/java/com/example/wecookproject/OrganizerEntrantListActivity.java",
+        "app/src/main/java/com/example/wecookproject/OrganizerEventDetailsActivity.java",
+        "app/src/main/java/com/example/wecookproject/NotificationHelper.java",
+        "app/src/main/java/com/example/wecookproject/OrganizerNotificationActivity.java",
+        "app/src/main/res/layout/activity_organizer_enrolled_entrants.xml",
+        "app/src/main/AndroidManifest.xml"
+      ],
+      "recommendedResumeAngles": [
+        "Android internship: emphasize Java, AndroidX, XML UI layouts, RecyclerView adapters, Activity-based screens, and Firebase Firestore integration.",
+        "Mobile/backend-adjacent role: emphasize Firestore data modeling, role-based workflows, notifications, and event/user data handling.",
+        "User-facing app role: emphasize organizer and entrant workflows, search/filtering, QR scanning, notifications, and profile/event management features.",
+        "Team project wording: use conservative phrasing such as contributed to, implemented organizer-facing screens, and modified existing app flows."
+      ],
+      "riskFlags": [
+        "README was partially truncated in the provided facts.",
+        "Commit evidence includes merge commits, so individual ownership should be stated conservatively.",
+        "Some gaps are listed, including organizer map QR action TODO and partially staged organizer bulk/redraw UX.",
+        "Do not claim production deployment, active users, performance gains, business impact, or full project ownership.",
+        "Evidence supports implementation activity, but not production usage or measured user impact."
+      ],
+      "chunkCount": 2
+    },
+    "created_at": "2026-07-01T18:49:37",
+    "updated_at": "2026-07-01T18:49:37"
+  },
+  "a88a756b0fd0f05ba823e563872dac13cc674bef8f3d32deb4a26be0316a5138": {
+    "id": "a88a756b0fd0f05ba823e563872dac13cc674bef8f3d32deb4a26be0316a5138",
+    "project_name": "liammaxp/Course-Management-Database-System",
+    "repo_name": "liammaxp/Course-Management-Database-System",
+    "source_hash": "51aa360b184f4f5163576f57506c88a3aa677204c8e17448309005bf2b9dd3a3",
+    "compact_facts_json": {
+      "projectName": "liammaxp/Course-Management-Database-System",
+      "repoName": "liammaxp/Course-Management-Database-System",
+      "projectSummary": "Python-based CMPUT 291 group course management database project with SQL schema/data files and modular application code for authentication, admin, instructor workflows, database connection, main entry flow, and utilities.",
+      "technicalStack": [
+        "Python",
+        "SQL",
+        "SQLite/database files",
+        "Git"
+      ],
+      "keyModules": [
+        "src/admin.py",
+        "src/auth.py",
+        "src/db.py",
+        "src/instructor.py",
+        "src/main.py",
+        "src/utils.py",
+        "database_schema.sql",
+        "demo_data.sql",
+        "seed.sql",
+        "prj.db"
+      ],
+      "resumeRelevantClaims": [
+        "Contributed to a group course management database system using Python and SQL.",
+        "Implemented or modified database-related application logic across Python modules.",
+        "Worked on authentication/authorization, admin, instructor, database connection, main flow, and utility code areas.",
+        "Contributed to documented project breakdown and implementation steps."
+      ],
+      "metricCandidates": [
+        "Commit 0d6dbe92 changed 8 files with 252 additions and 123 deletions.",
+        "Commit 7a487b4 added 1081 lines to LLM.md.",
+        "README lists 3 group members."
+      ],
+      "evidenceSources": [
+        "README.md lists CMPUT 291 Project 1 and group members including Liam Peng.",
+        "Root files include database_schema.sql, demo_data.sql, designDoc.pdf, and src.",
+        "Commit 0d6dbe92 modified src/admin.py, src/auth.py, src/db.py, src/instructor.py, src/main.py, and src/utils.py.",
+        "Commit 7a487b4 documents project breakdown and implementation steps in LLM.md."
+      ],
+      "recommendedResumeAngles": [
+        "Emphasize Python and SQL database application development for backend or data-focused roles.",
+        "Highlight authentication/authorization and role-based workflow experience carefully as contribution-based.",
+        "Use this project to support database coursework, SQL schema/data handling, and modular Python application structure.",
+        "For internship resumes, frame the work as collaborative academic software development."
+      ],
+      "riskFlags": [
+        "Group classroom project, so individual ownership of specific features is not fully established.",
+        "No deployment, user adoption, performance, or production usage evidence is provided.",
+        "Some function names are inferred from diff signals rather than full source content.",
+        "Avoid claiming sole ownership or production-level impact."
+      ],
+      "chunkCount": 1
+    },
+    "created_at": "2026-07-01T18:53:04",
+    "updated_at": "2026-07-01T18:53:04"
+  },
+  "c577caf0b5eecd738333ff8260855a2387fa98402988e16269248268c9027762": {
+    "id": "c577caf0b5eecd738333ff8260855a2387fa98402988e16269248268c9027762",
+    "project_name": "liammaxp/Furniture-Search-and-Inventory-System",
+    "repo_name": "liammaxp/Furniture-Search-and-Inventory-System",
+    "source_hash": "679b0004b263c018ebb9cc81f28825136ecd5739ab7b75610e938af52d5ffb13",
+    "compact_facts_json": {
+      "projectName": "liammaxp/Furniture-Search-and-Inventory-System",
+      "repoName": "liammaxp/Furniture-Search-and-Inventory-System",
+      "projectSummary": "Python database coursework project for a furniture search and inventory system using a MongoDB-backed furniture collection. Features described include category search, keyword search, discount checking, pagination, item insertion, and main menu integration.",
+      "technicalStack": [
+        "Python",
+        "MongoDB",
+        "JSON import",
+        "Database queries",
+        "Input validation",
+        "Pagination"
+      ],
+      "keyModules": [
+        "add_ops.py",
+        "category_ops.py",
+        "main.py",
+        "discount_ops.py",
+        "keyword_ops.py",
+        "pagination.py",
+        "db_utils-related modules"
+      ],
+      "resumeRelevantClaims": [
+        "Contributed to a Python furniture search and inventory system for a database coursework project.",
+        "Implemented or worked on add-item/database insertion logic, including input prompting, price validation, document building, and item ID uniqueness checks.",
+        "Supported category browsing and main program integration in a team project context.",
+        "Worked with MongoDB-related collection setup, JSON import, query operations, pagination, and validation as described in the project documentation."
+      ],
+      "metricCandidates": [
+        "248 additions in source-related commit cb45250e across 9 changed files.",
+        "277 additions in README documentation commit ee2043fb.",
+        "Team listed 3 group members in README."
+      ],
+      "evidenceSources": [
+        "README.md lists group members, project context, responsibilities, and features.",
+        "Commit cb45250e message 'C finish' changed add_ops.py, category_ops.py, main.py, and related files.",
+        "Commit diff signals add-item functions, error handling, and persistence/database logic.",
+        "Repository language metadata lists Python."
+      ],
+      "recommendedResumeAngles": [
+        "Use for backend, database, Python, or internal tools internship applications.",
+        "Emphasize database-backed search, inventory management, validation, and modular Python code.",
+        "Connect the project to SQL/NoSQL database coursework, query logic, and practical data handling.",
+        "Frame contributions conservatively as coursework/team project work unless individual ownership is verified."
+      ],
+      "riskFlags": [
+        "README includes AI-generated task division, so role assignments may reflect planned responsibilities rather than independently verified ownership.",
+        "Some commit evidence is duplicated in the provided chunk.",
+        "__pycache__ bytecode files are present in changed files and should not be used as source evidence.",
+        "MongoDB usage is described in README text, but requirements.txt contents and full source code are not shown in the provided facts."
+      ],
+      "chunkCount": 1
+    },
+    "created_at": "2026-07-01T18:54:49",
+    "updated_at": "2026-07-01T18:54:49"
+  },
+  "ffba710c159c4ad27c26f3bb9379630caf9cfa9839a3494a181040726511cc68": {
+    "id": "ffba710c159c4ad27c26f3bb9379630caf9cfa9839a3494a181040726511cc68",
+    "project_name": "liammaxp/A-Hike-Through-Time",
+    "repo_name": "liammaxp/A-Hike-Through-Time",
+    "source_hash": "f3b1320d6e85fff61a88b42f249f0f9d91ad56219d59b1ef38f45a1855e29647",
+    "compact_facts_json": {
+      "projectName": "liammaxp/A-Hike-Through-Time",
+      "repoName": "liammaxp/A-Hike-Through-Time",
+      "projectSummary": "Unity narrative game project made at the University of Alberta by TWCA. The repository contains Unity scenes, prefabs, sprites, audio/art assets, and gameplay scripts, with support for movement, item collection, item placement, camera behavior, weather effects, level mechanics, and Ink-based dialogue.",
+      "technicalStack": [
+        "Unity 2022.3.62f3",
+        "C#",
+        "Ink",
+        "ShaderLab",
+        "HLSL",
+        "JavaScript",
+        "Python"
+      ],
+      "keyModules": [
+        "Camera following and bounds behavior",
+        "Rain/weather effect functionality",
+        "Level 2 key and gate gameplay elements",
+        "Ink dialogue assets and generated dialogue JSON",
+        "Unity scenes, prefabs, sprites, and gameplay scripts"
+      ],
+      "resumeRelevantClaims": [
+        "Contributed to a Unity/C# narrative game project with scene, prefab, and gameplay script updates.",
+        "Worked on camera behavior, including following and bounds settings through Unity prefab, scene, and C# script changes.",
+        "Implemented or modified rain/weather functionality in Unity scenes and camera-related scripts.",
+        "Added Level 2 gameplay elements involving a key prefab, gate script, puzzle sprites, and scene updates.",
+        "Added Ink dialogue assets and generated dialogue JSON files for a dialogue system."
+      ],
+      "metricCandidates": [
+        "Unity version: 2022.3.62f3",
+        "Camera following commit changed 5 files",
+        "Rain effect commit changed 10 files",
+        "Level 2 finish commit changed 13 files",
+        "Dialogue system commit changed 20 files"
+      ],
+      "evidenceSources": [
+        "README.md",
+        "src/Assets/Scripts/Camera/Camera.cs",
+        "src/Assets/Scripts/Camera/Raincontrol.cs",
+        "src/Assets/Scripts/Levels/Level2/Gate.cs",
+        "src/Assets/Dialogue/SampleTextingDialogue1.ink"
+      ],
+      "recommendedResumeAngles": [
+        "Emphasize Unity/C# gameplay development for game or interactive media internships.",
+        "Highlight camera systems, scene/prefab editing, and gameplay scripting.",
+        "Mention Ink dialogue integration for narrative-game roles.",
+        "Use conservative wording such as 'contributed to' or 'worked on' because repository-level evidence does not prove full individual ownership.",
+        "Connect the project to collaboration, debugging, and iterative feature development in Unity."
+      ],
+      "riskFlags": [
+        "Commit evidence is duplicated in the provided chunk.",
+        "Repository-level evidence does not prove individual ownership beyond listed commit evidence.",
+        "README says the game is playable on itch.io, but no deployment ownership or usage metrics are provided.",
+        "Diff summaries mention validation, but exact validation behavior is not shown in the chunk."
+      ],
+      "chunkCount": 1
+    },
+    "created_at": "2026-07-01T18:56:54",
+    "updated_at": "2026-07-01T18:56:54"
+  }
+}

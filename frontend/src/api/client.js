@@ -22,16 +22,39 @@ function formatApiDetail(detail, status) {
 
   const type = detail.type || "";
   if (type === "ModelProxyTimeout") {
+    const zh = currentLanguage() === "zh";
     const chunk = detail.failedChunk || {};
     const where = [
       chunk.projectName ? `project=${chunk.projectName}` : "",
       chunk.repoName ? `repo=${chunk.repoName}` : "",
       chunk.chunkIndex ? `chunk=${chunk.chunkIndex}` : "",
     ].filter(Boolean).join(", ");
+    if (zh) {
+      return [
+        detail.message || "第三方中转站连续超时。已保存当前进度，可以稍后重试或降低输入规模。",
+        where ? `失败位置：${where}。` : "",
+        detail.retryable ? "已完成的 chunk / project 会通过 checkpoint 复用。" : "",
+      ].filter(Boolean).join(" ");
+    }
     return [
       detail.message || "Third-party proxy timed out while processing a model chunk.",
       where ? `Failed chunk: ${where}.` : "",
       detail.retryable ? "You can retry; completed chunks are checkpointed." : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (type === "ModelTransientError") {
+    if (currentLanguage() === "zh") {
+      return [
+        detail.message || "第三方中转站连续返回 502。已保存当前进度，可以稍后重试或降低输入规模。",
+        detail.caller ? `Caller: ${detail.caller}.` : "",
+        detail.inputCharCount ? `最终输入 ${detail.inputCharCount} chars。` : "",
+      ].filter(Boolean).join(" ");
+    }
+    return [
+      detail.message || "Third-party proxy returned repeated transient errors after retry protection.",
+      detail.caller ? `Caller: ${detail.caller}.` : "",
+      detail.inputCharCount ? `Final input ${detail.inputCharCount} chars.` : "",
     ].filter(Boolean).join(" ");
   }
 

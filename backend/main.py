@@ -174,7 +174,7 @@ class ModelAdapter:
     def default_model(self):
         raise NotImplementedError
 
-    def create_response(self, model, instructions, tools, input_items):
+    def create_response(self, model, instructions, tools, input_items, max_output_tokens=None, stream=False):
         raise NotImplementedError
 
     def get_function_calls(self, response):
@@ -304,14 +304,19 @@ class OpenAIResponsesAdapter(ModelAdapter):
         if is_closed:
             self.client = OpenAI(**self._client_options)
 
-    def create_response(self, model, instructions, tools, input_items):
+    def create_response(self, model, instructions, tools, input_items, max_output_tokens=None, stream=False):
         self.ensure_client_alive()
-        return self.client.responses.create(
-            model=model,
-            instructions=instructions,
-            tools=tools,
-            input=[openai_responses_input_item(item) for item in input_items],
-        )
+        request = {
+            "model": model,
+            "instructions": instructions,
+            "tools": tools,
+            "input": [openai_responses_input_item(item) for item in input_items],
+        }
+        if max_output_tokens:
+            request["max_output_tokens"] = max_output_tokens
+        if stream:
+            request["stream"] = True
+        return self.client.responses.create(**request)
 
     def get_function_calls(self, response):
         return [
@@ -374,16 +379,21 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
             for tool in tools
         ]
 
-    def create_response(self, model, instructions, tools, input_items):
+    def create_response(self, model, instructions, tools, input_items, max_output_tokens=None, stream=False):
         self.ensure_client_alive()
         if not self.messages:
             self.messages = [{"role": "system", "content": instructions}]
             self.messages.extend(openai_chat_input_item(item) for item in input_items)
-        return self.client.chat.completions.create(
-            model=model,
-            messages=self.messages,
-            tools=self.convert_tools(tools),
-        )
+        request = {
+            "model": model,
+            "messages": self.messages,
+            "tools": self.convert_tools(tools),
+        }
+        if max_output_tokens:
+            request["max_tokens"] = max_output_tokens
+        if stream:
+            request["stream"] = True
+        return self.client.chat.completions.create(**request)
 
     def get_function_calls(self, response):
         message = response.choices[0].message
@@ -405,6 +415,15 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
         return message
 
     def output_text(self, response):
+        if not hasattr(response, "choices"):
+            chunks = []
+            for chunk in response:
+                choice = (getattr(chunk, "choices", None) or [None])[0]
+                delta = getattr(choice, "delta", None) if choice else None
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    chunks.append(content)
+            return "".join(chunks)
         return response.choices[0].message.content or ""
 
 
@@ -478,14 +497,14 @@ class ClaudeMessagesAdapter(ModelAdapter):
             )
         )
 
-    def create_response(self, model, instructions, tools, input_items):
+    def create_response(self, model, instructions, tools, input_items, max_output_tokens=None, stream=False):
         if not self.messages:
             self.messages.extend(anthropic_input_item(item) for item in input_items)
         return self.post_json(
             "/v1/messages",
             {
                 "model": model,
-                "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
+                "max_tokens": int(max_output_tokens or os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
                 "system": instructions,
                 "messages": self.messages,
                 "tools": self.convert_tools(tools),
@@ -574,20 +593,20 @@ class GeminiAdapter(ModelAdapter):
             )
         )
 
-    def create_response(self, model, instructions, tools, input_items):
+    def create_response(self, model, instructions, tools, input_items, max_output_tokens=None, stream=False):
         if not self.contents:
             for item in input_items:
                 self.contents.append(
                     {"role": "user", "parts": gemini_input_parts(item)}
                 )
-        return self.post_json(
-            model,
-            {
-                "systemInstruction": {"parts": [{"text": instructions}]},
-                "contents": self.contents,
-                "tools": self.convert_tools(tools),
-            },
-        )
+        body = {
+            "systemInstruction": {"parts": [{"text": instructions}]},
+            "contents": self.contents,
+            "tools": self.convert_tools(tools),
+        }
+        if max_output_tokens:
+            body["generationConfig"] = {"maxOutputTokens": max_output_tokens}
+        return self.post_json(model, body)
 
     def get_function_calls(self, response):
         calls = []

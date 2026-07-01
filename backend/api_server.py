@@ -297,12 +297,20 @@ PROXY_SAFE_MAX_INPUT_CHARS = 25000
 PROXY_SAFE_HARD_INPUT_CHARS = 35000
 OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
 OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS = 100000
+PROXY_TRANSIENT_STATUS_CODES = {502, 503, 504}
+PROXY_TIMEOUT_STATUS_CODES = {524}
+PROXY_PROVIDER_CONFIG_STATUS_CODES = {401, 403, 404}
+PROXY_RETRY_AFTER_MAX_SECONDS = 30
+BULLET_WRITER_RETRY_COMPACT_CHARS = 15000
+BULLET_WRITER_EMERGENCY_COMPACT_CHARS = 10000
 REPO_CHUNK_TARGET_CHARS = 18000
 REDUCE_BATCH_TARGET_CHARS = 18000
 MODEL_ROUTING_LOG_PREFIX = "Model routing"
 MODEL_CACHE_PATH = agent.INFORMATION_DIR / "model_call_cache.json"
 PROJECT_COMPACT_FACTS_PATH = agent.INFORMATION_DIR / "project_compact_facts.json"
 CHUNK_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "agent_chunk_checkpoints.json"
+RESUME_CANDIDATE_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "resume_candidate_checkpoints.json"
+MODEL_FAILURE_LOG_DIR = agent.ROOT_DIR / "logs" / "model_failures"
 
 
 class ProviderBody(BaseModel):
@@ -641,6 +649,17 @@ def provider_override_int(provider_name: str, key: str, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def provider_override_float(provider_name: str, key: str, default: float) -> float:
+    value = os.getenv(provider_env_name(provider_name, key)) or os.getenv(key)
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def build_provider_routing_config(provider_name: str) -> dict[str, Any]:
     normalized_provider = normalize_provider(provider_name)
     base_url = provider_base_url(normalized_provider)
@@ -652,6 +671,9 @@ def build_provider_routing_config(provider_name: str) -> dict[str, Any]:
     provider_kind = infer_provider_kind(base_url, explicit_kind)
     proxy_override = provider_override_bool(normalized_provider, "PROXY_SAFE_MODE")
     proxy_safe_mode = proxy_override if proxy_override is not None else provider_kind == "third_party_proxy"
+    shrink_input_override = provider_override_bool(normalized_provider, "SHRINK_INPUT_ON_RETRY")
+    reduce_output_override = provider_override_bool(normalized_provider, "REDUCE_OUTPUT_TOKENS_ON_RETRY")
+    endpoint_fallback_override = provider_override_bool(normalized_provider, "ENDPOINT_FALLBACK_ENABLED")
     execution_mode = (
         os.getenv(provider_env_name(normalized_provider, "EXECUTION_MODE"))
         or ("proxy_safe" if proxy_safe_mode else "official_direct")
@@ -677,6 +699,49 @@ def build_provider_routing_config(provider_name: str) -> dict[str, Any]:
             "MAP_REDUCE_THRESHOLD_CHARS",
             PROXY_SAFE_MAX_INPUT_CHARS if proxy_safe_mode else OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS,
         ),
+        "maxTransientRetries": provider_override_int(
+            normalized_provider,
+            "MAX_TRANSIENT_RETRIES",
+            2 if proxy_safe_mode else 0,
+        ),
+        "initialRetryDelayMs": provider_override_int(
+            normalized_provider,
+            "INITIAL_RETRY_DELAY_MS",
+            3000,
+        ),
+        "retryBackoffMultiplier": provider_override_float(
+            normalized_provider,
+            "RETRY_BACKOFF_MULTIPLIER",
+            2.0,
+        ),
+        "shrinkInputOnRetry": (
+            shrink_input_override
+            if shrink_input_override is not None else proxy_safe_mode
+        ),
+        "shrinkRatioOnTransientError": provider_override_float(
+            normalized_provider,
+            "SHRINK_RATIO_ON_TRANSIENT_ERROR",
+            0.75,
+        ),
+        "reduceOutputTokensOnRetry": (
+            reduce_output_override
+            if reduce_output_override is not None else proxy_safe_mode
+        ),
+        "maxOutputTokensPerCall": provider_override_int(
+            normalized_provider,
+            "MAX_OUTPUT_TOKENS_PER_CALL",
+            1200 if proxy_safe_mode else 0,
+        ),
+        "retryOutputTokens": provider_override_int(
+            normalized_provider,
+            "RETRY_OUTPUT_TOKENS",
+            800,
+        ),
+        "endpointFallbackEnabled": (
+            endpoint_fallback_override
+            if endpoint_fallback_override is not None else proxy_safe_mode
+        ),
+        "supportsStreaming": bool(provider_override_bool(normalized_provider, "SUPPORTS_STREAMING")),
     }
 
 
@@ -856,7 +921,169 @@ def extract_model_api_error_message(error: Exception) -> str:
     return str(error)
 
 
-def raise_model_api_http_exception(error: Exception) -> None:
+def extract_model_error_headers(error: Exception) -> dict[str, str]:
+    headers: Any = {}
+    if isinstance(error, APIStatusError):
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", {}) if response is not None else {}
+    elif isinstance(error, urllib.error.HTTPError):
+        headers = getattr(error, "headers", {}) or {}
+    result: dict[str, str] = {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        items = []
+    for key, value in items:
+        result[str(key).lower()] = str(value)
+    return result
+
+
+def retry_after_seconds_from_headers(headers: dict[str, str]) -> Optional[int]:
+    value = headers.get("retry-after")
+    if not value:
+        return None
+    try:
+        seconds = int(float(value.strip()))
+    except ValueError:
+        return None
+    return max(0, min(seconds, PROXY_RETRY_AFTER_MAX_SECONDS))
+
+
+def model_error_type_for_status(status_code: int, detail_text: str = "") -> Optional[str]:
+    text = detail_text.lower()
+    if status_code in PROXY_TIMEOUT_STATUS_CODES or "timeout" in text or "origin_response_timeout" in text:
+        return "ModelProxyTimeout"
+    if status_code in PROXY_TRANSIENT_STATUS_CODES or any(
+        marker in text
+        for marker in [
+            "bad gateway",
+            "connection reset",
+            "upstream unavailable",
+            "upstream error",
+            "network error",
+            "temporarily unavailable",
+        ]
+    ):
+        return "ModelTransientError"
+    if status_code in PROXY_PROVIDER_CONFIG_STATUS_CODES:
+        return "ModelProviderConfigError"
+    return None
+
+
+def structured_model_error_detail(
+    *,
+    error_type: str,
+    caller: str,
+    status_code: int,
+    decision: dict[str, Any],
+    input_char_count: int,
+    message: str,
+    retryable: bool,
+    attempts: Optional[list[dict[str, Any]]] = None,
+    retry_after_seconds: Optional[int] = None,
+    cloudflare_ray_id: str = "",
+    endpoint: str = "",
+    checkpoint_preserved: bool = False,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "ok": False,
+        "type": error_type,
+        "caller": caller,
+        "statusCode": status_code,
+        "retryable": retryable,
+        "providerKind": decision.get("providerKind"),
+        "proxySafeMode": decision.get("proxySafeMode"),
+        "inputCharCount": input_char_count,
+        "message": message,
+    }
+    if attempts:
+        detail["attempts"] = attempts
+    if retry_after_seconds is not None:
+        detail["retryAfterSeconds"] = retry_after_seconds
+    if cloudflare_ray_id:
+        detail["cloudflareRayId"] = cloudflare_ray_id
+    if endpoint:
+        detail["endpoint"] = endpoint
+    if checkpoint_preserved:
+        detail["checkpointPreserved"] = True
+    return detail
+
+
+def http_exception_detail_text(error: HTTPException) -> str:
+    detail = getattr(error, "detail", "")
+    if isinstance(detail, dict):
+        try:
+            return json.dumps(detail, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(detail)
+    return str(detail)
+
+
+def status_code_from_http_exception(error: HTTPException) -> int:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict) and detail.get("statusCode"):
+        try:
+            return int(detail["statusCode"])
+        except (TypeError, ValueError):
+            pass
+    return int(getattr(error, "status_code", 502) or 502)
+
+
+def retry_after_seconds_from_http_exception(error: HTTPException) -> Optional[int]:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict):
+        value = detail.get("retryAfterSeconds")
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def cloudflare_ray_from_http_exception(error: HTTPException) -> str:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict):
+        return str(detail.get("cloudflareRayId") or "")
+    match = re.search(r"\bcf-ray[:=]\s*([A-Za-z0-9-]+)", str(detail), flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def save_model_failure_log(
+    *,
+    caller: str,
+    decision: dict[str, Any],
+    status_code: int,
+    input_char_count: int,
+    attempt: int,
+    endpoint: str,
+    stream: bool,
+    max_output_tokens: Optional[int],
+    retry_action: str,
+    error_message: str,
+    cloudflare_ray_id: str = "",
+) -> None:
+    MODEL_FAILURE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "caller": caller,
+        "providerKind": decision.get("providerKind"),
+        "proxySafeMode": decision.get("proxySafeMode"),
+        "statusCode": status_code,
+        "inputCharCount": input_char_count,
+        "attempt": attempt,
+        "endpoint": endpoint,
+        "stream": bool(stream),
+        "maxOutputTokens": max_output_tokens,
+        "retryAction": retry_action,
+        "cloudflareRayId": cloudflare_ray_id,
+        "errorMessage": short_signal(error_message, 500) if "short_signal" in globals() else str(error_message)[:500],
+    }
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = MODEL_FAILURE_LOG_DIR / f"{stamp}_{caller}_{attempt}_{uuid.uuid4().hex[:8]}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def raise_model_api_http_exception(error: Exception, caller: str = "") -> None:
     if isinstance(error, APIStatusError):
         upstream_status = error.status_code or 502
         http_status = upstream_status if 400 <= upstream_status < 600 else 502
@@ -866,18 +1093,28 @@ def raise_model_api_http_exception(error: Exception) -> None:
         raise error
 
     message = extract_model_api_error_message(error)
+    headers = extract_model_error_headers(error)
     provider_name = normalize_provider(agent.current_provider)
     decision = routing_decision(provider_name, 0)
-    if http_status == 524 and should_use_proxy_safe_mode(decision):
+    error_type = model_error_type_for_status(http_status, message)
+    if error_type and should_use_proxy_safe_mode(decision):
         raise HTTPException(
-            status_code=524,
-            detail={
-                "ok": False,
-                "type": "ModelProxyTimeout",
-                "statusCode": 524,
-                "retryable": True,
-                "message": "Third-party proxy timed out. The task can be resumed with smaller chunks.",
-            },
+            status_code=http_status,
+            detail=structured_model_error_detail(
+                error_type=error_type,
+                caller=caller,
+                status_code=http_status,
+                decision=decision,
+                input_char_count=0,
+                retryable=error_type != "ModelProviderConfigError",
+                retry_after_seconds=retry_after_seconds_from_headers(headers),
+                cloudflare_ray_id=headers.get("cf-ray", ""),
+                message=(
+                    "Third-party proxy timed out. The task can be resumed with smaller chunks."
+                    if error_type == "ModelProxyTimeout"
+                    else "Third-party proxy returned a transient upstream error."
+                ),
+            ),
         ) from error
     raise HTTPException(
         status_code=http_status,
@@ -1017,6 +1254,33 @@ def get_adapter(provider: Optional[str] = None):
         return agent.create_model_adapter(name), name
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def chat_completions_adapter_for_provider(provider_name: str) -> Optional[Any]:
+    name = normalize_provider(provider_name)
+    if name == "openai":
+        return agent.OpenAIChatCompletionsAdapter(
+            api_key_env="OPENAI_API_KEY",
+            base_url_env="OPENAI_BASE_URL",
+            model_env="OPENAI_MODEL",
+            fallback_model="gpt-5.5",
+        )
+    if name == "openai-compatible":
+        return agent.OpenAIChatCompletionsAdapter(
+            api_key_env="OPENAI_COMPATIBLE_API_KEY",
+            base_url_env="OPENAI_COMPATIBLE_BASE_URL",
+            model_env="OPENAI_COMPATIBLE_MODEL",
+            fallback_model=os.getenv("OPENAI_MODEL", "gpt-5.5"),
+        )
+    adapter = agent.create_model_adapter(name)
+    if "Chat" in adapter.__class__.__name__:
+        return adapter
+    return None
+
+
+def provider_default_endpoint(provider_name: str) -> str:
+    adapter = agent.create_model_adapter(normalize_provider(provider_name))
+    return "chat_completions" if "Chat" in adapter.__class__.__name__ else "responses"
 
 
 def output_application_metadata(path: Path, suffix: str) -> dict[str, str]:
@@ -2038,7 +2302,15 @@ def set_background_stage(task_id: str, stage_id: str, status: str, detail: str =
 
 def task_error_detail(error: Exception) -> str:
     if isinstance(error, HTTPException):
-        detail = str(error.detail)
+        if isinstance(error.detail, dict):
+            error_type = str(error.detail.get("type") or "")
+            if error_type == "ModelTransientError":
+                return "第三方中转站连续返回 502。已保存当前进度，可以稍后重试或降低输入规模。"
+            if error_type == "ModelProxyTimeout":
+                return "第三方中转站连续超时。已保存当前进度，可以稍后重试或降低输入规模。"
+            detail = str(error.detail.get("message") or error.detail)
+        else:
+            detail = str(error.detail)
     else:
         detail = str(error)
     if "524" in detail or "origin_response_timeout" in detail:
@@ -2163,7 +2435,7 @@ def run_agent_task(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
         assert_agent_task_not_cancelled()
-        raise_model_api_http_exception(error)
+        raise_model_api_http_exception(error, caller="run_agent_task")
     except agent.transient_network_errors() as error:
         assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
@@ -2182,8 +2454,13 @@ def run_text_task(
     task_type: str = "text_task",
     user_options: Optional[dict[str, Any]] = None,
     allow_oversize_direct: bool = False,
+    endpoint_mode: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    stream: bool = False,
 ) -> str:
     adapter, provider_name = get_adapter(provider)
+    if endpoint_mode == "chat_completions":
+        adapter = chat_completions_adapter_for_provider(provider_name) or adapter
     chosen_model = model or adapter.default_model()
     caller = caller or caller_name_from_stack()
     decision = routing_decision(provider_name, len(message), user_options)
@@ -2199,6 +2476,8 @@ def run_text_task(
             instructions=agent.SYSTEM_PROMPT,
             tools=[],
             input_items=[{"role": "user", "content": message}],
+            max_output_tokens=max_output_tokens,
+            stream=stream,
         )
         assert_agent_task_not_cancelled()
         return adapter.output_text(response)
@@ -2206,7 +2485,7 @@ def run_text_task(
         raise HTTPException(status_code=499, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
         assert_agent_task_not_cancelled()
-        raise_model_api_http_exception(error)
+        raise_model_api_http_exception(error, caller=caller)
     except agent.transient_network_errors() as error:
         assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
@@ -2219,6 +2498,8 @@ def run_text_task(
 
 def invoke_safe_builder(builder: Callable[..., Any], **kwargs: Any) -> Any:
     signature = inspect.signature(builder)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return builder(**kwargs)
     accepted = {
         name: value
         for name, value in kwargs.items()
@@ -2321,34 +2602,192 @@ def safe_model_call(
             message="Input is still too large after compact/map-reduce protection.",
         )
 
-    try:
-        return run_text_task(
-            final_prompt,
-            provider=provider_name,
-            model=model,
+    provider_is_proxy = should_use_proxy_safe_mode(decision)
+    max_transient_retries = int(decision.get("maxTransientRetries") or 0) if provider_is_proxy else 0
+    original_endpoint = provider_default_endpoint(provider_name)
+    fallback_adapter = (
+        chat_completions_adapter_for_provider(provider_name)
+        if provider_is_proxy and bool(decision.get("endpointFallbackEnabled")) and original_endpoint == "responses"
+        else None
+    )
+    can_fallback_endpoint = fallback_adapter is not None
+    attempts: list[dict[str, Any]] = []
+    attempt_number = 1
+    attempt_prompt = final_prompt
+    attempt_input_chars = final_input_chars
+    endpoint_mode: Optional[str] = None
+    endpoint_name = original_endpoint
+    stream = False
+
+    def max_output_tokens_for_attempt(number: int) -> Optional[int]:
+        if not provider_is_proxy:
+            return None
+        if number >= 3 and bool(decision.get("reduceOutputTokensOnRetry")):
+            retry_tokens = int(decision.get("retryOutputTokens") or 0)
+            return retry_tokens or None
+        max_tokens = int(decision.get("maxOutputTokensPerCall") or 0)
+        return max_tokens or None
+
+    def retry_delay_seconds(failed_attempt: int, error: HTTPException) -> float:
+        retry_after = retry_after_seconds_from_http_exception(error)
+        if retry_after is not None:
+            return float(retry_after)
+        initial_ms = int(decision.get("initialRetryDelayMs") or 0)
+        multiplier = float(decision.get("retryBackoffMultiplier") or 1.0)
+        delay = (initial_ms / 1000.0) * (multiplier ** max(0, failed_attempt - 1))
+        return min(delay, float(PROXY_RETRY_AFTER_MAX_SECONDS))
+
+    def next_retry_action(failed_attempt: int) -> str:
+        if failed_attempt == 1:
+            return "retry_same_input"
+        if can_fallback_endpoint:
+            return "endpoint_fallback"
+        if bool(decision.get("shrinkInputOnRetry")) and compact_builder:
+            return "shrink_input"
+        if bool(decision.get("supportsStreaming")):
+            return "streaming_retry"
+        return "retry_same_input"
+
+    def retry_compact_limit(next_attempt: int, current_chars: int) -> int:
+        ratio = float(decision.get("shrinkRatioOnTransientError") or 0.75)
+        target = max(1000, int(current_chars * ratio))
+        if caller == "run_resume_bullet_writer_tool":
+            if next_attempt >= 4:
+                return min(target, BULLET_WRITER_EMERGENCY_COMPACT_CHARS)
+            return min(target, BULLET_WRITER_RETRY_COMPACT_CHARS)
+        return min(target, soft_limit)
+
+    def rebuild_prompt_for_retry(next_attempt: int, current_prompt: str, current_chars: int) -> tuple[str, Any]:
+        nonlocal compact_payload
+        if not bool(decision.get("shrinkInputOnRetry")) or not compact_builder:
+            return current_prompt, compact_payload
+        retry_mode = "emergency" if next_attempt >= 4 else "retry"
+        target_chars = retry_compact_limit(next_attempt, current_chars)
+        compact_result = invoke_safe_builder(
+            compact_builder,
+            decision=decision,
+            soft_limit=soft_limit,
+            hard_limit=hard_limit,
+            max_chars=target_chars,
             caller=caller,
-            task_type=task_type,
-            user_options=user_options,
-            allow_oversize_direct=allow_oversize_direct,
+            compact_payload=compact_payload,
+            retry_mode=retry_mode,
+            retry_target_chars=target_chars,
         )
-    except HTTPException as error:
-        detail_text = str(error.detail).lower()
-        if error.status_code in {502, 524} or "timeout" in detail_text or "origin_response_timeout" in detail_text:
-            raise HTTPException(
-                status_code=error.status_code if error.status_code in {502, 524} else 502,
-                detail={
-                    "ok": False,
-                    "type": "ModelProxyTimeout" if error.status_code == 524 or "524" in detail_text else "ModelTransientError",
-                    "caller": caller,
-                    "statusCode": error.status_code,
-                    "retryable": True,
-                    "providerKind": decision.get("providerKind"),
-                    "proxySafeMode": decision.get("proxySafeMode"),
-                    "inputCharCount": final_input_chars,
-                    "message": "Model request failed transiently after safe_model_call protection.",
-                },
-            ) from error
-        raise
+        retry_prompt, retry_payload = safe_builder_prompt(compact_result)
+        compact_payload = retry_payload
+        return retry_prompt, retry_payload
+
+    def record_retry_progress(status_code: int, action: str) -> None:
+        task_id = current_agent_task_id.get("")
+        if not task_id:
+            return
+        if action in {"shrink_input", "endpoint_fallback", "streaming_retry"}:
+            append_background_task_message(task_id, "agent", f"第三方中转站返回 {status_code}，系统正在缩小输入并重试。")
+        else:
+            append_background_task_message(task_id, "agent", f"第三方中转站返回 {status_code}，系统正在有限重试。")
+
+    while True:
+        max_output_tokens = max_output_tokens_for_attempt(attempt_number)
+        try:
+            return run_text_task(
+                attempt_prompt,
+                provider=provider_name,
+                model=model,
+                caller=caller,
+                task_type=task_type,
+                user_options=user_options,
+                allow_oversize_direct=allow_oversize_direct,
+                endpoint_mode=endpoint_mode,
+                max_output_tokens=max_output_tokens,
+                stream=stream,
+            )
+        except HTTPException as error:
+            status_code = status_code_from_http_exception(error)
+            detail_text = http_exception_detail_text(error)
+            error_type = model_error_type_for_status(status_code, detail_text)
+            retryable = error_type in {"ModelTransientError", "ModelProxyTimeout"}
+            if not provider_is_proxy or not error_type or not retryable:
+                if provider_is_proxy and error_type == "ModelProviderConfigError":
+                    raise HTTPException(
+                        status_code=status_code,
+                        detail=structured_model_error_detail(
+                            error_type=error_type,
+                            caller=caller,
+                            status_code=status_code,
+                            decision=decision,
+                            input_char_count=attempt_input_chars,
+                            retryable=False,
+                            message="Model provider configuration appears invalid; check base_url, API key, protocol, and model name.",
+                        ),
+                    ) from error
+                raise
+
+            retry_action = next_retry_action(attempt_number)
+            attempt_record = {
+                "attempt": attempt_number,
+                "statusCode": status_code,
+                "inputCharCount": attempt_input_chars,
+                "endpoint": endpoint_name,
+                "stream": stream,
+                "maxOutputTokens": max_output_tokens,
+                "retryAction": retry_action if attempt_number <= max_transient_retries else "give_up",
+            }
+            attempts.append(attempt_record)
+            save_model_failure_log(
+                caller=caller,
+                decision=decision,
+                status_code=status_code,
+                input_char_count=attempt_input_chars,
+                attempt=attempt_number,
+                endpoint=endpoint_name,
+                stream=stream,
+                max_output_tokens=max_output_tokens,
+                retry_action=attempt_record["retryAction"],
+                error_message=detail_text,
+                cloudflare_ray_id=cloudflare_ray_from_http_exception(error),
+            )
+
+            if attempt_number > max_transient_retries:
+                message = (
+                    "Third-party proxy repeatedly timed out after safe_model_call retry protection."
+                    if error_type == "ModelProxyTimeout"
+                    else "Third-party proxy returned repeated transient upstream errors after safe_model_call retry protection."
+                )
+                raise HTTPException(
+                    status_code=status_code if status_code in {502, 503, 504, 524} else 502,
+                    detail=structured_model_error_detail(
+                        error_type=error_type,
+                        caller=caller,
+                        status_code=status_code,
+                        decision=decision,
+                        input_char_count=attempt_input_chars,
+                        retryable=True,
+                        attempts=attempts,
+                        cloudflare_ray_id=cloudflare_ray_from_http_exception(error),
+                        endpoint=endpoint_name,
+                        checkpoint_preserved=True,
+                        message=message,
+                    ),
+                ) from error
+
+            record_retry_progress(status_code, retry_action)
+            delay = retry_delay_seconds(attempt_number, error)
+            if delay > 0:
+                time.sleep(delay)
+
+            attempt_number += 1
+            if attempt_number >= 3:
+                attempt_prompt, compact_payload = rebuild_prompt_for_retry(
+                    attempt_number,
+                    attempt_prompt,
+                    attempt_input_chars,
+                )
+                attempt_input_chars = estimate_input_size(attempt_prompt)
+                if can_fallback_endpoint:
+                    endpoint_mode = "chat_completions"
+                    endpoint_name = "chat_completions"
+                stream = bool(decision.get("supportsStreaming") and endpoint_name == "chat_completions")
 
 
 APPLICATION_HINT_EXTRACTION_PROMPT = """
@@ -2610,6 +3049,77 @@ def save_chunk_checkpoint(
         "updated_at": now,
     }
     write_chunk_checkpoints(checkpoints)
+
+
+def read_resume_candidate_checkpoints() -> dict[str, Any]:
+    payload = read_json_file(RESUME_CANDIDATE_CHECKPOINTS_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_resume_candidate_checkpoints(checkpoints: dict[str, Any]) -> None:
+    write_json_file(RESUME_CANDIDATE_CHECKPOINTS_PATH, checkpoints)
+
+
+def resume_candidate_checkpoint_key(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+) -> str:
+    return stable_hash(
+        {
+            "task_id": task_id,
+            "project_id": project_id,
+            "project_name": project_name,
+            "source_hash": source_hash,
+        }
+    )
+
+
+def get_completed_resume_candidate_checkpoint(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+) -> Optional[dict[str, Any]]:
+    if not task_id:
+        return None
+    checkpoints = read_resume_candidate_checkpoints()
+    key = resume_candidate_checkpoint_key(task_id, project_id, project_name, source_hash)
+    record = checkpoints.get(key)
+    if isinstance(record, dict) and record.get("status") == "done" and isinstance(record.get("candidate_json"), dict):
+        return record["candidate_json"]
+    return None
+
+
+def save_resume_candidate_checkpoint(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+    status: str,
+    candidate_json: Optional[dict[str, Any]] = None,
+    error: str = "",
+) -> None:
+    if not task_id:
+        return
+    checkpoints = read_resume_candidate_checkpoints()
+    key = resume_candidate_checkpoint_key(task_id, project_id, project_name, source_hash)
+    now = datetime.now().isoformat(timespec="seconds")
+    previous = checkpoints.get(key) if isinstance(checkpoints.get(key), dict) else {}
+    checkpoints[key] = {
+        "id": key,
+        "task_id": task_id,
+        "project_id": project_id,
+        "project_name": project_name,
+        "source_hash": source_hash,
+        "status": status,
+        "candidate_json": candidate_json or {},
+        "error": error,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    }
+    write_resume_candidate_checkpoints(checkpoints)
 
 
 def normalize_match_text(value: Any) -> str:
@@ -5381,6 +5891,82 @@ def build_compact_bullet_writer_input(
     }
 
 
+def trim_list_field(container: dict[str, Any], key: str, limit: int) -> None:
+    if isinstance(container.get(key), list):
+        container[key] = container[key][:limit]
+
+
+def trim_compact_jd_requirements(value: Any, limit: int) -> Any:
+    if isinstance(value, list):
+        return value[:limit]
+    if not isinstance(value, dict):
+        return value
+    trimmed = json.loads(json.dumps(value, ensure_ascii=False))
+    for key, nested in list(trimmed.items()):
+        if isinstance(nested, list):
+            trimmed[key] = nested[:limit]
+    return trimmed
+
+
+def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> dict[str, Any]:
+    mode = str(retry_mode or "normal").lower()
+    if mode not in {"retry", "emergency"}:
+        return payload
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+    facts = reduced.get("current_project_compact_facts", {})
+    evidence_summary = reduced.get("current_project_evidence_summary", {})
+    constraints = reduced.get("bullet_constraints", {})
+    if isinstance(facts, dict):
+        facts["resumeRelevantClaims"] = sorted(
+            facts.get("resumeRelevantClaims", []),
+            key=lambda item: (
+                -int(item.get("relevanceScore", 0)) if isinstance(item, dict) else 0,
+                not bool(item.get("safeForResume")) if isinstance(item, dict) else True,
+                str(item.get("claim", "")) if isinstance(item, dict) else str(item),
+            ),
+        )
+        facts["metricCandidates"] = sorted(
+            facts.get("metricCandidates", []),
+            key=lambda item: (
+                0 if isinstance(item, dict) and item.get("type") == "user-confirmed" else 1,
+                -int(item.get("relevanceScore", 0)) if isinstance(item, dict) else 0,
+                str(item.get("metric", "")) if isinstance(item, dict) else str(item),
+            ),
+        )
+        trim_list_field(facts, "resumeRelevantClaims", 5 if mode == "retry" else 3)
+        trim_list_field(facts, "metricCandidates", 4 if mode == "retry" else 3)
+        trim_list_field(facts, "keyModules", 6 if mode == "retry" else 3)
+        trim_list_field(facts, "userContributionSignals", 6 if mode == "retry" else 3)
+        trim_list_field(facts, "riskFlags", 5 if mode == "retry" else 4)
+        facts["technicalStack"] = facts.get("technicalStack", [])[:8 if mode == "retry" else 5]
+        facts["jdRelevance"] = facts.get("jdRelevance", [])[:8 if mode == "retry" else 6]
+    if isinstance(evidence_summary, dict):
+        trim_list_field(evidence_summary, "evidenceSources", 5 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "safeClaims", 5 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "metricCandidates", 4 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "riskFlags", 5 if mode == "retry" else 4)
+    reduced["compact_jd_requirements"] = trim_compact_jd_requirements(
+        reduced.get("compact_jd_requirements"),
+        8 if mode == "retry" else 6,
+    )
+    if isinstance(reduced.get("existing_bullets"), list):
+        reduced["existing_bullets"] = reduced["existing_bullets"][:3 if mode == "retry" else 2]
+    snippet = reduced.get("existing_resume_snippet")
+    if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
+        lines = [line for line in snippet["latex"].splitlines() if line.strip()]
+        snippet["latex"] = "\n".join(lines[:8 if mode == "retry" else 4])
+    if isinstance(constraints, dict):
+        constraints["retry_mode"] = mode
+        constraints["max_final_bullets"] = 3 if mode == "retry" else 2
+        constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 300 if mode == "retry" else 160)
+        constraints["retry_rules"] = [
+            "Use only the current project summary, top JD requirements, high-relevance claims, evidence sources, user-confirmed metrics, and risk flags.",
+            "Return 2-3 bullets in retry mode or 2 bullets in emergency mode.",
+            "Do not invent numbers or drop user-confirmed facts.",
+        ]
+    return reduced
+
+
 def build_compact_project_input(**kwargs: Any) -> dict[str, Any]:
     return build_compact_bullet_writer_input(section_type="project", **kwargs)
 
@@ -5417,6 +6003,7 @@ Rules:
 - If a metric/result is unsupported, list it in missing_star_fields and write a conservative qualitative result.
 - Final bullets must combine a concrete method, a substantive workflow/business capability, and an evidence-grounded result/value.
 - Avoid stack-only, CRUD-only, and shallow UI-only bullets.
+- When payload.bullet_constraints.max_final_bullets is present, keep final_bullets at or below that count.
 
 Compact bullet writer payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -5588,7 +6175,11 @@ STAR enforcement:
 """
     compact_payload = None
 
-    def compact_bullet_prompt(max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS, **_: Any) -> dict[str, Any]:
+    def compact_bullet_prompt(
+        max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS,
+        retry_mode: str = "normal",
+        **_: Any,
+    ) -> dict[str, Any]:
         common = dict(
             source_name=source_name,
             job_description=job_description,
@@ -5609,6 +6200,7 @@ STAR enforcement:
             payload = build_compact_experience_input(**common)
         else:
             payload = build_compact_bullet_writer_input(section_type=section_type, **common)
+        payload = apply_bullet_writer_retry_mode(payload, retry_mode)
         compact_prompt = build_compact_bullet_writer_prompt(payload)
         if len(compact_prompt) > max_chars:
             payload = reduce_compact_bullet_payload_for_limit(payload, max_chars=max_chars)
@@ -5684,29 +6276,56 @@ def build_project_resume_candidate(
     progress_guidance: str = "",
 ) -> dict[str, Any]:
     source_facts = compact_project_for_prompt(project)
-    payload = run_resume_bullet_writer_tool(
-        section_type="project",
-        source_name=str(project.get("project_name") or project.get("name") or project.get("project_id") or ""),
-        job_description=job_description,
-        resume=resume,
-        source_facts=source_facts,
-        evidence=evidence,
-        existing_bullets=[],
-        language=language,
-        extra_rules=(
-            "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
-            "Select only the strongest concise bullets; final layout will allocate more bullets to higher-ranked "
-            "projects and fewer bullets to lower-ranked projects. The first bullet must explain what the project is "
-            "and what workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
-            + progress_guidance
-        ),
+    project_id = str(project.get("project_id") or "")
+    source_name = str(project.get("project_name") or project.get("name") or project.get("project_id") or "")
+    source_hash = stable_hash(
+        {
+            "job_description": job_description,
+            "project": source_facts,
+            "evidence": evidence,
+            "language": language,
+            "progress_guidance": progress_guidance,
+        }
     )
+    task_id = current_agent_task_id.get("")
+    cached_candidate = get_completed_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash)
+    if cached_candidate:
+        return cached_candidate
+    try:
+        payload = run_resume_bullet_writer_tool(
+            section_type="project",
+            source_name=source_name,
+            job_description=job_description,
+            resume=resume,
+            source_facts=source_facts,
+            evidence=evidence,
+            existing_bullets=[],
+            language=language,
+            extra_rules=(
+                "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
+                "Select only the strongest concise bullets; final layout will allocate more bullets to higher-ranked "
+                "projects and fewer bullets to lower-ranked projects. The first bullet must explain what the project is "
+                "and what workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
+                + progress_guidance
+            ),
+        )
+    except HTTPException as error:
+        save_resume_candidate_checkpoint(
+            task_id,
+            project_id,
+            source_name,
+            source_hash,
+            "failed",
+            error=http_exception_detail_text(error),
+        )
+        raise
     payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
     payload["project_name"] = payload.get("project_name") or project.get("project_name") or project.get("name") or ""
     payload["fit"] = payload.get("fit") if payload.get("fit") in {"high", "medium", "low"} else "medium"
     payload["keep_or_replace"] = payload.get("keep_or_replace") or "update"
     payload["fit_reason"] = payload.get("fit_reason") or payload.get("job_alignment", "")
     payload["recommended_bullets"] = payload.get("final_bullets", [])
+    save_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash, "done", candidate_json=payload)
     return payload
 
 

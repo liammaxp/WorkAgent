@@ -1,0 +1,1617 @@
+{
+  "fc64170aa5e763c22d0453d3c74be2da659d42a2b828eb195b5e6ec505285128": {
+    "id": "fc64170aa5e763c22d0453d3c74be2da659d42a2b828eb195b5e6ec505285128",
+    "stage": "project_resume_candidate",
+    "project_name": "WorkAgent",
+    "status": "done",
+    "output_json": {
+      "section_type": "project",
+      "source_name": "WorkAgent",
+      "job_alignment": "WorkAgent 与该软件工程岗位的 Java/Python/SQL、后端 API、数据模型、前后端集成、验证、测试和开发效率方向较相关；可重点体现其用 Python/FastAPI、React/Vite、SQLite 和本地工作流整合来支持复杂应用材料管理与生成流程。与岗位中的 C/C++/Go、TCP/UDP、分布式系统、云原生、高可用线上服务等要求匹配较弱，需避免夸大为线上基础设施或生产级服务经验。",
+      "star_analysis": [
+        {
+          "candidate_fact": "WorkAgent 是单用户本地 Web 和 CLI 应用，用于求职材料写作、简历定制、求职信、面试准备、GitHub evidence、项目记忆和申请记录管理。",
+          "situation": "求职申请需要在多个岗位之间协调简历、职位描述、个人背景、项目事实、GitHub 证据、生成文档、面试记录和申请状态。",
+          "task": "构建一个本地工具，将分散的求职材料和申请流程整合到可操作的工作流中。",
+          "action": "开发本地 Web UI 和 CLI 工作流，连接职位分析、简历定制、求职信生成、面试准备、项目记忆、GitHub evidence 和申请跟踪功能。",
+          "result": "形成了一个集中式本地工作区，支持更一致地组织和生成求职申请材料。",
+          "missing_star_fields": [
+            "量化节省时间",
+            "实际用户数量",
+            "投递数量提升",
+            "线上部署或生产使用情况"
+          ],
+          "evidence_source": "README.md, liammaxp/WorkAgent, project_memory.json"
+        },
+        {
+          "candidate_fact": "实现了 Python/FastAPI 后端 API 处理，并与 React/Vite 前端工作流和状态处理集成。",
+          "situation": "应用需要在前端界面和后端逻辑之间传递职位、简历、项目记忆、GitHub evidence 和生成结果等数据。",
+          "task": "实现后端接口和前端交互流程，支撑多步骤申请材料生成与管理。",
+          "action": "使用 Python 和 FastAPI 构建后端 API 处理，配合 React/Vite 前端组织页面、状态和用户操作流程。",
+          "result": "支持前后端协同的本地应用工作流，使多个申请材料模块能够在同一界面中使用。",
+          "missing_star_fields": [
+            "API 数量",
+            "接口延迟或性能指标",
+            "错误率下降数据",
+            "团队协作人数"
+          ],
+          "evidence_source": "backend/api_server.py, frontend components, liammaxp/WorkAgent"
+        },
+        {
+          "candidate_fact": "使用 SQLite 支持本地 application tracking，并结合 Chroma、本地文件管理和 Project Memory 保存应用材料与事实依据。",
+          "situation": "求职材料生成需要保留结构化申请记录、项目事实、生成历史和支持证据，避免信息分散或不一致。",
+          "task": "设计持久化存储方式来保存申请记录、记忆数据、GitHub evidence 和生成材料。",
+          "action": "实现 SQLite 本地申请跟踪，并结合 Chroma、Project Memory 和本地文件管理保存结构化与检索型信息。",
+          "result": "为申请记录、项目事实和生成输出提供了可持续追踪的本地数据基础。",
+          "missing_star_fields": [
+            "数据库表数量",
+            "查询性能",
+            "数据规模",
+            "备份或容灾机制"
+          ],
+          "evidence_source": "project_memory.json, backend/api_server.py, README.md"
+        },
+        {
+          "candidate_fact": "实现了数据验证逻辑、错误处理路径、日志/调试信号，以及脚本自动化或开发工作流支持。",
+          "situation": "多步骤生成流程容易出现输入缺失、上下文错误或操作路径不清晰的问题。",
+          "task": "提升本地应用在处理求职材料、GitHub evidence 和生成流程时的可靠性与可调试性。",
+          "action": "加入数据验证、错误处理、日志/调试信号，并使用 Shell 或 PowerShell 自动化部分开发与运行流程。",
+          "result": "提高了本地工具在复杂申请材料流程中的可维护性和问题定位能力。",
+          "missing_star_fields": [
+            "测试覆盖率",
+            "缺陷减少数量",
+            "自动化节省时间",
+            "生产环境监控指标"
+          ],
+          "evidence_source": "userContributionSignals, backend/api_server.py, project_memory.json"
+        }
+      ],
+      "react_analysis": [
+        {
+          "candidate_fact": "本地 AI 求职申请工作区整合职位分析、简历定制、求职信、面试准备和申请跟踪。",
+          "why_writable": "项目摘要和现有简历片段均明确支持该描述。",
+          "why_it_belongs": "岗位强调理解业务需求、实现和优化产品功能、与前端协作推进产品迭代；该事实展示了从需求流程到产品功能整合的能力。",
+          "business_capability": "把分散的申请材料准备流程整合为统一工作流，减少信息割裂。",
+          "technical_capability": "本地 Web/CLI 应用、前后端集成、模块化工作流设计。",
+          "risk_avoided": "不声称线上产品、真实用户规模或商业业务影响。"
+        },
+        {
+          "candidate_fact": "使用 Python/FastAPI 实现后端 API，并与 React/Vite 前端连接多步骤功能。",
+          "why_writable": "安全声明中明确包含 implemented backend API handling 和 implemented frontend workflow/state handling。",
+          "why_it_belongs": "岗位要求扎实编程能力，并关注关键服务、产品功能实现和前端工程师协作。",
+          "business_capability": "支持用户在同一界面中完成职位分析、材料生成和记录管理。",
+          "technical_capability": "Python、FastAPI、React、Vite、API 设计、前端状态/流程处理。",
+          "risk_avoided": "不声称分布式服务、高并发、负载均衡或线上可用性。"
+        },
+        {
+          "candidate_fact": "使用 SQLite 进行本地申请跟踪，并管理生成历史、项目记忆和 GitHub evidence。",
+          "why_writable": "证据中明确包含 SQLite、Local SQLite application tracking、Project Memory 和 GitHub evidence。",
+          "why_it_belongs": "岗位提到 SQL、数据库系统、数据模型和关键服务维护；该事实体现数据库与持久化能力。",
+          "business_capability": "让申请记录、事实来源和生成材料可追踪、可复用。",
+          "technical_capability": "SQLite、本地数据持久化、数据组织、应用记录管理。",
+          "risk_avoided": "不声称 MySQL、NoSQL 生产集群或大规模数据处理。"
+        },
+        {
+          "candidate_fact": "加入数据验证、错误处理、日志/调试信号和脚本自动化支持。",
+          "why_writable": "用户贡献信号和安全声明支持数据验证、错误处理、调试信号和 shell/PowerShell 自动化。",
+          "why_it_belongs": "岗位强调提升稳定性、可用性、开发效率和代码质量，并要求快速定位解决问题。",
+          "business_capability": "降低生成流程中的输入错误和排查成本，提高本地工具维护效率。",
+          "technical_capability": "验证逻辑、错误路径处理、调试日志、脚本自动化。",
+          "risk_avoided": "不声称线上监控、SRE、生产事故响应或性能优化指标。"
+        }
+      ],
+      "final_bullets": [
+        {
+          "bullet": "开发 WorkAgent 本地 Web/CLI 求职申请工作区，整合职位分析、简历定制、求职信生成、面试准备、GitHub evidence、项目记忆和申请跟踪，支持从职位输入到材料产出的集中式工作流。",
+          "evidence": "Project summary, README.md, existing resume snippet, project_memory.json",
+          "confidence": "high"
+        },
+        {
+          "bullet": "使用 Python 与 FastAPI 实现后端 API，并结合 React/Vite 前端工作流与状态处理，连接简历、职位描述、面试材料、GitHub context 和生成历史等多模块功能。",
+          "evidence": "backend/api_server.py, frontend components, safe claim: implemented backend API handling, implemented frontend workflow or state handling",
+          "confidence": "high"
+        },
+        {
+          "bullet": "基于 SQLite 构建本地申请记录持久化能力，并结合 Chroma、Project Memory 和本地文件管理保存申请历史、项目事实、GitHub evidence 与生成材料，提升材料追踪和复用能力。",
+          "evidence": "Safe claims: SQLite, Local SQLite application tracking, Track job applications in a local SQLite database; existing resume snippet",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现数据验证、错误处理路径和日志/调试信号，并通过 Shell/PowerShell 脚本辅助本地开发流程，提升复杂材料生成流程的可维护性和问题定位效率。",
+          "evidence": "Safe claims: implemented data validation logic, debugged or implemented error handling paths, added logging/debugging signal, added shell or PowerShell automation",
+          "confidence": "high"
+        }
+      ],
+      "skills_to_emphasize": [
+        "Python",
+        "FastAPI",
+        "SQL",
+        "SQLite",
+        "React",
+        "Vite",
+        "API 设计",
+        "后端开发",
+        "前后端集成",
+        "数据验证",
+        "错误处理",
+        "日志与调试",
+        "本地数据持久化",
+        "Shell/PowerShell 自动化",
+        "Git/GitHub"
+      ],
+      "risks": [
+        "不要声称 WorkAgent 使用了 AWS、Docker、Jenkins 或 Kubernetes，除非另有证据支持。",
+        "不要声称具备线上生产服务、高并发、负载均衡、容灾或高可用系统经验。",
+        "不要声称使用 MySQL、TCP/UDP 网络编程、进程间通信或分布式系统开发，当前证据不足。",
+        "不要添加用户数量、性能提升、节省时间、测试覆盖率等量化指标。",
+        "Java 出现在技术栈中，但当前 WorkAgent 的强证据主要集中在 Python/FastAPI、React 和 SQLite；如写 Java 需谨慎。",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance"
+      ],
+      "bullet_writer_validation": {
+        "accepted": false,
+        "issues": [
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+          "lacks a concrete supported tool or method",
+          "lacks a specific implemented function, process, or artifact",
+          "lacks target-role relevance"
+        ],
+        "required_mode": "ReAct: reason why the bullet is factual and worth writing, identify business capability, identify technical signal, then write resume bullets.",
+        "required_pattern": "Use a strong action verb plus concrete technical method, substantive logic/business capability, and result or value. The sentence may use natural phrasing and does not need to force a fixed 'to' template.",
+        "role_family": "software_engineering",
+        "bullet_quality": [
+          {
+            "bullet": "开发 WorkAgent 本地 Web/CLI 求职申请工作区，整合职位分析、简历定制、求职信生成、面试准备、GitHub evidence、项目记忆和申请跟踪，支持从职位输入到材料产出的集中式工作流。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          },
+          {
+            "bullet": "使用 Python 与 FastAPI 实现后端 API，并结合 React/Vite 前端工作流与状态处理，连接简历、职位描述、面试材料、GitHub context 和生成历史等多模块功能。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 80,
+            "specificity_score": 66,
+            "evidence_support_score": 90
+          },
+          {
+            "bullet": "基于 SQLite 构建本地申请记录持久化能力，并结合 Chroma、Project Memory 和本地文件管理保存申请历史、项目事实、GitHub evidence 与生成材料，提升材料追踪和复用能力。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 80,
+            "specificity_score": 44,
+            "evidence_support_score": 90
+          },
+          {
+            "bullet": "实现数据验证、错误处理路径和日志/调试信号，并通过 Shell/PowerShell 脚本辅助本地开发流程，提升复杂材料生成流程的可维护性和问题定位效率。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 22,
+            "evidence_support_score": 90
+          }
+        ],
+        "unsupported_claims": []
+      },
+      "allowed_claims": [
+        "Debugged or implemented error handling paths",
+        "Debugged runtime observability or logging behavior",
+        "Implemented backend API handling",
+        "Implemented test automation",
+        "... [3 more items truncated]",
+        "Automated setup or developer workflows with scripts",
+        "Implemented database persistence logic",
+        "Implemented frontend workflow or state handling",
+        "Implemented prompt compression utilities",
+        "... [1 more items truncated]",
+        "Implemented data validation logic"
+      ],
+      "forbidden_claims": [
+        "Do not claim AWS work unless other evidence supports it",
+        "Do not claim Docker work unless other evidence supports it",
+        "Do not claim Jenkins work unless other evidence supports it",
+        "Do not claim Kubernetes work unless other evidence supports it",
+        "... [1 more items truncated]"
+      ],
+      "role_profile": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "role_focus": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "resume_strategy": "Emphasize software engineering evidence first, then support it with role-relevant methods, artifacts, and business/workflow value.",
+        "high_priority_keywords": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "low_priority_keywords": [
+          "devops",
+          "infrastructure",
+          "it analyst",
+          "technical support",
+          "business analyst",
+          "product",
+          "qa",
+          "quality assurance",
+          "security",
+          "cybersecurity"
+        ]
+      },
+      "jd_requirements": {
+        "job_title": "",
+        "company": "",
+        "must_have_skills": [
+          "java",
+          "python",
+          "sql",
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "nice_to_have_skills": [],
+        "responsibilities": [],
+        "tools_platforms": [
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "domain_knowledge": [],
+        "soft_skills": [],
+        "repeated_ats_keywords": [],
+        "action_verbs": [],
+        "evidence_types_to_emphasize": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git"
+        ]
+      },
+      "evidence_card": {
+        "name": "WorkAgent",
+        "type": "project",
+        "technologies": [
+          "Python",
+          "FastAPI",
+          "React",
+          "Vite",
+          "JavaScript",
+          "CSS",
+          "HTML",
+          "PowerShell",
+          "Shell",
+          "Batchfile",
+          "SQLite",
+          "Chroma",
+          "local embeddings",
+          "OpenAI API",
+          "OpenAI-compatible APIs",
+          "DeepSeek",
+          "Claude / Anthropic",
+          "Gemini / Google",
+          "... [5 more items truncated]",
+          "Java"
+        ],
+        "methods": [
+          "Analyze saved job descriptions and summarize requirements, responsibilities, expectations, skills, and fit.",
+          "Generate tailored LaTeX resumes, cover letters, and interview preparation notes.",
+          "Maintain Project Memory as durable project fact storage separate from GitHub evidence retrieval.",
+          "Track job applications in a local SQLite database.",
+          "Configure providers, models, API keys, GitHub identities, GitHub token, and agent prompt from the Web UI.",
+          "Use local Web UI or CLI workflows with Chinese/English UI switching.",
+          "Job description analysis workflow.",
+          "Tailored LaTeX resume generation.",
+          "Project selection and resume project tailoring.",
+          "Project Memory read/write helpers and memory-derived project query generation.",
+          "Experience bullet tailoring with conservative constraints.",
+          "Generated analysis, tailored resume, cover letter, and interview prep output history.",
+          "Chroma-backed vector memory updates with similarity checks.",
+          "Specific Chroma memory deletion through Agent Chat.",
+          "Project deletion synchronized across Chroma profile memory and Project Memory.",
+          "Agent Chat image attachments for JPG, PNG, GIF, and WebP files when supported by the selected vision model.",
+          "Application-material preparation through Agent Chat.",
+          "Automatic application record creation from Agent Chat application-material workflow.",
+          "Cover letter generation and editing.",
+          "Interview preparation note generation and editing."
+        ],
+        "features": [
+          "Job description analysis workflow.",
+          "Tailored LaTeX resume generation.",
+          "Project selection and resume project tailoring.",
+          "Project Memory read/write helpers and memory-derived project query generation.",
+          "Experience bullet tailoring with conservative constraints.",
+          "Generated analysis, tailored resume, cover letter, and interview prep output history.",
+          "Chroma-backed vector memory updates with similarity checks.",
+          "Specific Chroma memory deletion through Agent Chat.",
+          "Project deletion synchronized across Chroma profile memory and Project Memory.",
+          "Agent Chat image attachments for JPG, PNG, GIF, and WebP files when supported by the selected vision model.",
+          "Application-material preparation through Agent Chat.",
+          "Automatic application record creation from Agent Chat application-material workflow.",
+          "Cover letter generation and editing.",
+          "Interview preparation note generation and editing.",
+          "Model provider configuration from the Web UI.",
+          "GitHub identity and token configuration from the Web UI.",
+          "Customizable agent prompt from the Web UI.",
+          "GitHub repository scanning and evidence extraction.",
+          "Local SQLite application tracking.",
+          "Local Web UI and CLI workflow."
+        ],
+        "artifacts": [
+          "backend/api_server.py",
+          "frontend/src/agentProgress/AgentProgressContext.jsx",
+          "frontend/src/agentProgress/AgentProgressModal.jsx",
+          "frontend/src/index.css",
+          "... [6 more items truncated]",
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEventDetailsActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantInvitedListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerInvitedEntrantAdapter.java",
+          "... [8 more items truncated]",
+          "README.md",
+          "src/__pycache__/add_ops.cpython-313.pyc",
+          "src/__pycache__/category_ops.cpython-313.pyc",
+          "src/__pycache__/db_utils.cpython-313.pyc"
+        ],
+        "data_or_scale": [],
+        "collaboration_signals": [],
+        "testing_signals": [
+          "added test automation"
+        ],
+        "debugging_signals": [
+          "added error handling path",
+          "added logging/debugging signal"
+        ],
+        "documentation_signals": [],
+        "automation_signals": [
+          "added test automation",
+          "added shell or PowerShell automation"
+        ],
+        "business_or_user_value": [
+          "Connects job analysis, tailored resumes, cover letters, interview preparation, memory, GitHub evidence, project memory, model configuration, generated output history, and application tracking into one local workflow.",
+          "Job applications require coordinating resumes, job descriptions, personal background, durable project facts, GitHub proof, generated documents, interview notes, and application records across many roles.",
+          "Single-user local web and CLI application for truthful job application writing, resume tailoring, cover letters, interview preparation, GitHub evidence, project memory, and application tracking."
+        ],
+        "inferred_results": [
+          "Reduced repeated work by reusing cached or unchanged evidence paths; no specific latency/QPS metric is verified.",
+          "Improved retrieval or matching path with structured lookup/ranking logic; no exact request-speed metric is verified.",
+          "Improved reliability and recovery paths through validation, retry/fallback, cancellation, or error handling; no exact error-rate metric is verified.",
+          "Reduced prompt/context overhead through compression or scoped payload construction; no exact cost/token saving is verified.",
+          "Reduced repetitive manual steps by automating the workflow; no exact time saving is verified."
+        ],
+        "source_refs": [
+          "https://github.com/liammaxp/WorkAgent",
+          "liammaxp/WorkAgent",
+          "https://github.com/liammaxp/Event-Lottery-System-Application",
+          "liammaxp/Event-Lottery-System-Application",
+          "https://github.com/liammaxp/Furniture-Search-and-Inventory-System",
+          "liammaxp/Furniture-Search-and-Inventory-System"
+        ],
+        "confidence": "high",
+        "allowed_claims": [
+          "Debugged or implemented error handling paths",
+          "Debugged runtime observability or logging behavior",
+          "Implemented backend API handling",
+          "Implemented test automation",
+          "... [3 more items truncated]",
+          "Automated setup or developer workflows with scripts",
+          "Implemented database persistence logic",
+          "Implemented frontend workflow or state handling",
+          "Implemented prompt compression utilities",
+          "... [1 more items truncated]",
+          "Implemented data validation logic"
+        ],
+        "forbidden_claims": [
+          "Do not claim AWS work unless other evidence supports it",
+          "Do not claim Docker work unless other evidence supports it",
+          "Do not claim Jenkins work unless other evidence supports it",
+          "Do not claim Kubernetes work unless other evidence supports it",
+          "... [1 more items truncated]"
+        ]
+      },
+      "role_lens": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "lens_terms": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git",
+          "sql",
+          "reporting",
+          "metrics",
+          "records",
+          "analysis",
+          "kpi"
+        ],
+        "ranked_evidence_priorities": [
+          "Configure providers, models, API keys, GitHub identities, GitHub token, and agent prompt from the Web UI.",
+          "Connects job analysis, tailored resumes, cover letters, interview preparation, memory, GitHub evidence, project memory, model configuration, generated output history, and application tracking into one local workflow.",
+          "Job applications require coordinating resumes, job descriptions, personal background, durable project facts, GitHub proof, generated documents, interview notes, and application records across many roles.",
+          "FastAPI",
+          "Generated analysis, tailored resume, cover letter, and interview prep output history.",
+          "GitHub identity and token configuration from the Web UI.",
+          "GitHub repository scanning and evidence extraction.",
+          "Job description analysis workflow.",
+          "Local SQLite application tracking.",
+          "Maintain Project Memory as durable project fact storage separate from GitHub evidence retrieval.",
+          "OpenAI API",
+          "OpenAI-compatible APIs"
+        ],
+        "bullet_guidance": "Use the highest-ranked evidence priorities first. Emphasize method + implemented function/process + role-specific value, while respecting allowed/forbidden claims."
+      },
+      "project_id": "workagent",
+      "project_name": "WorkAgent",
+      "fit": "medium",
+      "keep_or_replace": "update",
+      "fit_reason": "WorkAgent 与该软件工程岗位的 Java/Python/SQL、后端 API、数据模型、前后端集成、验证、测试和开发效率方向较相关；可重点体现其用 Python/FastAPI、React/Vite、SQLite 和本地工作流整合来支持复杂应用材料管理与生成流程。与岗位中的 C/C++/Go、TCP/UDP、分布式系统、云原生、高可用线上服务等要求匹配较弱，需避免夸大为线上基础设施或生产级服务经验。",
+      "recommended_bullets": [
+        {
+          "bullet": "开发 WorkAgent 本地 Web/CLI 求职申请工作区，整合职位分析、简历定制、求职信生成、面试准备、GitHub evidence、项目记忆和申请跟踪，支持从职位输入到材料产出的集中式工作流。",
+          "evidence": "Project summary, README.md, existing resume snippet, project_memory.json",
+          "confidence": "high"
+        },
+        {
+          "bullet": "使用 Python 与 FastAPI 实现后端 API，并结合 React/Vite 前端工作流与状态处理，连接简历、职位描述、面试材料、GitHub context 和生成历史等多模块功能。",
+          "evidence": "backend/api_server.py, frontend components, safe claim: implemented backend API handling, implemented frontend workflow or state handling",
+          "confidence": "high"
+        },
+        {
+          "bullet": "基于 SQLite 构建本地申请记录持久化能力，并结合 Chroma、Project Memory 和本地文件管理保存申请历史、项目事实、GitHub evidence 与生成材料，提升材料追踪和复用能力。",
+          "evidence": "Safe claims: SQLite, Local SQLite application tracking, Track job applications in a local SQLite database; existing resume snippet",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现数据验证、错误处理路径和日志/调试信号，并通过 Shell/PowerShell 脚本辅助本地开发流程，提升复杂材料生成流程的可维护性和问题定位效率。",
+          "evidence": "Safe claims: implemented data validation logic, debugged or implemented error handling paths, added logging/debugging signal, added shell or PowerShell automation",
+          "confidence": "high"
+        }
+      ]
+    },
+    "error": "",
+    "created_at": "2026-07-01T19:01:38",
+    "updated_at": "2026-07-01T19:01:38"
+  },
+  "1bdacd7607dbcc57371ccf0fcb1d8d3f6c6455275b885e967facad9417445613": {
+    "id": "1bdacd7607dbcc57371ccf0fcb1d8d3f6c6455275b885e967facad9417445613",
+    "stage": "project_resume_candidate",
+    "project_name": "Event Lottery System",
+    "status": "done",
+    "output_json": {
+      "section_type": "project",
+      "source_name": "Event Lottery System",
+      "job_alignment": "该项目与软件工程岗位的 Java、后端 API、数据建模、前后端集成、输入校验、调试和团队开发效率要求较匹配；可重点突出 Android/Java 实现、Firebase 数据操作、API 集成、角色权限与业务流程校验，但不应夸大为高并发、分布式、云原生或线上基础设施经验。",
+      "star_analysis": [
+        {
+          "candidate_fact": "基于 Android/Java 构建面向 entrant、organizer、admin 的角色化活动抽签平台。",
+          "situation": "活动参与流程涉及报名、候补名单、抽签、邀请、通知、可见性控制和管理员入口等多角色协作。",
+          "task": "实现一个移动端工作流，使不同角色能够按权限完成活动发现、报名、管理和通知相关操作。",
+          "action": "使用 Java 11、Android、XML layouts、RecyclerView、Firebase Auth/Firestore 等实现角色化界面、数据交互和状态展示。",
+          "result": "形成了覆盖活动发现、候补管理、邀请通知和管理员校验的端到端移动应用流程。",
+          "missing_star_fields": [
+            "未提供用户数量、性能提升、稳定性指标或上线结果"
+          ],
+          "evidence_source": "project_memory.json, README.md, backend/api_server.py, Android project evidence"
+        },
+        {
+          "candidate_fact": "实现 organizer event creation，并校验 registration dates、event time、capacity、waitlist constraints、geolocation requirement 和 visibility。",
+          "situation": "活动创建需要防止无效时间、容量、候补名单和可见性配置导致后续报名或抽签流程错误。",
+          "task": "为组织者创建活动流程加入业务规则校验。",
+          "action": "在活动创建流程中实现日期、时间、容量、候补限制、地理位置要求和公开/私有可见性校验。",
+          "result": "提升了活动数据进入系统前的一致性，降低了无效配置影响后续抽签和通知流程的风险。",
+          "missing_star_fields": [
+            "未提供缺陷减少数量或校验覆盖率"
+          ],
+          "evidence_source": "project_memory.json, backend/api_server.py"
+        },
+        {
+          "candidate_fact": "实现 poster upload integration through FreeImageHost API using a Firestore-configured key。",
+          "situation": "活动页面需要支持海报上传，并避免将外部 API key 固定写死在客户端逻辑中。",
+          "task": "集成外部图片托管 API，并通过配置方式管理访问密钥。",
+          "action": "通过 FreeImageHost API 接入活动海报上传，并使用 Firestore app_config 中的 key 配置支持该集成。",
+          "result": "为活动创建流程增加了可配置的海报上传能力，支持更完整的活动展示工作流。",
+          "missing_star_fields": [
+            "未提供上传成功率、文件大小限制或错误率数据"
+          ],
+          "evidence_source": "project_memory.json, backend/api_server.py"
+        },
+        {
+          "candidate_fact": "实现 Admin login validation using Firestore app_config/admin_key。",
+          "situation": "系统包含管理员角色，需要限制管理入口访问并避免普通用户直接进入管理流程。",
+          "task": "为管理员登录流程增加配置化校验。",
+          "action": "使用 Firestore app_config/admin_key 对 admin 登录进行验证，并结合角色化 onboarding/login 流程区分 entrant、organizer 和 admin。",
+          "result": "增强了角色访问控制，减少了错误角色进入管理流程的风险。",
+          "missing_star_fields": [
+            "未提供安全测试结果或权限绕过测试数据"
+          ],
+          "evidence_source": "project_memory.json, backend/api_server.py"
+        },
+        {
+          "candidate_fact": "添加 test automation、error handling path、logging/debugging signal 和 shell/PowerShell automation。",
+          "situation": "团队项目需要更可维护的开发流程，并在调试异常路径时保留可观察信息。",
+          "task": "提升本地开发、测试和调试效率。",
+          "action": "补充测试自动化、错误处理路径、日志/调试信号以及脚本化开发流程。",
+          "result": "改善了开发过程中的问题定位和重复性操作处理能力。",
+          "missing_star_fields": [
+            "未提供测试数量、构建时间减少或缺陷定位耗时数据"
+          ],
+          "evidence_source": "liammaxp/WorkAgent, backend/api_server.py, project evidence summary"
+        }
+      ],
+      "react_analysis": [
+        {
+          "candidate_fact": "角色化 Android 活动抽签平台",
+          "why_writable": "项目摘要和技术栈明确支持 Android、Java、Firebase、角色化 event workflow 等事实。",
+          "why_it_belongs": "第一条 bullet 需要说明项目本身和解决的业务流程问题，符合软件工程岗位对产品功能实现和业务理解的要求。",
+          "business_capability": "支持活动发现、报名、候补、抽签、邀请、通知和管理等连续业务流程。",
+          "technical_capability": "Java/Android UI、Firebase 数据交互、角色化状态管理和前后端集成。",
+          "risk_avoided": "不声称线上用户、生产环境、高可用或分布式系统能力。"
+        },
+        {
+          "candidate_fact": "活动创建流程的多条件校验",
+          "why_writable": "证据明确列出 registration dates、event time、capacity、waitlist constraints、geolocation requirement 和 visibility validation。",
+          "why_it_belongs": "岗位强调深入理解业务需求并实现优化产品功能；该事实体现业务规则落地和数据质量控制。",
+          "business_capability": "减少错误活动配置对报名、候补和抽签流程的影响。",
+          "technical_capability": "表单校验、业务规则实现、状态约束和数据一致性处理。",
+          "risk_avoided": "不捏造数据库 schema 细节、校验覆盖率或缺陷减少指标。"
+        },
+        {
+          "candidate_fact": "FreeImageHost API 海报上传集成与 Firestore 配置化 key",
+          "why_writable": "安全声明中明确支持该 API 集成和 Firestore-configured key。",
+          "why_it_belongs": "岗位强调构建关键服务、前后端协作和产品迭代；API 集成比单纯 UI 更能体现工程实现能力。",
+          "business_capability": "让组织者在活动创建中上传海报，增强活动展示能力。",
+          "technical_capability": "外部 API 集成、配置读取、Android/Firebase 工作流连接。",
+          "risk_avoided": "不声称自建图片服务、云存储架构或生产级密钥管理。"
+        },
+        {
+          "candidate_fact": "Admin login validation using Firestore app_config/admin_key",
+          "why_writable": "证据明确支持 Firestore app_config/admin_key 的管理员登录校验。",
+          "why_it_belongs": "岗位要求软件工程基础、数据库系统和安全意识；该事实体现访问控制和配置化验证。",
+          "business_capability": "限制管理功能入口，支持管理员与普通角色分离。",
+          "technical_capability": "Firestore 配置读取、登录验证、角色化访问控制。",
+          "risk_avoided": "不夸大为完整网络安全体系、权限审计或企业级 RBAC。"
+        },
+        {
+          "candidate_fact": "测试自动化、错误处理、日志/调试信号和脚本化流程",
+          "why_writable": "userContributionSignals 和 safeClaims 支持 test automation、error handling、logging/debugging 和 automation scripts。",
+          "why_it_belongs": "岗位明确提到引入工具和流程提升开发效率、快速定位线上问题；该项目可保守表达为开发和调试效率提升。",
+          "business_capability": "帮助团队更快定位问题并减少重复性本地开发操作。",
+          "technical_capability": "测试自动化、异常路径处理、日志信号、Shell/PowerShell 脚本。",
+          "risk_avoided": "不声称线上监控、SRE、性能优化指标或生产故障响应经验。"
+        }
+      ],
+      "final_bullets": [
+        {
+          "bullet": "开发基于 Java/Android 的角色化活动抽签系统，支持 entrant、organizer 和 admin 围绕活动发现、报名、候补名单、抽签邀请与通知管理完成端到端移动端工作流。",
+          "evidence": "项目摘要；Java 11、Android、XML layouts、RecyclerView、Firebase Auth；role-based onboarding and login；event browsing and waitlist/invitation workflow",
+          "confidence": "high"
+        },
+        {
+          "bullet": "实现组织者活动创建校验逻辑，覆盖报名日期、活动时间、容量、候补限制、地理位置要求和可见性配置，提升活动数据在进入抽签与通知流程前的一致性。",
+          "evidence": "Organizer event creation with validation for registration dates, event time, capacity, waitlist constraints, geolocation requirement, and visibility",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "集成 FreeImageHost API 与 Firestore 配置化密钥管理，为活动海报上传提供可配置的数据流，支持更完整的活动创建与展示能力。",
+          "evidence": "Poster upload integration through FreeImageHost API using a Firestore-configured key; Firebase configuration through app/google-services.json and Firestore app_config documents",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现基于 Firestore app_config/admin_key 的管理员登录校验，并结合角色化 onboarding/login 流程区分 entrant、organizer 和 admin，降低错误角色访问管理功能的风险。",
+          "evidence": "Admin login validation using Firestore app_config/admin_key; role-based onboarding and login for entrant, organizer, and admin personas",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "补充测试自动化、错误处理路径、日志/调试信号和 Shell/PowerShell 脚本化流程，改进团队开发过程中的问题定位和重复性操作处理。",
+          "evidence": "userContributionSignals: added test automation, added error handling path, added logging/debugging signal, added shell or PowerShell automation",
+          "confidence": "high"
+        }
+      ],
+      "skills_to_emphasize": [
+        "Java",
+        "Android",
+        "Firebase Auth",
+        "Firestore",
+        "API 集成",
+        "业务规则校验",
+        "数据一致性",
+        "角色化访问控制",
+        "错误处理",
+        "日志与调试",
+        "测试自动化",
+        "Git/GitHub",
+        "SQL"
+      ],
+      "risks": [
+        "不要声称 AWS、Docker、Jenkins、Kubernetes 或云原生经验，除非另有证据支持。",
+        "不要声称分布式系统、高可用架构、负载均衡、线上监控或生产故障处理经验。",
+        "不要编造性能提升、用户数量、缺陷减少率、测试覆盖率或上线结果。",
+        "SQL 只在 JD 和项目证据中有 seed.sql/prj.db 相关信号，最终 bullet 未强行声称复杂 SQL 实现。",
+        "项目证据包含 Python/backend/api_server.py，但现有项目定位主要是 Android/Java/Firebase；如写入简历需避免让项目技术栈显得不一致。",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance"
+      ],
+      "bullet_writer_validation": {
+        "accepted": false,
+        "issues": [
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+          "lacks a concrete supported tool or method",
+          "lacks a specific implemented function, process, or artifact",
+          "lacks target-role relevance"
+        ],
+        "required_mode": "ReAct: reason why the bullet is factual and worth writing, identify business capability, identify technical signal, then write resume bullets.",
+        "required_pattern": "Use a strong action verb plus concrete technical method, substantive logic/business capability, and result or value. The sentence may use natural phrasing and does not need to force a fixed 'to' template.",
+        "role_family": "software_engineering",
+        "bullet_quality": [
+          {
+            "bullet": "开发基于 Java/Android 的角色化活动抽签系统，支持 entrant、organizer 和 admin 围绕活动发现、报名、候补名单、抽签邀请与通知管理完成端到端移动端工作流。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 80,
+            "specificity_score": 44,
+            "evidence_support_score": 90
+          },
+          {
+            "bullet": "实现组织者活动创建校验逻辑，覆盖报名日期、活动时间、容量、候补限制、地理位置要求和可见性配置，提升活动数据在进入抽签与通知流程前的一致性。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          },
+          {
+            "bullet": "集成 FreeImageHost API 与 Firestore 配置化密钥管理，为活动海报上传提供可配置的数据流，支持更完整的活动创建与展示能力。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          },
+          {
+            "bullet": "实现基于 Firestore app_config/admin_key 的管理员登录校验，并结合角色化 onboarding/login 流程区分 entrant、organizer 和 admin，降低错误角色访问管理功能的风险。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          },
+          {
+            "bullet": "补充测试自动化、错误处理路径、日志/调试信号和 Shell/PowerShell 脚本化流程，改进团队开发过程中的问题定位和重复性操作处理。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          }
+        ],
+        "unsupported_claims": []
+      },
+      "allowed_claims": [
+        "Automated setup or developer workflows with scripts",
+        "Implemented database persistence logic",
+        "Implemented frontend workflow or state handling",
+        "Implemented prompt compression utilities",
+        "... [1 more items truncated]",
+        "Debugged or implemented error handling paths",
+        "Debugged runtime observability or logging behavior",
+        "Implemented backend API handling",
+        "Implemented test automation",
+        "... [3 more items truncated]",
+        "... [2 more items truncated]"
+      ],
+      "forbidden_claims": [
+        "Do not claim AWS work unless other evidence supports it",
+        "Do not claim Docker work unless other evidence supports it",
+        "Do not claim Jenkins work unless other evidence supports it",
+        "Do not claim Kubernetes work unless other evidence supports it",
+        "... [1 more items truncated]"
+      ],
+      "role_profile": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "role_focus": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "resume_strategy": "Emphasize software engineering evidence first, then support it with role-relevant methods, artifacts, and business/workflow value.",
+        "high_priority_keywords": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "low_priority_keywords": [
+          "devops",
+          "infrastructure",
+          "it analyst",
+          "technical support",
+          "business analyst",
+          "product",
+          "qa",
+          "quality assurance",
+          "security",
+          "cybersecurity"
+        ]
+      },
+      "jd_requirements": {
+        "job_title": "",
+        "company": "",
+        "must_have_skills": [
+          "java",
+          "python",
+          "sql",
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "nice_to_have_skills": [],
+        "responsibilities": [],
+        "tools_platforms": [
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "domain_knowledge": [],
+        "soft_skills": [],
+        "repeated_ats_keywords": [],
+        "action_verbs": [],
+        "evidence_types_to_emphasize": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git"
+        ]
+      },
+      "evidence_card": {
+        "name": "Event Lottery System",
+        "type": "project",
+        "technologies": [
+          "Java 11",
+          "Android",
+          "AndroidX",
+          "Material Components",
+          "RecyclerView",
+          "Android Navigation",
+          "Navigation",
+          "XML layouts",
+          "Firebase Firestore",
+          "Firebase Auth",
+          "Firebase Storage",
+          "Firebase Messaging",
+          "Firebase Analytics",
+          "ZXing",
+          "CameraX",
+          "OSMDroid",
+          "OpenStreetMap",
+          "Google location services",
+          "ONNX Runtime Android",
+          "MiniLM semantic embeddings"
+        ],
+        "methods": [
+          "Device-based onboarding and login routes users into entrant, organizer, or admin flows.",
+          "Entrants browse, search, filter, join or leave event waitlists, handle invitations, scan QR codes, manage notifications, update profiles, and view event history.",
+          "Organizers create and manage events, upload posters, manage waitlists, invite entrants, assign co-organizers, run lottery and replacement draws, view maps, moderate comments, and send notifications.",
+          "Admins review and moderate users, organizers, events, comments, and notifications.",
+          "Firestore-backed app data includes users, events, notifications, comments, and app configuration collections.",
+          "Private event access is controlled through waitlist membership, selection/invitation history, or explicit private waitlist invitations.",
+          "Public event links route through a deep-link landing activity while private events are blocked from public landing.",
+          "Firebase configuration is expected through app/google-services.json and Firestore app_config documents for admin key and FreeImageHost API key.",
+          "Build and install workflows use the Gradle wrapper through assembleDebug and installDebug, with Android Studio also supported.",
+          "Unit tests and instrumentation tests cover validators, ranking/filter logic, adapters, models, and entrant/organizer/admin journeys.",
+          "Role-based onboarding and login for entrant, organizer, and admin personas.",
+          "Device-based identity using Android ID.",
+          "Signup flow with validation for details and address.",
+          "Role granting for existing users without duplicating user records.",
+          "Admin login validation using Firestore app_config/admin_key.",
+          "Entrant event browsing with status-aware cards.",
+          "Advanced event filtering by capacity, time availability, and eligibility.",
+          "Hybrid event search using lexical scoring, synonyms, trigram similarity, and on-device MiniLM ONNX semantic ranking.",
+          "Event details page with metadata, poster, organizer name, comments, waitlist actions, invitation actions, and QR dialog.",
+          "QR scanning through CameraX with gallery image decode fallback."
+        ],
+        "features": [
+          "Role-based onboarding and login for entrant, organizer, and admin personas.",
+          "Device-based identity using Android ID.",
+          "Signup flow with validation for details and address.",
+          "Role granting for existing users without duplicating user records.",
+          "Admin login validation using Firestore app_config/admin_key.",
+          "Entrant event browsing with status-aware cards.",
+          "Advanced event filtering by capacity, time availability, and eligibility.",
+          "Hybrid event search using lexical scoring, synonyms, trigram similarity, and on-device MiniLM ONNX semantic ranking.",
+          "Event details page with metadata, poster, organizer name, comments, waitlist actions, invitation actions, and QR dialog.",
+          "QR scanning through CameraX with gallery image decode fallback.",
+          "Notification inbox with read, confirm, and decline state transitions.",
+          "Profile management with editable fields, validation, notification preference toggle, auto-login toggle, and entrant role cleanup.",
+          "Event participation history view.",
+          "Organizer home with owned and co-organized event visibility.",
+          "Organizer event creation with validation for registration dates, event time, capacity, waitlist constraints, geolocation requirement, and visibility.",
+          "Poster upload integration through FreeImageHost API using a Firestore-configured key.",
+          "Waitlist management with entrant search, removal, selected invitations, private-event invitation flow, and co-organizer assignment.",
+          "Lottery flows for drawing winners, persisting invitation history, sending notifications, replacement draws, and auto-refill helper.",
+          "Organizer event details and comment moderation view.",
+          "Organizer event map using OSMDroid/OpenStreetMap to visualize entrant geolocation pins."
+        ],
+        "artifacts": [
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEventDetailsActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantInvitedListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerInvitedEntrantAdapter.java",
+          "... [8 more items truncated]",
+          "backend/api_server.py",
+          "frontend/src/agentProgress/AgentProgressContext.jsx",
+          "frontend/src/agentProgress/AgentProgressModal.jsx",
+          "frontend/src/index.css",
+          "... [6 more items truncated]",
+          "seed.sql",
+          "prj.db",
+          "LLM.md",
+          "README.md",
+          "... [4 more items truncated]"
+        ],
+        "data_or_scale": [],
+        "collaboration_signals": [],
+        "testing_signals": [
+          "added test automation"
+        ],
+        "debugging_signals": [
+          "added error handling path",
+          "added logging/debugging signal"
+        ],
+        "documentation_signals": [],
+        "automation_signals": [
+          "added shell or PowerShell automation",
+          "added test automation"
+        ],
+        "business_or_user_value": [
+          "Provides one mobile workflow for discovering events, managing waitlists and invitations, running organizer lotteries, sending notifications, supporting event maps, handling public/private event access, and moderating users/events.",
+          "Event participation requires coordinated registration, waitlist management, lottery selection, invitations, notifications, event visibility controls, geolocation handling, and administrative oversight.",
+          "Role-based Android event platform for entrants, organizers, and admins."
+        ],
+        "inferred_results": [
+          "Reduced repeated work by reusing cached or unchanged evidence paths; no specific latency/QPS metric is verified.",
+          "Improved retrieval or matching path with structured lookup/ranking logic; no exact request-speed metric is verified.",
+          "Improved reliability and recovery paths through validation, retry/fallback, cancellation, or error handling; no exact error-rate metric is verified.",
+          "Reduced prompt/context overhead through compression or scoped payload construction; no exact cost/token saving is verified.",
+          "Reduced repetitive manual steps by automating the workflow; no exact time saving is verified."
+        ],
+        "source_refs": [
+          "https://github.com/liammaxp/Event-Lottery-System-Application",
+          "liammaxp/Event-Lottery-System-Application",
+          "https://github.com/liammaxp/WorkAgent",
+          "liammaxp/WorkAgent",
+          "https://github.com/liammaxp/Course-Management-Database-System",
+          "liammaxp/Course-Management-Database-System"
+        ],
+        "confidence": "high",
+        "allowed_claims": [
+          "Automated setup or developer workflows with scripts",
+          "Implemented database persistence logic",
+          "Implemented frontend workflow or state handling",
+          "Implemented prompt compression utilities",
+          "... [1 more items truncated]",
+          "Debugged or implemented error handling paths",
+          "Debugged runtime observability or logging behavior",
+          "Implemented backend API handling",
+          "Implemented test automation",
+          "... [3 more items truncated]",
+          "... [2 more items truncated]"
+        ],
+        "forbidden_claims": [
+          "Do not claim AWS work unless other evidence supports it",
+          "Do not claim Docker work unless other evidence supports it",
+          "Do not claim Jenkins work unless other evidence supports it",
+          "Do not claim Kubernetes work unless other evidence supports it",
+          "... [1 more items truncated]"
+        ]
+      },
+      "role_lens": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "lens_terms": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git",
+          "sql",
+          "reporting",
+          "metrics",
+          "records",
+          "analysis",
+          "kpi"
+        ],
+        "ranked_evidence_priorities": [
+          "Poster upload integration through FreeImageHost API using a Firestore-configured key.",
+          "Admin login validation using Firestore app_config/admin_key.",
+          "Firebase configuration is expected through app/google-services.json and Firestore app_config documents for admin key and FreeImageHost API key.",
+          "Organizer event creation with validation for registration dates, event time, capacity, waitlist constraints, geolocation requirement, and visibility.",
+          "Profile management with editable fields, validation, notification preference toggle, auto-login toggle, and entrant role cleanup.",
+          "Role granting for existing users without duplicating user records.",
+          "Signup flow with validation for details and address."
+        ],
+        "bullet_guidance": "Use the highest-ranked evidence priorities first. Emphasize method + implemented function/process + role-specific value, while respecting allowed/forbidden claims."
+      },
+      "project_id": "event_lottery_system",
+      "project_name": "Event Lottery System",
+      "fit": "medium",
+      "keep_or_replace": "update",
+      "fit_reason": "该项目与软件工程岗位的 Java、后端 API、数据建模、前后端集成、输入校验、调试和团队开发效率要求较匹配；可重点突出 Android/Java 实现、Firebase 数据操作、API 集成、角色权限与业务流程校验，但不应夸大为高并发、分布式、云原生或线上基础设施经验。",
+      "recommended_bullets": [
+        {
+          "bullet": "开发基于 Java/Android 的角色化活动抽签系统，支持 entrant、organizer 和 admin 围绕活动发现、报名、候补名单、抽签邀请与通知管理完成端到端移动端工作流。",
+          "evidence": "项目摘要；Java 11、Android、XML layouts、RecyclerView、Firebase Auth；role-based onboarding and login；event browsing and waitlist/invitation workflow",
+          "confidence": "high"
+        },
+        {
+          "bullet": "实现组织者活动创建校验逻辑，覆盖报名日期、活动时间、容量、候补限制、地理位置要求和可见性配置，提升活动数据在进入抽签与通知流程前的一致性。",
+          "evidence": "Organizer event creation with validation for registration dates, event time, capacity, waitlist constraints, geolocation requirement, and visibility",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "集成 FreeImageHost API 与 Firestore 配置化密钥管理，为活动海报上传提供可配置的数据流，支持更完整的活动创建与展示能力。",
+          "evidence": "Poster upload integration through FreeImageHost API using a Firestore-configured key; Firebase configuration through app/google-services.json and Firestore app_config documents",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现基于 Firestore app_config/admin_key 的管理员登录校验，并结合角色化 onboarding/login 流程区分 entrant、organizer 和 admin，降低错误角色访问管理功能的风险。",
+          "evidence": "Admin login validation using Firestore app_config/admin_key; role-based onboarding and login for entrant, organizer, and admin personas",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "补充测试自动化、错误处理路径、日志/调试信号和 Shell/PowerShell 脚本化流程，改进团队开发过程中的问题定位和重复性操作处理。",
+          "evidence": "userContributionSignals: added test automation, added error handling path, added logging/debugging signal, added shell or PowerShell automation",
+          "confidence": "high"
+        }
+      ]
+    },
+    "error": "",
+    "created_at": "2026-07-01T19:03:19",
+    "updated_at": "2026-07-01T19:03:19"
+  },
+  "229d12f78852c962116ba2327a06a6d2ff6a4d9cd3931e9493ce151c0f6c57c7": {
+    "id": "229d12f78852c962116ba2327a06a6d2ff6a4d9cd3931e9493ce151c0f6c57c7",
+    "stage": "project_resume_candidate",
+    "project_name": "Course Management Database System",
+    "status": "done",
+    "output_json": {
+      "section_type": "project",
+      "source_name": "Course Management Database System",
+      "job_alignment": "该项目与软件工程/后端开发岗位有较强相关性，重点匹配 Python、SQL、数据库系统、数据模型、业务流程实现、数据校验和模块化代码组织。与岗位中的 Java/C++、网络编程、分布式系统、云原生和线上监控优化匹配较弱，因此应作为数据库与后端基础能力项目呈现。",
+      "star_analysis": [
+        {
+          "candidate_fact": "Python-based database coursework project with SQL schema, demo data, and modular application source code for authentication, admin, instructor workflows, database connection, main entry flow, and utilities.",
+          "situation": "课程管理场景需要结构化的数据模型和应用流程来支持管理员、教师等角色与数据库交互。",
+          "task": "构建一个数据库驱动的课程管理系统，覆盖数据库连接、认证、管理端和教师端等核心流程。",
+          "action": "使用 Python 组织认证、管理、教师、数据库连接、主流程和工具模块，并结合 SQL schema 与 demo data 支撑数据存储和交互。",
+          "result": "形成了一个模块化的数据库课程项目，能够展示后端流程实现、数据库建模和应用层与数据层集成能力。",
+          "missing_star_fields": [
+            "未提供量化性能指标",
+            "未提供用户数量或实际部署结果",
+            "未提供线上可用性或稳定性数据"
+          ],
+          "evidence_source": "prj.db, LLM.md, seed.sql, README.md, project_memory.json"
+        },
+        {
+          "candidate_fact": "Implemented data validation logic.",
+          "situation": "课程管理数据涉及课程、学生、成绩、支付或证书资格等信息，需要减少无效输入对数据库状态的影响。",
+          "task": "在数据库交互流程中加入数据校验，提升业务操作的可靠性。",
+          "action": "实现数据 validation 或 schema handling 相关逻辑，用于约束应用流程中的数据写入和更新。",
+          "result": "增强了数据库操作的准确性和一致性，降低了无效数据进入业务流程的风险。",
+          "missing_star_fields": [
+            "未提供具体校验规则列表",
+            "未提供错误率降低等量化结果",
+            "未提供测试覆盖率"
+          ],
+          "evidence_source": "prj.db, LLM.md, seed.sql, README.md"
+        },
+        {
+          "candidate_fact": "Developed course update logic to modify price, pass grade, and maximum enrollment while recalculating student certificate eligibility.",
+          "situation": "课程配置变更会影响学生报名限制、成绩要求和证书资格等后续业务状态。",
+          "task": "支持管理员或相关角色更新课程关键字段，并保持关联业务状态一致。",
+          "action": "开发课程更新逻辑，处理价格、及格线、最大报名人数等字段变更，并重新计算学生证书资格。",
+          "result": "支持了更完整的课程管理工作流，使课程配置变更能够同步反映到相关学生状态中。",
+          "missing_star_fields": [
+            "未提供涉及的数据表名称",
+            "未提供事务处理或并发控制证据",
+            "未提供量化业务影响"
+          ],
+          "evidence_source": "existing_resume_snippet"
+        },
+        {
+          "candidate_fact": "Built SQL queries for course statistics, including active enrollment, completion rate, average final grade, top courses, and payment counts.",
+          "situation": "课程管理系统需要通过统计查询了解课程参与、完成、成绩和支付等数据。",
+          "task": "编写 SQL 查询支持课程统计和管理决策相关数据展示。",
+          "action": "构建 SQL 查询以计算活跃报名、完成率、平均最终成绩、热门课程和支付次数等统计信息。",
+          "result": "为课程管理流程提供了可查询的数据视图，展示了 SQL 聚合、筛选和业务数据分析能力。",
+          "missing_star_fields": [
+            "未提供查询优化指标",
+            "未提供具体 SQL 文件或查询数量",
+            "未提供报表或前端展示证据"
+          ],
+          "evidence_source": "existing_resume_snippet"
+        }
+      ],
+      "react_analysis": [
+        {
+          "candidate_fact": "Python-based database coursework project with SQL schema, demo data, and modular application source code for authentication, admin, instructor workflows, database connection, main entry flow, and utilities.",
+          "why_writable": "该事实由项目摘要、安全声明和证据来源支持，适合作为项目第一条概述性 bullet。",
+          "why_it_belongs": "岗位强调扎实编程能力、数据库系统和产品功能实现，该项目直接展示 Python、SQL 和后端业务流程实现。",
+          "business_capability": "支持课程管理中的认证、管理员和教师工作流，体现将业务需求转化为可执行系统流程的能力。",
+          "technical_capability": "体现模块化 Python 代码组织、SQL schema、demo data、数据库连接和应用层集成。",
+          "risk_avoided": "不声称生产部署、高并发、分布式架构、云原生或线上服务稳定性。"
+        },
+        {
+          "candidate_fact": "Implemented data validation logic.",
+          "why_writable": "该事实被标记为 high confidence 且 safeForResume，可以用于强调可靠性和数据质量。",
+          "why_it_belongs": "岗位要求实现并优化产品功能、提升代码质量；数据校验体现对业务规则和系统可靠性的关注。",
+          "business_capability": "减少无效课程或学生相关数据进入管理流程，支持更可靠的课程操作。",
+          "technical_capability": "体现 validation、schema handling 和数据库写入前的数据约束意识。",
+          "risk_avoided": "不夸大为完整安全体系、自动化测试框架或生产级数据治理。"
+        },
+        {
+          "candidate_fact": "Developed course update logic to modify price, pass grade, and maximum enrollment while recalculating student certificate eligibility.",
+          "why_writable": "来自现有简历片段，具体描述了业务字段和关联状态更新，适合保留并优化表达。",
+          "why_it_belongs": "岗位强调深入理解业务需求并实现产品功能，该事实展示了业务规则变更和数据一致性处理。",
+          "business_capability": "支持课程配置维护，并让课程更新影响证书资格等后续流程。",
+          "technical_capability": "体现 Python/SQLite 应用逻辑、数据库更新流程和关联数据重计算。",
+          "risk_avoided": "不声称复杂事务、并发控制或自动化规则引擎，避免超出证据。"
+        },
+        {
+          "candidate_fact": "Built SQL queries for course statistics, including active enrollment, completion rate, average final grade, top courses, and payment counts.",
+          "why_writable": "来自现有简历片段，具体列出了统计维度，能展示 SQL 和数据分析能力。",
+          "why_it_belongs": "岗位要求了解 MySQL/SQL 语言和数据库系统，该 bullet 强化 SQL 查询与业务数据能力。",
+          "business_capability": "为课程运营和管理提供报名、完成、成绩、课程热度和支付相关统计视角。",
+          "technical_capability": "体现 SQL 聚合、统计查询和数据库读取能力。",
+          "risk_avoided": "不声称查询优化、BI 报表系统或真实商业决策影响。"
+        }
+      ],
+      "final_bullets": [
+        {
+          "bullet": "使用 Python、SQLite 和 SQL 构建课程管理数据库系统，围绕认证、管理员、教师和数据库连接模块组织代码，支持课程数据的结构化管理与业务流程交互。",
+          "evidence": "Python-based database coursework project; SQL schema; demo data; modular source code for authentication, admin, instructor workflows, database connection, main flow, and utilities.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现课程更新逻辑，处理价格、及格线和最大报名人数等字段变更，并同步重新计算学生证书资格，提升课程配置变更后的数据一致性。",
+          "evidence": "existing_resume_snippet: developed course update logic to modify price, pass grade, maximum enrollment, and recalculate student certificate eligibility.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "编写 SQL 统计查询，支持活跃报名、完成率、平均最终成绩、热门课程和支付次数等课程指标分析，为管理端工作流提供可查询的数据视图。",
+          "evidence": "existing_resume_snippet: built SQL queries for course statistics including active enrollment, completion rate, average final grade, top courses, and payment counts.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现数据校验逻辑并结合 schema handling 约束数据库操作，减少无效输入对课程管理流程和数据状态的影响。",
+          "evidence": "safe claim: Implemented data validation logic; user contribution signal: added data validation or schema handling.",
+          "confidence": "high"
+        }
+      ],
+      "skills_to_emphasize": [
+        "Python",
+        "SQL",
+        "SQLite",
+        "数据库系统",
+        "数据模型",
+        "数据校验",
+        "后端业务逻辑",
+        "模块化代码组织",
+        "数据库连接",
+        "课程管理工作流",
+        "Git"
+      ],
+      "risks": [
+        "不要声称 MySQL、NoSQL、TCP/UDP 网络编程、进程间通信或分布式系统经验，除非另有证据。",
+        "不要声称线上部署、线上问题排查、服务监控、性能优化或高可用系统经验。",
+        "不要加入 AWS、Docker、Jenkins、Kubernetes 或云原生相关内容。",
+        "不要编造性能提升、查询优化百分比、用户数量、部署规模或业务收益指标。",
+        "Java 出现在技术栈中但当前项目核心证据主要支持 Python、SQL 和 SQLite，简历 bullet 应优先突出有证据的技术。",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+        "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance",
+        "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+        "lacks a concrete supported tool or method",
+        "lacks a specific implemented function, process, or artifact",
+        "lacks target-role relevance"
+      ],
+      "bullet_writer_validation": {
+        "accepted": false,
+        "issues": [
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet technical method must name a concrete implementation method, algorithm, data flow, or debugging approach; a technology stack alone is not enough.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "Bullet must start with one of: Used, Implemented, Automated, Debugged.",
+          "Bullet must describe a substantive logic, workflow, or business capability and its value; do not describe only broad modules or UI features.",
+          "does not include at least 3 of method/tool, function, challenge, value, and role keyword",
+          "lacks a concrete supported tool or method",
+          "lacks a specific implemented function, process, or artifact",
+          "lacks target-role relevance"
+        ],
+        "required_mode": "ReAct: reason why the bullet is factual and worth writing, identify business capability, identify technical signal, then write resume bullets.",
+        "required_pattern": "Use a strong action verb plus concrete technical method, substantive logic/business capability, and result or value. The sentence may use natural phrasing and does not need to force a fixed 'to' template.",
+        "role_family": "software_engineering",
+        "bullet_quality": [
+          {
+            "bullet": "使用 Python、SQLite 和 SQL 构建课程管理数据库系统，围绕认证、管理员、教师和数据库连接模块组织代码，支持课程数据的结构化管理与业务流程交互。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 80,
+            "specificity_score": 44,
+            "evidence_support_score": 90
+          },
+          {
+            "bullet": "实现课程更新逻辑，处理价格、及格线和最大报名人数等字段变更，并同步重新计算学生证书资格，提升课程配置变更后的数据一致性。",
+            "is_strong": false,
+            "issues": [
+              "lacks a concrete supported tool or method",
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 0,
+            "evidence_support_score": 65
+          },
+          {
+            "bullet": "编写 SQL 统计查询，支持活跃报名、完成率、平均最终成绩、热门课程和支付次数等课程指标分析，为管理端工作流提供可查询的数据视图。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 80,
+            "specificity_score": 44,
+            "evidence_support_score": 90
+          },
+          {
+            "bullet": "实现数据校验逻辑并结合 schema handling 约束数据库操作，减少无效输入对课程管理流程和数据状态的影响。",
+            "is_strong": false,
+            "issues": [
+              "lacks a specific implemented function, process, or artifact",
+              "lacks target-role relevance",
+              "does not include at least 3 of method/tool, function, challenge, value, and role keyword"
+            ],
+            "suggested_fix": "Add a supported method/tool, implemented function, and role-specific value grounded in the evidence card.",
+            "unsupported_claims": [],
+            "jd_alignment_score": 45,
+            "specificity_score": 22,
+            "evidence_support_score": 90
+          }
+        ],
+        "unsupported_claims": []
+      },
+      "allowed_claims": [
+        "Debugged or implemented error handling paths",
+        "Debugged runtime observability or logging behavior",
+        "Implemented data validation logic",
+        "Implemented database persistence logic",
+        "... [3 more items truncated]",
+        "Implemented frontend workflow or state handling",
+        "... [2 more items truncated]",
+        "Automated setup or developer workflows with scripts",
+        "Implemented prompt compression utilities",
+        "... [1 more items truncated]"
+      ],
+      "forbidden_claims": [
+        "Do not claim AWS work unless other evidence supports it",
+        "Do not claim Docker work unless other evidence supports it",
+        "Do not claim Jenkins work unless other evidence supports it",
+        "Do not claim Kubernetes work unless other evidence supports it",
+        "... [1 more items truncated]"
+      ],
+      "role_profile": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "role_focus": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "resume_strategy": "Emphasize software engineering evidence first, then support it with role-relevant methods, artifacts, and business/workflow value.",
+        "high_priority_keywords": [
+          "java",
+          "python",
+          "sql"
+        ],
+        "low_priority_keywords": [
+          "devops",
+          "infrastructure",
+          "it analyst",
+          "technical support",
+          "business analyst",
+          "product",
+          "qa",
+          "quality assurance",
+          "security",
+          "cybersecurity"
+        ]
+      },
+      "jd_requirements": {
+        "job_title": "",
+        "company": "",
+        "must_have_skills": [
+          "java",
+          "python",
+          "sql",
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "nice_to_have_skills": [],
+        "responsibilities": [],
+        "tools_platforms": [
+          "Python",
+          "Java",
+          "SQL"
+        ],
+        "domain_knowledge": [],
+        "soft_skills": [],
+        "repeated_ats_keywords": [],
+        "action_verbs": [],
+        "evidence_types_to_emphasize": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git"
+        ]
+      },
+      "evidence_card": {
+        "name": "Course Management Database System",
+        "type": "project",
+        "technologies": [
+          "Python",
+          "SQL",
+          "SQLite/database files",
+          "Git",
+          "Java",
+          "JavaScript",
+          "Gradle",
+          "PowerShell"
+        ],
+        "methods": [
+          "Use SQL schema and demo data files to define and populate the database.",
+          "Run Python source modules under src to interact with the database application.",
+          "Use modular Python files for authentication, admin, instructor, database connection, main flow, and utility code areas.",
+          "Use design documentation to explain the database/project structure.",
+          "SQL database schema file is included.",
+          "Demo data SQL file is included.",
+          "Design document PDF is included.",
+          "Python source directory is included.",
+          "Python source evidence references src/admin.py, src/auth.py, src/db.py, src/instructor.py, src/main.py, and src/utils.py.",
+          "Application code areas include authentication/authorization, admin workflows, instructor workflows, database connection, main entry flow, and utilities.",
+          "LLM.md documentation file is included at repository root.",
+          "README identifies the project as CMPUT 291 Project 1, Winter 2026, with group members including Liam Peng.",
+          "LLM.md documents project breakdown and implementation steps.",
+          "added data validation or schema handling",
+          "added database persistence logic",
+          "added error handling path",
+          "added logging/debugging signal",
+          "... [16 more items truncated]",
+          "... [7 more items truncated]",
+          "added frontend workflow or state handling"
+        ],
+        "features": [
+          "SQL database schema file is included.",
+          "Demo data SQL file is included.",
+          "Design document PDF is included.",
+          "Python source directory is included.",
+          "Python source evidence references src/admin.py, src/auth.py, src/db.py, src/instructor.py, src/main.py, and src/utils.py.",
+          "Application code areas include authentication/authorization, admin workflows, instructor workflows, database connection, main entry flow, and utilities.",
+          "LLM.md documentation file is included at repository root.",
+          "README identifies the project as CMPUT 291 Project 1, Winter 2026, with group members including Liam Peng.",
+          "LLM.md documents project breakdown and implementation steps."
+        ],
+        "artifacts": [
+          "README.md",
+          "src/__pycache__/add_ops.cpython-313.pyc",
+          "src/__pycache__/category_ops.cpython-313.pyc",
+          "src/__pycache__/db_utils.cpython-313.pyc",
+          "... [8 more items truncated]",
+          "seed.sql",
+          "prj.db",
+          "LLM.md",
+          "... [4 more items truncated]",
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEventDetailsActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerEntrantInvitedListActivity.java",
+          "app/src/main/java/com/example/wecookproject/OrganizerInvitedEntrantAdapter.java"
+        ],
+        "data_or_scale": [],
+        "collaboration_signals": [],
+        "testing_signals": [],
+        "debugging_signals": [
+          "added error handling path",
+          "added logging/debugging signal"
+        ],
+        "documentation_signals": [],
+        "automation_signals": [
+          "added shell or PowerShell automation"
+        ],
+        "business_or_user_value": [
+          "Provides a database-backed coursework application with schema definition, demo data, design documentation, and Python source organization.",
+          "Course management data needs structured schema design, seeded data, and application workflows for interacting with the database.",
+          "Python-based database coursework project with SQL schema, demo data, and modular application source code for authentication, admin, instructor workflows, database connection, main entry flow, and utilities."
+        ],
+        "inferred_results": [
+          "Reduced repeated work by reusing cached or unchanged evidence paths; no specific latency/QPS metric is verified.",
+          "Improved retrieval or matching path with structured lookup/ranking logic; no exact request-speed metric is verified.",
+          "Improved reliability and recovery paths through validation, retry/fallback, cancellation, or error handling; no exact error-rate metric is verified.",
+          "Reduced prompt/context overhead through compression or scoped payload construction; no exact cost/token saving is verified.",
+          "Reduced repetitive manual steps by automating the workflow; no exact time saving is verified."
+        ],
+        "source_refs": [
+          "https://github.com/liammaxp/Furniture-Search-and-Inventory-System",
+          "liammaxp/Furniture-Search-and-Inventory-System",
+          "https://github.com/liammaxp/Course-Management-Database-System",
+          "liammaxp/Course-Management-Database-System",
+          "https://github.com/liammaxp/Event-Lottery-System-Application",
+          "liammaxp/Event-Lottery-System-Application"
+        ],
+        "confidence": "high",
+        "allowed_claims": [
+          "Debugged or implemented error handling paths",
+          "Debugged runtime observability or logging behavior",
+          "Implemented data validation logic",
+          "Implemented database persistence logic",
+          "... [3 more items truncated]",
+          "Implemented frontend workflow or state handling",
+          "... [2 more items truncated]",
+          "Automated setup or developer workflows with scripts",
+          "Implemented prompt compression utilities",
+          "... [1 more items truncated]"
+        ],
+        "forbidden_claims": [
+          "Do not claim AWS work unless other evidence supports it",
+          "Do not claim Docker work unless other evidence supports it",
+          "Do not claim Jenkins work unless other evidence supports it",
+          "Do not claim Kubernetes work unless other evidence supports it",
+          "... [1 more items truncated]"
+        ]
+      },
+      "role_lens": {
+        "role_family": "software_engineering",
+        "secondary_role_families": [
+          "data_analyst"
+        ],
+        "lens_terms": [
+          "api",
+          "data model",
+          "backend",
+          "frontend",
+          "integration",
+          "validation",
+          "testing",
+          "git",
+          "sql",
+          "reporting",
+          "metrics",
+          "records",
+          "analysis",
+          "kpi"
+        ],
+        "ranked_evidence_priorities": [
+          "added data validation or schema handling",
+          "added frontend workflow or state handling",
+          "Demo data SQL file is included.",
+          "Git",
+          "Python-based database coursework project with SQL schema, demo data, and modular application source code for authentication, admin, instructor workflows, database connection, main entry flow, and utilities.",
+          "SQL",
+          "SQL database schema file is included.",
+          "SQLite/database files",
+          "Use SQL schema and demo data files to define and populate the database."
+        ],
+        "bullet_guidance": "Use the highest-ranked evidence priorities first. Emphasize method + implemented function/process + role-specific value, while respecting allowed/forbidden claims."
+      },
+      "project_id": "course_management_database",
+      "project_name": "Course Management Database System",
+      "fit": "medium",
+      "keep_or_replace": "update",
+      "fit_reason": "该项目与软件工程/后端开发岗位有较强相关性，重点匹配 Python、SQL、数据库系统、数据模型、业务流程实现、数据校验和模块化代码组织。与岗位中的 Java/C++、网络编程、分布式系统、云原生和线上监控优化匹配较弱，因此应作为数据库与后端基础能力项目呈现。",
+      "recommended_bullets": [
+        {
+          "bullet": "使用 Python、SQLite 和 SQL 构建课程管理数据库系统，围绕认证、管理员、教师和数据库连接模块组织代码，支持课程数据的结构化管理与业务流程交互。",
+          "evidence": "Python-based database coursework project; SQL schema; demo data; modular source code for authentication, admin, instructor workflows, database connection, main flow, and utilities.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现课程更新逻辑，处理价格、及格线和最大报名人数等字段变更，并同步重新计算学生证书资格，提升课程配置变更后的数据一致性。",
+          "evidence": "existing_resume_snippet: developed course update logic to modify price, pass grade, maximum enrollment, and recalculate student certificate eligibility.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "编写 SQL 统计查询，支持活跃报名、完成率、平均最终成绩、热门课程和支付次数等课程指标分析，为管理端工作流提供可查询的数据视图。",
+          "evidence": "existing_resume_snippet: built SQL queries for course statistics including active enrollment, completion rate, average final grade, top courses, and payment counts.",
+          "confidence": "medium"
+        },
+        {
+          "bullet": "实现数据校验逻辑并结合 schema handling 约束数据库操作，减少无效输入对课程管理流程和数据状态的影响。",
+          "evidence": "safe claim: Implemented data validation logic; user contribution signal: added data validation or schema handling.",
+          "confidence": "high"
+        }
+      ]
+    },
+    "error": "",
+    "created_at": "2026-07-01T19:04:47",
+    "updated_at": "2026-07-01T19:04:47"
+  }
+}
