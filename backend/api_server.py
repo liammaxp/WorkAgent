@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -19,7 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -311,6 +312,7 @@ PROJECT_COMPACT_FACTS_PATH = agent.INFORMATION_DIR / "project_compact_facts.json
 CHUNK_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "agent_chunk_checkpoints.json"
 RESUME_CANDIDATE_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "resume_candidate_checkpoints.json"
 MODEL_FAILURE_LOG_DIR = agent.ROOT_DIR / "logs" / "model_failures"
+TECH_STACK_DB_PATH = agent.APPLICATION_DB_PATH
 
 
 class ProviderBody(BaseModel):
@@ -5412,6 +5414,8 @@ def compact_project_for_prompt(project: dict[str, Any]) -> dict[str, Any]:
         "project_name": project.get("project_name") or project.get("name"),
         "identity": project.get("identity", {}),
         "tech_stack": project.get("tech_stack", []),
+        "tools": project.get("tools", []),
+        "coursework": project.get("coursework", []),
         "workflows": project.get("workflows", []),
         "confirmed_features": project.get("confirmed_features", []),
         "real_metrics": project.get("real_metrics", {}),
@@ -6526,13 +6530,66 @@ def build_project_resume_candidate(
 
 
 SKILL_CATEGORY_KEYWORDS = {
-    "Languages": ["Python", "Java", "JavaScript", "TypeScript", "SQL", "HTML", "CSS", "PowerShell", "Shell", "Bash"],
+    "Languages": [
+        "Python",
+        "Java",
+        "JavaScript",
+        "TypeScript",
+        "SQL",
+        "C",
+        "C++",
+        "C#",
+        "HTML",
+        "CSS",
+        "PowerShell",
+        "Shell scripting",
+        "Shell",
+        "Bash",
+    ],
     "Backend / API": ["FastAPI", "Flask", "Django", "Node.js", "Express", "REST", "API", "OpenAI API", "GitHub API"],
     "Frontend / UI": ["React", "React.js", "Vite", "Electron", "HTML", "CSS", "JavaScript", "TypeScript"],
-    "Database / Storage": ["SQLite", "better-sqlite3", "PostgreSQL", "MySQL", "MongoDB", "Chroma", "vector store"],
-    "Cloud / DevOps / Infrastructure": ["Docker", "Kubernetes", "Terraform", "AWS", "Azure", "Linux", "CI/CD", "GitHub Actions", "Jenkins"],
-    "AI / Automation": ["RAG", "embedding", "embeddings", "LLM", "OpenAI", "prompt", "chunking", "Map-Reduce", "automation", "batch", "cache"],
-    "Testing / Quality": ["pytest", "unittest", "Playwright", "Cypress", "Selenium", "validation", "QA", "testing"],
+    "Mobile / Game": ["Android", "Android Studio", "Gradle", "Espresso", "Unity", "Firebase Auth", "Firebase Messaging"],
+    "Database / Storage": [
+        "SQLite",
+        "better-sqlite3",
+        "PostgreSQL",
+        "MySQL",
+        "MongoDB",
+        "Firebase Firestore",
+        "Firestore",
+        "Chroma",
+        "vector store",
+        "Redis",
+    ],
+    "Cloud / DevOps / Infrastructure": [
+        "Docker",
+        "Kubernetes",
+        "Terraform",
+        "AWS",
+        "Azure",
+        "Linux",
+        "Unix",
+        "CI/CD",
+        "GitHub Actions",
+        "Jenkins",
+        "Microsoft 365",
+    ],
+    "AI / Automation": [
+        "RAG",
+        "embedding",
+        "embeddings",
+        "LLM",
+        "OpenAI",
+        "prompt",
+        "chunking",
+        "Map-Reduce",
+        "automation",
+        "batch",
+        "cache",
+    ],
+    "Testing / Quality": ["pytest", "unittest", "Playwright", "Cypress", "Selenium", "Espresso", "validation", "QA", "testing"],
+    "Data / Reporting": ["Excel", "Power BI", "Tableau", "reporting", "data analysis", "data validation"],
+    "Tools / Workflow": ["Git/GitHub", "Git", "GitHub", "Android Studio", "Gradle", "Maven", "requirements", "documentation"],
     "Collaboration / Documentation": ["documentation", "communication", "collaboration", "stakeholder", "requirements", "reporting"],
 }
 
@@ -6542,12 +6599,27 @@ SKILL_ALIASES = {
     "reactjs": "React",
     "sqlite3": "SQLite",
     "better-sqlite3": "SQLite",
+    "firestore": "Firebase Firestore",
+    "firebase firestore": "Firebase Firestore",
+    "firebase authentication": "Firebase Auth",
+    "firebase cloud messaging": "Firebase Messaging",
     "github integration": "GitHub API",
     "github api": "GitHub API",
+    "github": "Git/GitHub",
+    "git": "Git/GitHub",
+    "git/github": "Git/GitHub",
     "openai api": "OpenAI API",
     "embeddings": "embedding",
     "maps-reduce": "Map-Reduce",
     "map reduce": "Map-Reduce",
+    "shell": "Shell scripting",
+    "bash": "Shell scripting",
+    "powershell fundamentals": "PowerShell",
+    "azure fundamentals": "Azure",
+    "microsoft 365 familiarity": "Microsoft 365",
+    "docker basics": "Docker",
+    "kubernetes concepts": "Kubernetes",
+    "ci/cd concepts": "CI/CD",
 }
 
 
@@ -6560,13 +6632,108 @@ def canonical_skill_name(value: Any) -> str:
     return alias or normalized
 
 
-def skill_category(skill: str) -> str:
+def base_skill_category(skill: str) -> str:
     lower = skill.lower()
     for category, keywords in SKILL_CATEGORY_KEYWORDS.items():
         for keyword in keywords:
-            if keyword.lower() == lower or keyword.lower() in lower:
+            keyword_lower = keyword.lower()
+            if keyword_lower == lower or (len(keyword_lower) > 2 and keyword_lower in lower):
                 return category
     return "Tools / Methods"
+
+
+ROLE_TECHNICAL_SKILL_CATEGORIES = {
+    "software_engineering": ["Languages", "Backend & Web", "Databases", "Testing & Build", "Tools & Workflow"],
+    "it_analyst": [
+        "Languages & Scripting",
+        "Application & Automation",
+        "Tools & Workflow",
+        "Troubleshooting & Documentation",
+        "Cloud / Microsoft Fundamentals",
+    ],
+    "infrastructure_devops": [
+        "Languages & Scripting",
+        "Cloud & Infrastructure",
+        "Containers & Orchestration",
+        "CI/CD & Build",
+        "Monitoring & Debugging",
+        "Tools & Workflow",
+    ],
+    "data_analyst": ["Languages & Querying", "Databases", "Data Analysis", "Reporting & Visualization", "Tools & Workflow"],
+    "product_business_analyst": ["Analysis & Documentation", "Technical Tools", "Data & Reporting", "Collaboration & Workflow"],
+}
+
+
+CAUTIOUS_SKILL_WORDING = {
+    "AWS": "AWS fundamentals",
+    "Azure": "Azure fundamentals",
+    "Microsoft 365": "Microsoft 365 familiarity",
+    "Docker": "Docker basics",
+    "Kubernetes": "Kubernetes concepts",
+    "Terraform": "Terraform concepts",
+    "Jenkins": "Jenkins concepts",
+    "CI/CD": "CI/CD concepts",
+    "PowerShell": "PowerShell fundamentals",
+    "Power BI": "Power BI familiarity",
+}
+
+
+WEAK_SKILL_SOURCE_LABELS = {"user_memory", "coursework", "prior_resume_versions", "jd_keywords"}
+
+
+def skill_category(skill: str, role_family: str = "") -> str:
+    base = base_skill_category(skill)
+    lower = skill.lower()
+    role = role_family or "software_engineering"
+    if role == "it_analyst":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if base in {"Backend / API", "Frontend / UI", "AI / Automation", "Mobile / Game"}:
+            return "Application & Automation"
+        if lower in {"azure", "microsoft 365", "aws", "docker", "kubernetes", "ci/cd"}:
+            return "Cloud / Microsoft Fundamentals"
+        if base in {"Testing / Quality", "Collaboration / Documentation"} or any(term in lower for term in ["troubleshoot", "documentation", "requirements"]):
+            return "Troubleshooting & Documentation"
+        return "Tools & Workflow"
+    if role == "infrastructure_devops":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if lower in {"aws", "azure", "linux", "unix", "terraform"}:
+            return "Cloud & Infrastructure"
+        if lower in {"docker", "kubernetes"}:
+            return "Containers & Orchestration"
+        if lower in {"ci/cd", "github actions", "jenkins", "gradle", "maven"}:
+            return "CI/CD & Build"
+        if base == "Testing / Quality" or any(term in lower for term in ["logging", "debug", "validation"]):
+            return "Monitoring & Debugging"
+        return "Tools & Workflow"
+    if role == "data_analyst":
+        if base == "Languages" or lower == "sql":
+            return "Languages & Querying"
+        if base == "Database / Storage":
+            return "Databases"
+        if lower in {"excel", "power bi", "tableau", "reporting"}:
+            return "Reporting & Visualization"
+        if base in {"Data / Reporting", "AI / Automation"} or "data" in lower:
+            return "Data Analysis"
+        return "Tools & Workflow"
+    if role == "product_business_analyst":
+        if base in {"Collaboration / Documentation"} or lower in {"requirements", "documentation", "communication", "stakeholder"}:
+            return "Analysis & Documentation"
+        if lower in {"sql", "excel", "power bi", "tableau", "reporting"} or base in {"Database / Storage", "Data / Reporting"}:
+            return "Data & Reporting"
+        if lower in {"git/github", "git", "github"} or base in {"Tools / Workflow"}:
+            return "Collaboration & Workflow"
+        return "Technical Tools"
+    if base in {"Backend / API", "Frontend / UI", "Mobile / Game"}:
+        return "Backend & Web"
+    if base == "Database / Storage":
+        return "Databases"
+    if base in {"Testing / Quality", "Cloud / DevOps / Infrastructure"} and lower not in {"aws", "azure", "kubernetes", "terraform"}:
+        return "Testing & Build"
+    if base == "Languages":
+        return "Languages"
+    return "Tools & Workflow"
 
 
 def skill_relevance(skill: str, jd_terms: list[str]) -> str:
@@ -6576,6 +6743,72 @@ def skill_relevance(skill: str, jd_terms: list[str]) -> str:
     if any(word in lower for word in ["api", "automation", "sql", "python", "react", "testing", "documentation"]):
         return "medium"
     return "low"
+
+
+def skill_in_text(skill: str, text: str) -> bool:
+    skill = canonical_skill_name(skill)
+    if not skill:
+        return False
+    lowered = str(text or "").lower()
+    if not lowered:
+        return False
+    aliases = [skill]
+    aliases.extend(alias for alias, canonical in SKILL_ALIASES.items() if canonical.lower() == skill.lower())
+    for alias in sorted(set(aliases), key=len, reverse=True):
+        normalized = alias.lower()
+        if normalized == "c":
+            pattern = r"(?<![A-Za-z0-9+#.])c(?![A-Za-z0-9+#.])"
+        elif re.fullmatch(r"[A-Za-z0-9+#./ -]+", normalized):
+            pattern = rf"(?<![A-Za-z0-9+#.]){re.escape(normalized)}(?![A-Za-z0-9+#.])"
+        else:
+            pattern = re.escape(normalized)
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
+def all_known_skill_names() -> list[str]:
+    names = []
+    for keywords in SKILL_CATEGORY_KEYWORDS.values():
+        for keyword in keywords:
+            append_unique(names, canonical_skill_name(keyword), 200)
+    for canonical in SKILL_ALIASES.values():
+        append_unique(names, canonical, 200)
+    return sorted(names, key=lambda item: (-len(item), item.lower()))
+
+
+def extract_skill_names_from_text(text: Any, limit: int = 80) -> list[str]:
+    value = str(text or "")
+    found = []
+    for skill in all_known_skill_names():
+        if skill_in_text(skill, value):
+            append_unique(found, canonical_skill_name(skill), limit)
+    return found
+
+
+def latex_escape_text(value: Any) -> str:
+    text = str(value or "")
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+    }
+    return "".join(replacements.get(char, char) for char in text)
+
+
+def cautious_skill_wording(candidate: dict[str, Any]) -> str:
+    skill = canonical_skill_name(candidate.get("skill"))
+    confidence = str(candidate.get("confidence") or "").lower()
+    sources = {str(source) for source in candidate.get("sources", [])}
+    weak_only = bool(sources) and sources.issubset(WEAK_SKILL_SOURCE_LABELS)
+    if confidence == "medium" and (weak_only or skill in CAUTIOUS_SKILL_WORDING):
+        return CAUTIOUS_SKILL_WORDING.get(skill, skill)
+    return skill
 
 
 def add_candidate_skill(
@@ -6620,17 +6853,510 @@ def add_candidate_skill(
 def extract_existing_resume_skills(resume: str) -> list[str]:
     section = find_latex_section(resume, "skills")
     text = section.get("text") if section else resume
-    values = []
-    known = sorted({skill for keywords in SKILL_CATEGORY_KEYWORDS.values() for skill in keywords}, key=len, reverse=True)
-    lower = text.lower()
-    for skill in known:
-        if skill.lower() in lower:
-            append_unique(values, canonical_skill_name(skill), 80)
+    values = extract_skill_names_from_text(text, 80)
     for match in re.findall(r"\\textbf\{([^}]+)\}\s*[:：]\s*([^\n]+)", text):
         for item in re.split(r"[,/|;]", match[1]):
             cleaned = canonical_skill_name(re.sub(r"\\[A-Za-z]+\{?|[{}]", "", item))
             append_unique(values, cleaned, 80)
     return values
+
+
+def init_project_tech_stack_db() -> None:
+    TECH_STACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(TECH_STACK_DB_PATH)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_tech_stacks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT NOT NULL DEFAULT '',
+                repository TEXT NOT NULL DEFAULT '',
+                skill TEXT NOT NULL,
+                normalized_skill TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                evidence TEXT NOT NULL DEFAULT '',
+                confidence TEXT NOT NULL DEFAULT 'medium',
+                updated_at TEXT NOT NULL,
+                UNIQUE(project_name, repository, normalized_skill, source)
+            )
+            """
+        )
+        connection.commit()
+
+
+def project_tech_stack_rows_from_context(context: dict[str, Any]) -> list[dict[str, Any]]:
+    project_name = str(context.get("project_name") or context.get("name") or context.get("project_id") or "").strip()
+    repository = str(context.get("repository") or context.get("url") or "").strip()
+    files = [str(item) for item in listish(context.get("root_files", []))]
+    text_parts = [
+        context.get("readme", ""),
+        json.dumps(context.get("topics", []), ensure_ascii=False),
+        json.dumps(context.get("languages", []), ensure_ascii=False),
+        json.dumps(context.get("languages_frameworks_detected", []), ensure_ascii=False),
+        json.dumps(context.get("contribution_evidence", []), ensure_ascii=False),
+        json.dumps(context.get("file_level_summaries", []), ensure_ascii=False),
+        json.dumps(context.get("diff_signals", []), ensure_ascii=False),
+    ]
+    for contribution in listish(context.get("contribution_evidence", [])):
+        if not isinstance(contribution, dict):
+            continue
+        for commit in listish(contribution.get("commits", [])):
+            if isinstance(commit, dict):
+                files.extend(str(item) for item in listish(commit.get("files", [])))
+                for change in listish(commit.get("file_changes", [])):
+                    if isinstance(change, dict):
+                        files.append(str(change.get("filename") or change.get("file") or ""))
+        files.extend(str(item) for item in listish(contribution.get("compare_files", [])))
+        for change in listish(contribution.get("compare_file_changes", [])):
+            if isinstance(change, dict):
+                files.append(str(change.get("filename") or change.get("file") or ""))
+    detected = []
+    for language in listish(context.get("languages", [])):
+        append_unique(detected, canonical_skill_name(language), 80)
+    for skill in detect_languages_and_frameworks_from_files(files, "\n".join(str(part) for part in text_parts)):
+        append_unique(detected, canonical_skill_name(skill), 80)
+    for skill in extract_skill_names_from_text("\n".join(files + [str(part) for part in text_parts]), 80):
+        append_unique(detected, skill, 80)
+    rows = []
+    for skill in detected:
+        name = canonical_skill_name(skill)
+        if not name:
+            continue
+        rows.append(
+            {
+                "project_name": project_name,
+                "repository": repository,
+                "skill": name,
+                "normalized_skill": name,
+                "category": base_skill_category(name),
+                "source": "repository_analysis",
+                "evidence": short_signal(repository or project_name or "repository metadata", 220),
+                "confidence": "high" if name in [canonical_skill_name(item) for item in listish(context.get("languages", []))] else "medium",
+            }
+        )
+    return rows
+
+
+def save_project_tech_stack(context: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(context, dict):
+        return []
+    rows = project_tech_stack_rows_from_context(context)
+    if not rows:
+        return []
+    init_project_tech_stack_db()
+    now = datetime.now().isoformat(timespec="seconds")
+    with closing(sqlite3.connect(TECH_STACK_DB_PATH)) as connection:
+        for row in rows:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO project_tech_stacks
+                    (project_name, repository, skill, normalized_skill, category, source, evidence, confidence, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["project_name"],
+                    row["repository"],
+                    row["skill"],
+                    row["normalized_skill"],
+                    row["category"],
+                    row["source"],
+                    row["evidence"],
+                    row["confidence"],
+                    now,
+                ),
+            )
+        connection.commit()
+    return rows
+
+
+def query_all_project_tech_stacks(limit: int = 200) -> list[dict[str, Any]]:
+    if not TECH_STACK_DB_PATH.exists():
+        return []
+    init_project_tech_stack_db()
+    with closing(sqlite3.connect(TECH_STACK_DB_PATH)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT project_name, repository, skill, normalized_skill, category, source, evidence, confidence, updated_at
+            FROM project_tech_stacks
+            ORDER BY updated_at DESC, project_name, normalized_skill
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def confidence_rank(confidence: str) -> int:
+    return {"low": 0, "medium": 1, "high": 2}.get(str(confidence or "").lower(), 1)
+
+
+def merged_confidence(current: str, incoming: str) -> str:
+    return incoming if confidence_rank(incoming) > confidence_rank(current) else current
+
+
+def read_user_memory_for_skills() -> dict[str, Any]:
+    try:
+        raw = agent.read_memory()
+    except Exception:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"raw_text": text}
+    return payload if isinstance(payload, dict) else {"raw_text": text}
+
+
+def read_prior_generated_resume_skill_names(limit_files: int = 5) -> list[str]:
+    directory = agent.TAILORED_RESUME_OUTPUT_DIR
+    if not directory.exists():
+        return []
+    files = sorted(
+        [path for path in directory.glob("*.txt") if path.is_file()],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit_files]
+    skills = []
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for skill in extract_existing_resume_skills(text):
+            append_unique(skills, skill, 80)
+    return skills
+
+
+def values_for_skill_keys(value: Any, key_terms: set[str], limit: int = 80, depth: int = 0) -> list[str]:
+    if depth > 5:
+        return []
+    values = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key).lower()
+            key_matches = any(term in key_text for term in key_terms)
+            if key_matches:
+                if isinstance(item, (str, int, float)):
+                    append_unique(values, str(item), limit)
+                elif isinstance(item, list):
+                    for entry in item:
+                        append_unique(values, entry if isinstance(entry, str) else json.dumps(entry, ensure_ascii=False), limit)
+                elif isinstance(item, dict):
+                    append_unique(values, json.dumps(item, ensure_ascii=False), limit)
+            for nested in values_for_skill_keys(item, key_terms, limit, depth + 1):
+                append_unique(values, nested, limit)
+    elif isinstance(value, list):
+        for item in value:
+            for nested in values_for_skill_keys(item, key_terms, limit, depth + 1):
+                append_unique(values, nested, limit)
+    return values
+
+
+def project_name_for_skill_source(project: dict[str, Any]) -> str:
+    return str(
+        project.get("project_name")
+        or project.get("projectName")
+        or project.get("source_name")
+        or project.get("name")
+        or project.get("project_id")
+        or "project evidence"
+    )
+
+
+def github_evidence_from_project_cards(selected_project_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evidence = []
+    for card in selected_project_cards:
+        if not isinstance(card, dict):
+            continue
+        for key in ["github_evidence", "githubEvidence", "evidence", "evidence_card", "evidenceCard"]:
+            value = card.get(key)
+            if isinstance(value, dict):
+                evidence.append(value)
+            elif isinstance(value, list):
+                evidence.extend(item for item in value if isinstance(item, dict))
+    return evidence
+
+
+def collect_skill_candidates_for_prompt(
+    jd_profile: dict,
+    selected_project_cards: list[dict],
+    current_resume: dict | str,
+    user_memory: dict | None = None,
+    project_database: dict | list[dict] | None = None,
+    github_evidence: list[dict] | None = None,
+) -> dict:
+    role_profile = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
+    role_family = str(role_profile.get("role_family") or jd_profile.get("role_family") or "software_engineering")
+    jd_text = json.dumps(jd_profile, ensure_ascii=False)
+    jd_terms = extract_skill_names_from_text(jd_text, 80)
+    for value in values_for_skill_keys(jd_profile, {"skill", "tool", "platform", "language", "framework", "database"}, 80):
+        for skill in extract_skill_names_from_text(value, 80):
+            append_unique(jd_terms, skill, 80)
+
+    skill_map: dict[str, dict[str, Any]] = {}
+
+    def add_skill(
+        skill: Any,
+        source_label: str,
+        evidence_detail: Any,
+        confidence: str = "medium",
+        evidence_project: str = "",
+    ) -> None:
+        name = canonical_skill_name(skill)
+        if not name or len(name) > 60:
+            return
+        key = name.lower()
+        detail = short_signal(evidence_detail or source_label, 220)
+        entry = skill_map.get(key)
+        if entry is None:
+            entry = {
+                "skill": name,
+                "category": skill_category(name, role_family),
+                "sources": [],
+                "evidenceSources": [],
+                "evidenceProjects": [],
+                "confidence": confidence if confidence in {"high", "medium", "low"} else "medium",
+                "jd_relevance": skill_relevance(name, jd_terms),
+                "jdRelevance": skill_relevance(name, jd_terms),
+                "safe_to_include": False,
+                "safeToInclude": False,
+                "score": 0,
+            }
+            skill_map[key] = entry
+        append_unique(entry["sources"], source_label, 10)
+        append_unique(entry["evidenceSources"], detail, 8)
+        if evidence_project:
+            append_unique(entry["evidenceProjects"], evidence_project, 6)
+        entry["confidence"] = merged_confidence(str(entry.get("confidence") or "medium"), confidence)
+        relevance = skill_relevance(name, jd_terms)
+        if entry["jd_relevance"] != "high" and relevance == "high":
+            entry["jd_relevance"] = "high"
+            entry["jdRelevance"] = "high"
+        entry["score"] = max(
+            int(entry.get("score", 0)),
+            claim_relevance_score(name, jd_terms, entry.get("evidenceSources", []), str(entry.get("confidence") or "medium")),
+        )
+
+    for skill in jd_terms:
+        add_skill(skill, "jd_keywords", "job description keyword", "low")
+
+    resume_text = json.dumps(current_resume, ensure_ascii=False) if isinstance(current_resume, dict) else str(current_resume or "")
+    for skill in extract_existing_resume_skills(resume_text):
+        add_skill(skill, "current_resume", "current resume Technical Skills/history", "high", "resume")
+    for value in values_for_skill_keys(current_resume, {"course", "coursework", "class", "education"}, 80):
+        for skill in extract_skill_names_from_text(value, 40):
+            add_skill(skill, "coursework", value, "medium")
+
+    for card in selected_project_cards or []:
+        if not isinstance(card, dict):
+            continue
+        project_name = project_name_for_skill_source(card)
+        direct_values = []
+        for key in [
+            "tech_stack",
+            "technicalStack",
+            "technologies",
+            "tools",
+            "languages_frameworks_detected",
+            "skills",
+            "skills_to_emphasize",
+        ]:
+            for value in listish(card.get(key, [])):
+                append_unique(direct_values, value, 80)
+        for value in direct_values:
+            for skill in extract_skill_names_from_text(value, 40) or [value]:
+                add_skill(skill, "project_evidence", f"{project_name}: {value}", "high", project_name)
+        project_text_parts = []
+        for key in ["workflows", "confirmed_features", "methods", "features", "recommended_bullets", "final_bullets"]:
+            if key in card:
+                project_text_parts.append(json.dumps(card.get(key), ensure_ascii=False))
+        for skill in extract_skill_names_from_text("\n".join(project_text_parts), 60):
+            add_skill(skill, "project_evidence", project_name, "medium", project_name)
+        for value in values_for_skill_keys(card, {"course", "coursework", "class"}, 40):
+            for skill in extract_skill_names_from_text(value, 30):
+                add_skill(skill, "coursework", value, "medium", project_name)
+
+    evidence_items = list(github_evidence or []) + github_evidence_from_project_cards(selected_project_cards or [])
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        project_name = project_name_for_skill_source(item)
+        detected = []
+        for key in ["languages", "languages_frameworks_detected", "technologies", "resume_relevant_keywords"]:
+            for value in listish(item.get(key, [])):
+                append_unique(detected, value, 80)
+        files = [str(value) for value in listish(item.get("root_files", [])) + listish(item.get("changed_file_paths", []))]
+        for value in detect_languages_and_frameworks_from_files(files, json.dumps(item, ensure_ascii=False)):
+            append_unique(detected, value, 80)
+        for value in detected:
+            for skill in extract_skill_names_from_text(value, 40) or [value]:
+                add_skill(skill, "github_evidence", f"{project_name}: {value}", "high", project_name)
+        for skill in extract_skill_names_from_text(json.dumps(item.get("diff_signals", []) + item.get("allowed_claims", []), ensure_ascii=False), 60):
+            add_skill(skill, "github_evidence", project_name, "medium", project_name)
+
+    rows = []
+    if isinstance(project_database, dict):
+        rows = [item for item in project_database.get("skills", []) if isinstance(item, dict)]
+    elif isinstance(project_database, list):
+        rows = [item for item in project_database if isinstance(item, dict)]
+    for row in rows:
+        name = row.get("skill") or row.get("normalized_skill") or row.get("name")
+        if not name:
+            continue
+        add_skill(
+            name,
+            "project_database",
+            row.get("evidence") or row.get("repository") or row.get("project_name") or "project tech stack database",
+            str(row.get("confidence") or "medium"),
+            str(row.get("project_name") or ""),
+        )
+
+    memory = user_memory if isinstance(user_memory, dict) else {}
+    for value in values_for_skill_keys(memory, {"skill", "technology", "tech_stack", "tool", "language", "framework", "database"}, 120):
+        for skill in extract_skill_names_from_text(value, 60):
+            add_skill(skill, "user_memory", value, "medium")
+    for value in values_for_skill_keys(memory, {"course", "coursework", "class", "education"}, 80):
+        for skill in extract_skill_names_from_text(value, 40):
+            add_skill(skill, "coursework", value, "medium")
+
+    for skill in read_prior_generated_resume_skill_names():
+        add_skill(skill, "prior_resume_versions", "prior generated tailored resume", "medium")
+
+    for entry in skill_map.values():
+        sources = set(entry.get("sources", []))
+        support_sources = sources - {"jd_keywords"}
+        has_support = bool(support_sources)
+        confidence = str(entry.get("confidence") or "medium")
+        safe = has_support and confidence != "low"
+        entry["safe_to_include"] = safe
+        entry["safeToInclude"] = safe
+        if confidence == "medium" and (sources.issubset(WEAK_SKILL_SOURCE_LABELS) or entry["skill"] in CAUTIOUS_SKILL_WORDING):
+            entry["wording_note"] = (
+                f"Use as {CAUTIOUS_SKILL_WORDING.get(entry['skill'], entry['skill'])} "
+                "when evidence is weaker or only from memory/coursework."
+            )
+        if entry["skill"] in PROTECTED_UNSUPPORTED_TOOLS and not support_sources:
+            entry["safe_to_include"] = False
+            entry["safeToInclude"] = False
+        if not entry["safe_to_include"]:
+            entry["confidence"] = "low" if sources == {"jd_keywords"} else confidence
+        entry["score"] = max(
+            int(entry.get("score", 0)),
+            claim_relevance_score(entry["skill"], jd_terms, entry.get("evidenceSources", []), entry["confidence"]),
+        )
+
+    candidates = list(skill_map.values())
+    candidates.sort(
+        key=lambda item: (
+            not bool(item.get("safe_to_include")),
+            {"high": 0, "medium": 1, "low": 2}.get(str(item.get("jd_relevance", "low")), 2),
+            {"high": 0, "medium": 1, "low": 2}.get(str(item.get("confidence", "low")), 2),
+            -int(item.get("score", 0)),
+            item.get("category", ""),
+            item.get("skill", "").lower(),
+        )
+    )
+    unsupported_jd = [
+        item["skill"]
+        for item in candidates
+        if "jd_keywords" in item.get("sources", []) and not item.get("safe_to_include")
+    ]
+    suggested = []
+    confirmations = []
+    for skill in unsupported_jd:
+        if skill in CAUTIOUS_SKILL_WORDING:
+            append_unique(suggested, CAUTIOUS_SKILL_WORDING[skill], 20)
+        append_unique(confirmations, f"Have you used {skill} directly in coursework, a project, or a work setting?", 20)
+    return {
+        "skill_candidates": candidates,
+        "gap_report": {
+            "jd_skills_not_supported": unsupported_jd,
+            "suggested_safe_wording": suggested,
+            "ask_user_to_confirm": confirmations,
+        },
+        "role_family": role_family,
+        "category_schema": ROLE_TECHNICAL_SKILL_CATEGORIES.get(role_family, ROLE_TECHNICAL_SKILL_CATEGORIES["software_engineering"]),
+    }
+
+
+def skills_section_text(skills_section: dict | str) -> str:
+    if isinstance(skills_section, dict):
+        return json.dumps(skills_section, ensure_ascii=False)
+    return str(skills_section or "")
+
+
+def validate_technical_skills(
+    skills_section: dict | str,
+    skill_candidates: dict,
+    jd_profile: dict,
+) -> dict:
+    text = skills_section_text(skills_section)
+    included_skills = extract_skill_names_from_text(text, 120)
+    candidates = skill_candidates.get("skill_candidates", []) if isinstance(skill_candidates, dict) else []
+    candidate_map = {canonical_skill_name(item.get("skill")).lower(): item for item in candidates if isinstance(item, dict)}
+    unsupported = []
+    wording_adjustments = []
+    for skill in included_skills:
+        candidate = candidate_map.get(canonical_skill_name(skill).lower())
+        if not candidate or not candidate.get("safe_to_include") or set(candidate.get("sources", [])) == {"jd_keywords"}:
+            append_unique(unsupported, skill, 40)
+            continue
+        display = cautious_skill_wording(candidate)
+        if display != candidate.get("skill") and display.lower() not in text.lower():
+            wording_adjustments.append({"skill": candidate.get("skill"), "suggested_wording": display})
+
+    role_profile = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
+    role_family = str(role_profile.get("role_family") or jd_profile.get("role_family") or skill_candidates.get("role_family") or "software_engineering")
+    allowed_categories = set(ROLE_TECHNICAL_SKILL_CATEGORIES.get(role_family, ROLE_TECHNICAL_SKILL_CATEGORIES["software_engineering"]))
+    found_categories = re.findall(r"\\textbf\{([^}]+)\}", text)
+    category_notes = []
+    for category in found_categories:
+        clean = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", category).strip()
+        clean = (
+            clean.replace(r"\&", "&")
+            .replace(r"\#", "#")
+            .replace(r"\_", "_")
+            .replace(r"\%", "%")
+            .replace(r"\$", "$")
+        )
+        if clean and clean not in allowed_categories:
+            category_notes.append(f"Category `{clean}` does not match the {role_family} skills schema.")
+
+    omitted = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate.get("safe_to_include"):
+            continue
+        if candidate.get("jd_relevance") != "high" and candidate.get("confidence") != "high":
+            continue
+        skill = candidate.get("skill", "")
+        if skill and canonical_skill_name(skill) not in included_skills:
+            append_unique(omitted, skill, 20)
+
+    notes = []
+    if len(included_skills) > 32:
+        notes.append("Technical Skills may be too broad; keep it below roughly 25-32 skills.")
+    if category_notes:
+        notes.extend(category_notes)
+    jd_only_count = sum(
+        1
+        for skill in included_skills
+        if set(candidate_map.get(canonical_skill_name(skill).lower(), {}).get("sources", [])) == {"jd_keywords"}
+    )
+    if jd_only_count:
+        notes.append("One or more skills appear to be JD-only and should move to the gap report.")
+
+    return {
+        "valid": not unsupported and not category_notes and jd_only_count == 0,
+        "unsupported_skills": unsupported,
+        "omitted_relevant_known_skills": omitted,
+        "wording_adjustments": wording_adjustments,
+        "notes": notes,
+    }
 
 
 def jd_skill_requirements(job_description: str) -> dict[str, list[str]]:
@@ -6660,7 +7386,7 @@ def jd_skill_requirements(job_description: str) -> dict[str, list[str]]:
     for output_key, categories in mapping.items():
         for category in categories:
             for skill in SKILL_CATEGORY_KEYWORDS.get(category, []):
-                if skill.lower() in text.lower():
+                if skill_in_text(skill, text):
                     append_unique(result[output_key], canonical_skill_name(skill), 12)
     for skill in jd_requirements_for_prompt(text).get("soft_skills", []):
         append_unique(result["softSkills"], skill, 12)
@@ -6685,7 +7411,7 @@ def build_project_skill_evidence(
             project_name,
             project,
             {
-                "technologies": listish(project.get("tech_stack", [])),
+                "technologies": listish(project.get("tech_stack", [])) + listish(project.get("tools", [])),
                 "methods": listish(project.get("workflows", [])) + listish(project.get("confirmed_features", [])),
                 "features": listish(project.get("confirmed_features", [])),
                 "artifacts": shortest_evidence_sources(listish(project.get("evidence_notes", [])) + listish(project.get("recent_changes", [])), 8),
@@ -6700,7 +7426,7 @@ def build_project_skill_evidence(
         candidate = candidate_by_name.get(normalize_match_text(project_name), {})
         candidate_bullets = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
         evidence_sources = ["project_memory.json"] + compact_facts.get("keyModules", [])[:5]
-        for skill in compact_facts.get("technicalStack", []):
+        for skill in compact_facts.get("technicalStack", []) + listish(project.get("tools", [])):
             add_candidate_skill(skill_map, skill, project_name, evidence_sources, jd_terms, "high")
         for signal in compact_facts.get("userContributionSignals", []):
             for category_keywords in SKILL_CATEGORY_KEYWORDS.values():
@@ -6736,34 +7462,66 @@ def build_compact_skills_input(
     progress_guidance: str = "",
 ) -> dict[str, Any]:
     jd_requirements = jd_skill_requirements(job_description)
+    role_profile = classify_role_family(job_description)
+    jd_profile = {
+        "raw_job_description": job_description,
+        "requirements": jd_requirements_for_prompt(job_description),
+        "skill_requirements": jd_requirements,
+        "target_role": jd_core_for_prompt(job_description),
+        "role_profile": role_profile,
+    }
     jd_terms = []
     for values in jd_requirements.values():
         for value in values:
             append_unique(jd_terms, value, 40)
     existing_skills = extract_existing_resume_skills(resume)
     project_skill_evidence, candidate_skills = build_project_skill_evidence(project_memory, project_candidates, jd_terms)
-    skill_map = {item["skill"].lower(): item for item in candidate_skills if isinstance(item, dict) and item.get("skill")}
-    for skill in existing_skills:
-        add_candidate_skill(
-            skill_map,
-            skill,
-            "resume.txt",
-            ["resume skills section"],
-            jd_terms,
-            "medium",
+    selected_project_cards = project_list_from_memory(project_memory) + [candidate for candidate in project_candidates if isinstance(candidate, dict)]
+    project_database = query_all_project_tech_stacks()
+    skill_candidate_payload = collect_skill_candidates_for_prompt(
+        jd_profile=jd_profile,
+        selected_project_cards=selected_project_cards,
+        current_resume=resume,
+        user_memory=read_user_memory_for_skills(),
+        project_database=project_database,
+        github_evidence=github_evidence_from_project_cards(project_candidates),
+    )
+    broad_candidate_skills = skill_candidate_payload.get("skill_candidates", [])
+    legacy_skill_map = {item["skill"].lower(): item for item in candidate_skills if isinstance(item, dict) and item.get("skill")}
+    for item in broad_candidate_skills:
+        if not isinstance(item, dict) or not item.get("skill"):
+            continue
+        key = item["skill"].lower()
+        current = legacy_skill_map.get(key)
+        if current is None or int(item.get("score", 0)) >= int(current.get("score", 0)):
+            legacy_skill_map[key] = item
+    candidate_skills = list(legacy_skill_map.values())
+    candidate_skills.sort(
+        key=lambda item: (
+            not bool(item.get("safe_to_include", item.get("safeToInclude", True))),
+            {"high": 0, "medium": 1, "low": 2}.get(str(item.get("jd_relevance", item.get("jdRelevance", "low"))), 2),
+            {"high": 0, "medium": 1, "low": 2}.get(str(item.get("confidence", "low")), 2),
+            -int(item.get("score", 0)),
+            item.get("category", ""),
+            item.get("skill", "").lower(),
         )
-    candidate_skills = list(skill_map.values())
-    candidate_skills.sort(key=lambda item: (-int(item.get("score", 0)), item["category"], item["skill"].lower()))
+    )
     return {
         "compactJdSkillRequirements": jd_requirements,
         "candidateSkills": candidate_skills[:48],
+        "skill_candidates": broad_candidate_skills[:80],
+        "skillCandidateSources": skill_candidate_payload,
+        "gap_report": skill_candidate_payload.get("gap_report", {}),
         "existingResumeSkills": existing_skills[:48],
         "projectSkillEvidence": project_skill_evidence[:8],
-        "targetRole": jd_core_for_prompt(job_description),
+        "projectDatabaseSkillEvidence": project_database[:48],
+        "targetRole": jd_profile["target_role"],
+        "roleProfile": role_profile,
+        "categorySchema": skill_candidate_payload.get("category_schema", []),
         "formatConstraints": {
             "language": language,
             "outputLanguageInstruction": output_language_instruction(language),
-            "maxCategories": 4,
+            "maxCategories": 5,
             "maxSkillsPerCategory": 8,
             "atsFriendly": True,
             "noFabrication": True,
@@ -6774,6 +7532,7 @@ def build_compact_skills_input(
             "Do not add skills without evidenceSources.",
             "Do not include low-relevance skills just to fill space.",
             "Merge aliases such as SQLite/better-sqlite3 and React/React.js.",
+            "Move unsupported JD-only skills into gap_report instead of the Technical Skills section.",
         ],
     }
 
@@ -6792,12 +7551,14 @@ Return ONLY valid JSON with exactly these keys:
   "risks": array of strings
 
 Rules:
-- Use only compactJdSkillRequirements, candidateSkills, existingResumeSkills, and projectSkillEvidence.
-- Every added or emphasized skill must appear in candidateSkills with evidenceSources.
+- Generate the Technical Skills section using the JD, selected resume evidence, current resume skills, user memory, and known project technology stack. Do not limit the skills section only to technologies mentioned in the final project bullets. Include skills that are truthful, relevant, and supported by at least one source. Do not add unsupported JD-only skills. Use cautious wording such as "fundamentals", "familiarity", or "concepts" when evidence is weaker.
+- Use only compactJdSkillRequirements, candidateSkills, skill_candidates, existingResumeSkills, projectSkillEvidence, projectDatabaseSkillEvidence, and gap_report.
+- Every added or emphasized skill must appear in candidateSkills or skill_candidates with evidenceSources and safe_to_include=true.
 - Do not invent tools, frameworks, platforms, databases, languages, certifications, or proficiency levels.
 - Merge duplicate or alias skills.
 - Prefer high JD relevance and high confidence.
-- Keep the section concise: at most 4 categories and 8 skills per category.
+- Keep the section concise and role-targeted: use categorySchema, at most 5 categories, and 8 skills per category.
+- Put unsupported JD-only tools in gap_report / risks instead of recommended_skills_section.
 - Do not read or infer raw repo context, full project memory, code, or chat history.
 
 Compact skills payload:
@@ -6826,6 +7587,8 @@ def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: 
             break
         if isinstance(reduced.get("candidateSkills"), list):
             reduced["candidateSkills"] = reduced["candidateSkills"][:limit]
+        if isinstance(reduced.get("skill_candidates"), list):
+            reduced["skill_candidates"] = reduced["skill_candidates"][:limit]
     for limit in [6, 4]:
         if prompt_size() <= max_chars:
             break
@@ -6833,12 +7596,152 @@ def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: 
             reduced["projectSkillEvidence"] = reduced["projectSkillEvidence"][:limit]
     if prompt_size() > max_chars and isinstance(reduced.get("existingResumeSkills"), list):
         reduced["existingResumeSkills"] = reduced["existingResumeSkills"][:24]
+    if prompt_size() > max_chars and isinstance(reduced.get("projectDatabaseSkillEvidence"), list):
+        reduced["projectDatabaseSkillEvidence"] = reduced["projectDatabaseSkillEvidence"][:24]
     if prompt_size() > max_chars:
-        for skill in reduced.get("candidateSkills", []):
+        for skill in list(reduced.get("candidateSkills", [])) + list(reduced.get("skill_candidates", [])):
             if isinstance(skill, dict):
                 skill["evidenceSources"] = shortest_evidence_sources(skill.get("evidenceSources", []), 2)
                 skill["evidenceProjects"] = skill.get("evidenceProjects", [])[:2]
     return reduced
+
+
+def skill_source_priority(candidate: dict[str, Any]) -> int:
+    sources = set(candidate.get("sources", []))
+    if sources & {"current_resume", "project_evidence", "github_evidence", "project_database"}:
+        return 0
+    if sources & {"user_memory", "coursework"}:
+        return 1
+    if sources & {"prior_resume_versions"}:
+        return 2
+    return 3
+
+
+def skill_candidate_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        {"high": 0, "medium": 1, "low": 2}.get(str(candidate.get("jd_relevance", candidate.get("jdRelevance", "low"))), 2),
+        {"high": 0, "medium": 1, "low": 2}.get(str(candidate.get("confidence", "low")), 2),
+        skill_source_priority(candidate),
+        -int(candidate.get("score", 0)),
+        str(candidate.get("category", "")),
+        str(candidate.get("skill", "")).lower(),
+    )
+
+
+def select_skill_candidates_for_section(compact_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_candidates = compact_payload.get("skill_candidates") or compact_payload.get("candidateSkills") or []
+    candidates = [
+        candidate
+        for candidate in raw_candidates
+        if isinstance(candidate, dict)
+        and candidate.get("skill")
+        and bool(candidate.get("safe_to_include", candidate.get("safeToInclude", True)))
+        and str(candidate.get("confidence", "medium")) != "low"
+    ]
+    candidates.sort(key=skill_candidate_sort_key)
+    category_schema = compact_payload.get("categorySchema") or []
+    max_categories = int(compact_payload.get("formatConstraints", {}).get("maxCategories") or 5)
+    max_per_category = int(compact_payload.get("formatConstraints", {}).get("maxSkillsPerCategory") or 8)
+    selected = []
+    category_counts: dict[str, int] = {}
+    used_categories: list[str] = []
+    for candidate in candidates:
+        category = str(candidate.get("category") or "Tools & Workflow")
+        if category not in used_categories and len(used_categories) >= max_categories:
+            if candidate.get("jd_relevance") != "high":
+                continue
+        if category_counts.get(category, 0) >= max_per_category:
+            continue
+        if candidate.get("jd_relevance") == "low" and candidate.get("confidence") != "high" and skill_source_priority(candidate) > 1:
+            continue
+        selected.append(candidate)
+        category_counts[category] = category_counts.get(category, 0) + 1
+        append_unique(used_categories, category, max_categories)
+        if len(selected) >= max_categories * max_per_category:
+            break
+    if category_schema:
+        selected.sort(
+            key=lambda item: (
+                category_schema.index(item.get("category")) if item.get("category") in category_schema else len(category_schema),
+                skill_candidate_sort_key(item),
+            )
+        )
+    return selected
+
+
+def render_technical_skills_section(selected_candidates: list[dict[str, Any]], category_schema: list[str]) -> str:
+    grouped: dict[str, list[str]] = {}
+    for candidate in selected_candidates:
+        category = str(candidate.get("category") or "Tools & Workflow")
+        grouped.setdefault(category, [])
+        append_unique(grouped[category], cautious_skill_wording(candidate), 12)
+    ordered_categories = [category for category in category_schema if category in grouped]
+    ordered_categories.extend(category for category in grouped if category not in ordered_categories)
+    lines = ["\\section{Technical Skills}", "\\begin{itemize}"]
+    for category in ordered_categories:
+        skills = grouped.get(category, [])
+        if not skills:
+            continue
+        rendered_skills = ", ".join(latex_escape_text(skill) for skill in skills)
+        lines.append(f"  \\item{{\\textbf{{{latex_escape_text(category)}}}: {rendered_skills}}}")
+    lines.append("\\end{itemize}")
+    return "\n".join(lines)
+
+
+def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dict[str, Any]:
+    selected = select_skill_candidates_for_section(compact_payload)
+    category_schema = compact_payload.get("categorySchema") or []
+    selected_skill_names = [candidate.get("skill", "") for candidate in selected if candidate.get("skill")]
+    existing = {canonical_skill_name(skill).lower() for skill in compact_payload.get("existingResumeSkills", [])}
+    additions = [
+        {
+            "skill": candidate.get("skill"),
+            "supporting_source": ", ".join(candidate.get("sources", [])),
+            "confidence": candidate.get("confidence", "medium"),
+            "safe_to_include": bool(candidate.get("safe_to_include", candidate.get("safeToInclude", True))),
+            "wording": cautious_skill_wording(candidate),
+        }
+        for candidate in selected
+        if canonical_skill_name(candidate.get("skill")).lower() not in existing
+    ]
+    unsupported = compact_payload.get("gap_report", {}).get("jd_skills_not_supported", [])
+    recommended_section = render_technical_skills_section(selected, category_schema)
+    jd_profile = {
+        "role_profile": compact_payload.get("roleProfile", {}),
+        "requirements": compact_payload.get("compactJdSkillRequirements", {}),
+    }
+    validation = validate_technical_skills(
+        recommended_section,
+        compact_payload.get("skillCandidateSources", {"skill_candidates": compact_payload.get("skill_candidates", [])}),
+        jd_profile,
+    )
+    return {
+        "skills_strategy": (
+            "Use a role-targeted skills section sourced from the JD, current resume, selected project evidence, "
+            "memory, project tech-stack database rows, GitHub metadata, coursework, and prior resume versions; "
+            "exclude unsupported JD-only claims."
+        ),
+        "skills_to_emphasize": selected_skill_names,
+        "skills_to_deemphasize": [
+            candidate.get("skill")
+            for candidate in compact_payload.get("skill_candidates", [])
+            if isinstance(candidate, dict)
+            and not candidate.get("safe_to_include")
+            and candidate.get("skill")
+        ][:20],
+        "skills_to_add_if_supported": additions,
+        "skills_to_remove_or_avoid": unsupported,
+        "recommended_skills_section": recommended_section,
+        "skill_candidates": compact_payload.get("skill_candidates", []),
+        "gap_report": compact_payload.get("gap_report", {}),
+        "validation": validation,
+        "risks": [
+            f"Unsupported JD-only skill omitted: {skill}" for skill in unsupported[:10]
+        ] + [
+            f"Use cautious wording for {item['skill']} as {item['suggested_wording']}"
+            for item in validation.get("wording_adjustments", [])
+        ],
+    }
 
 
 def build_skills_resume_candidate(
@@ -6849,81 +7752,15 @@ def build_skills_resume_candidate(
     language: str,
     progress_guidance: str = "",
 ) -> dict[str, Any]:
-    prompt_project_candidates = compact_bullet_candidates_for_prompt(project_candidates)
-    prompt_project_memory = compact_value_for_prompt(project_memory, 1200, 8)
-    prompt = f"""
-Generate structured Skills-section tailoring recommendations.
-
-Rules:
-- Do not output a full resume.
-- Use only the job description, original resume, Project Memory, and staged project candidates.
-- Skills may be reordered, grouped, emphasized, or removed when weakly relevant.
-- Add a skill only if it is supported by the original resume, Project Memory, or staged project candidates.
-- Do not invent tools, frameworks, platforms, databases, languages, certifications, or proficiency levels.
-- Return ONLY valid JSON with exactly these keys:
-  "skills_strategy": string,
-  "skills_to_emphasize": array of strings,
-  "skills_to_deemphasize": array of strings,
-  "skills_to_add_if_supported": array of objects with keys "skill", "supporting_source", "confidence",
-  "skills_to_remove_or_avoid": array of strings,
-  "recommended_skills_section": string,
-  "risks": array of strings
-
-Output language requirement:
-{output_language_instruction(language)}
-
-Job description:
-{truncate_text(job_description, provider_safe_text_limit(12000, 7000))}
-
-Original resume:
-{truncate_text(resume, provider_safe_text_limit(22000, 8000))}
-
-Project Memory:
-{json.dumps(prompt_project_memory, ensure_ascii=False, indent=2)}
-
-Staged project candidates:
-{json.dumps(prompt_project_candidates, ensure_ascii=False, indent=2)}
-{progress_guidance}
-"""
-    compact_payload = None
-
-    def compact_skills_prompt(max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS, **_: Any) -> dict[str, Any]:
-        nonlocal compact_payload
-        compact_payload = build_compact_skills_input(
-            job_description=job_description,
-            resume=resume,
-            project_memory=project_memory,
-            project_candidates=project_candidates,
-            language=language,
-            progress_guidance=progress_guidance,
-        )
-        compact_prompt = build_compact_skills_prompt(compact_payload)
-        if len(compact_prompt) > max_chars:
-            compact_payload = reduce_compact_skills_payload_for_limit(compact_payload, max_chars)
-            compact_prompt = build_compact_skills_prompt(compact_payload)
-        return {"prompt": compact_prompt, "payload": compact_payload}
-
-    response = safe_model_call(
-        caller="build_skills_resume_candidate",
-        prompt=prompt,
-        task_type="skills_resume_candidate",
-        compact_builder=compact_skills_prompt,
+    compact_payload = build_compact_skills_input(
+        job_description=job_description,
+        resume=resume,
+        project_memory=project_memory,
+        project_candidates=project_candidates,
+        language=language,
+        progress_guidance=progress_guidance,
     )
-    payload = extract_json_object(response)
-    for key in ["skills_to_emphasize", "skills_to_deemphasize", "skills_to_add_if_supported", "skills_to_remove_or_avoid", "risks"]:
-        if not isinstance(payload.get(key), list):
-            payload[key] = []
-    supported_skills = {
-        canonical_skill_name(item.get("skill")).lower()
-        for item in (compact_payload.get("candidateSkills", []) if "compact_payload" in locals() and isinstance(compact_payload, dict) else [])
-        if isinstance(item, dict) and item.get("evidenceSources")
-    }
-    if supported_skills:
-        payload["skills_to_add_if_supported"] = [
-            item for item in payload["skills_to_add_if_supported"]
-            if not isinstance(item, dict) or canonical_skill_name(item.get("skill")).lower() in supported_skills
-        ]
-    return payload
+    return build_deterministic_skills_candidate(compact_payload)
 
 
 def build_experience_resume_candidate(
@@ -7441,6 +8278,24 @@ One staged {section_name} candidate:
     )
 
 
+def apply_skills_section_candidate(
+    current_resume: str,
+    candidate: dict[str, Any],
+) -> str:
+    replacement = str(candidate.get("recommended_skills_section") or "").strip()
+    if not replacement:
+        return current_resume
+    replacement = strip_markdown_code_fence(replacement)
+    target_block = resume_block_for_prompt(current_resume, "Skills-section")
+    if "\\section" not in replacement:
+        section_name = str(target_block.get("section_name") or "Technical Skills")
+        replacement = f"\\section{{{section_name}}}\n{replacement}"
+    try:
+        return replace_resume_block(current_resume, target_block, replacement)
+    except HTTPException:
+        return current_resume
+
+
 def project_bullet_budget(index: int, total: int) -> int:
     if total <= 1:
         return 3
@@ -7640,13 +8495,7 @@ def merge_staged_resume(
         body,
     )
 
-    current_resume = apply_resume_section_candidate(
-        "Skills-section",
-        job_description,
-        current_resume,
-        skills_candidate,
-        body,
-    )
+    current_resume = apply_skills_section_candidate(current_resume, skills_candidate)
     current_resume = apply_resume_section_candidate(
         "Experience-section",
         job_description,
@@ -7661,7 +8510,7 @@ def merge_staged_resume(
         summary_candidate,
         body,
     )
-    return current_resume
+    return current_resume if current_resume.endswith("\n") else current_resume + "\n"
 
 
 def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
@@ -7729,6 +8578,10 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     role_profile = classify_role_family(job_description)
     jd_requirements = jd_requirements_for_prompt(job_description)
     gap_report = build_resume_gap_report(role_profile, jd_requirements, candidates)
+    if isinstance(skills_candidate.get("gap_report"), dict):
+        gap_report["technical_skills"] = skills_candidate["gap_report"]
+    if isinstance(skills_candidate.get("validation"), dict):
+        gap_report["technical_skills_validation"] = skills_candidate["validation"]
 
     answer = merge_staged_resume(job_description, resume, candidates, skills_candidate, experience_candidate, summary_candidate, body)
     if not agent.looks_like_latex_resume(answer):
@@ -8134,6 +8987,13 @@ def fetch_github_context_api(
         repo_contexts.append(repo_context)
 
     assert_agent_task_not_cancelled()
+    for repo_context in repo_contexts:
+        if isinstance(repo_context, dict) and not repo_context.get("error"):
+            try:
+                save_project_tech_stack(repo_context)
+            except sqlite3.Error:
+                pass
+
     path = agent.CHROMA_DB_PATH
     if fetched_contexts:
         path = agent.save_github_context_output(fetched_contexts)

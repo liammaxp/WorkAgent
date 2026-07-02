@@ -838,6 +838,43 @@ def extract_latex_document(content):
     return latex.strip()
 
 
+def project_heading_name(block):
+    match = re.search(r"\\textbf\{([^}]+)\}", block)
+    return match.group(1).strip() if match else "Unnamed project"
+
+
+def project_blocks_from_latex(latex):
+    starts = [match.start() for match in re.finditer(r"\\resumeProjectHeading\b", latex)]
+    if not starts:
+        return []
+    boundaries = starts + [len(latex)]
+    return [latex[boundaries[index] : boundaries[index + 1]] for index in range(len(starts))]
+
+
+def project_headings_without_bullets(latex):
+    missing = []
+    for block in project_blocks_from_latex(latex):
+        block_body = re.split(r"\\resumeProjectHeading\b", block, maxsplit=1)[-1]
+        next_heading = block_body.find("\\resumeProjectHeading")
+        if next_heading != -1:
+            block_body = block_body[:next_heading]
+        if not re.search(r"\\(?:resumeItem|item)\b", block_body):
+            missing.append(project_heading_name(block))
+    return missing
+
+
+def looks_like_complete_latex_resume(content):
+    latex = extract_latex_document(content)
+    if not latex:
+        return False
+    required_markers = ["\\documentclass", "\\begin{document}", "\\end{document}", "\\section"]
+    if any(marker not in latex for marker in required_markers):
+        return False
+    if project_headings_without_bullets(latex):
+        return False
+    return True
+
+
 def is_likely_resume_edit_request(text):
     lowered = text.lower()
     resume_keywords = [
@@ -1510,6 +1547,14 @@ def save_tailored_resume(content, company="", role=""):
     latex = extract_latex_document(content)
     if not latex:
         raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
+    missing_project_bullets = project_headings_without_bullets(latex)
+    if missing_project_bullets:
+        raise ValueError(
+            "Project heading without resume bullets: "
+            + ", ".join(missing_project_bullets)
+        )
+    if not looks_like_complete_latex_resume(latex):
+        raise ValueError("Expected complete LaTeX resume code before saving tailored_resume.txt.")
 
     metadata = current_application_output_metadata(company, role)
     version_path = application_output_path_for_content(

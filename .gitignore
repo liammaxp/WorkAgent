@@ -13,6 +13,10 @@ information/github_repo_scan_state.json
 information/chroma/
 information/applications.sqlite3
 information/job_analysis_history.json
+information/agent_chunk_checkpoints.json
+information/model_call_cache.json
+information/project_compact_facts.json
+information/resume_candidate_checkpoints.json
 information/*.sqlite3
 information/*.db
 
