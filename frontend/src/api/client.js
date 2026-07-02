@@ -2,8 +2,72 @@ const API_BASE = "/api";
 
 let shutdownSent = false;
 
+export class ApiError extends Error {
+  constructor(message, detail = null, status = 0) {
+    super(message);
+    this.name = "ApiError";
+    this.detail = detail;
+    this.status = status;
+  }
+}
+
 function currentLanguage() {
   return localStorage.getItem("workagent-language") === "en" ? "en" : "zh";
+}
+
+function formatApiDetail(detail, status) {
+  if (!detail) return `Request failed (${status})`;
+  if (typeof detail === "string") return detail;
+  if (typeof detail !== "object") return String(detail);
+
+  const type = detail.type || "";
+  if (type === "ModelProxyTimeout") {
+    const zh = currentLanguage() === "zh";
+    const chunk = detail.failedChunk || {};
+    const where = [
+      chunk.projectName ? `project=${chunk.projectName}` : "",
+      chunk.repoName ? `repo=${chunk.repoName}` : "",
+      chunk.chunkIndex ? `chunk=${chunk.chunkIndex}` : "",
+    ].filter(Boolean).join(", ");
+    if (zh) {
+      return [
+        detail.message || "第三方中转站连续超时。已保存当前进度，可以稍后重试或降低输入规模。",
+        where ? `失败位置：${where}。` : "",
+        detail.retryable ? "已完成的 chunk / project 会通过 checkpoint 复用。" : "",
+      ].filter(Boolean).join(" ");
+    }
+    return [
+      detail.message || "Third-party proxy timed out while processing a model chunk.",
+      where ? `Failed chunk: ${where}.` : "",
+      detail.retryable ? "You can retry; completed chunks are checkpointed." : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (type === "ModelTransientError") {
+    if (currentLanguage() === "zh") {
+      return [
+        detail.message || "第三方中转站连续返回 502。已保存当前进度，可以稍后重试或降低输入规模。",
+        detail.caller ? `Caller: ${detail.caller}.` : "",
+        detail.inputCharCount ? `最终输入 ${detail.inputCharCount} chars。` : "",
+      ].filter(Boolean).join(" ");
+    }
+    return [
+      detail.message || "Third-party proxy returned repeated transient errors after retry protection.",
+      detail.caller ? `Caller: ${detail.caller}.` : "",
+      detail.inputCharCount ? `Final input ${detail.inputCharCount} chars.` : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (type === "ModelInputTooLargeForProxy" || type === "ModelInputHardLimitExceededForProxy") {
+    return [
+      detail.message || "Model input is too large for the configured proxy.",
+      detail.caller ? `Caller: ${detail.caller}.` : "",
+      detail.inputCharCount && detail.limit ? `Input ${detail.inputCharCount} chars, limit ${detail.limit}.` : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (detail.message) return String(detail.message);
+  return JSON.stringify(detail);
 }
 
 function chatSessionPayload(session) {
@@ -38,13 +102,8 @@ async function request(path, options = {}) {
   }
 
   if (!response.ok) {
-    const detail =
-      typeof data === "object" && data?.detail
-        ? typeof data.detail === "string"
-          ? data.detail
-          : JSON.stringify(data.detail)
-        : `Request failed (${response.status})`;
-    throw new Error(detail);
+    const detail = typeof data === "object" && data?.detail ? data.detail : null;
+    throw new ApiError(formatApiDetail(detail, response.status), detail, response.status);
   }
 
   return data;

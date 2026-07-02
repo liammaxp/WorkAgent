@@ -99,6 +99,24 @@ function getProjectMemoryStatus(context, language) {
   };
 }
 
+function formatMapReduceSummary(context, language) {
+  const repos = context?.project_memory_update?.map_reduce_repositories || [];
+  if (!Array.isArray(repos) || !repos.length) return "";
+  const totalChunks = repos.reduce((sum, repo) => sum + Number(repo.chunkCount || 0), 0);
+  const title = language === "en"
+    ? `Project-level Map-Reduce used for ${repos.length} repo(s), ${totalChunks || repos.length} chunk(s).`
+    : `已启用项目级 Map-Reduce：${repos.length} 个仓库，${totalChunks || repos.length} 个分块。`;
+  const lines = repos.slice(0, 6).map((repo) => {
+    const repoName = repo.repoName || "repo";
+    const projectName = repo.projectName || "";
+    const chunkCount = repo.chunkCount || 1;
+    const reason = repo.reason || "";
+    return `- ${projectName ? `${projectName} / ` : ""}${repoName}: ${chunkCount} chunk(s)${reason ? ` (${reason})` : ""}`;
+  });
+  const more = repos.length > 6 ? [`- ... ${repos.length - 6} more repo(s)`] : [];
+  return [title, ...lines, ...more].join("\n");
+}
+
 function normalizeProjectAlias(value) {
   let textValue = String(value || "").trim().toLowerCase();
   const githubMatch = textValue.match(/https?:\/\/(?:www\.)?github\.com\/([a-z0-9_.-]+)\/([a-z0-9_.-]+)/);
@@ -328,6 +346,10 @@ export default function GitHubContext() {
           progress.assertActive();
           progress.setStageStatus("apply", "done");
           progress.addAgentMessage("GitHub 上下文已更新。");
+          const mapReduceSummary = formatMapReduceSummary(data, language);
+          if (mapReduceSummary) {
+            progress.addSystemMessage(mapReduceSummary);
+          }
           const memoryStatus = getProjectMemoryStatus(data, language);
           if (memoryStatus?.label) {
             progress.addAgentMessage(memoryStatus.detail ? `${memoryStatus.label}。${memoryStatus.detail}` : memoryStatus.label);

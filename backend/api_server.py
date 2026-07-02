@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -292,6 +293,24 @@ MAX_PROMPT_CLAIMS = 12
 MAX_PROMPT_SIGNAL_CHARS = 240
 MAX_PROMPT_FILE_SUMMARY_CHARS = 500
 MAX_PROMPT_EVIDENCE_CHARS = 9000
+PROXY_SAFE_MAX_INPUT_CHARS = 25000
+PROXY_SAFE_HARD_INPUT_CHARS = 35000
+OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
+OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS = 100000
+PROXY_TRANSIENT_STATUS_CODES = {502, 503, 504}
+PROXY_TIMEOUT_STATUS_CODES = {524}
+PROXY_PROVIDER_CONFIG_STATUS_CODES = {401, 403, 404}
+PROXY_RETRY_AFTER_MAX_SECONDS = 30
+BULLET_WRITER_RETRY_COMPACT_CHARS = 15000
+BULLET_WRITER_EMERGENCY_COMPACT_CHARS = 10000
+REPO_CHUNK_TARGET_CHARS = 18000
+REDUCE_BATCH_TARGET_CHARS = 18000
+MODEL_ROUTING_LOG_PREFIX = "Model routing"
+MODEL_CACHE_PATH = agent.INFORMATION_DIR / "model_call_cache.json"
+PROJECT_COMPACT_FACTS_PATH = agent.INFORMATION_DIR / "project_compact_facts.json"
+CHUNK_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "agent_chunk_checkpoints.json"
+RESUME_CANDIDATE_CHECKPOINTS_PATH = agent.INFORMATION_DIR / "resume_candidate_checkpoints.json"
+MODEL_FAILURE_LOG_DIR = agent.ROOT_DIR / "logs" / "model_failures"
 
 
 class ProviderBody(BaseModel):
@@ -394,6 +413,7 @@ class TailorBody(BaseModel):
     allow_project_selection: bool = True
     allow_experience_removal: bool = False
     include_application_hint: bool = False
+    forceChunking: bool = False
     language: str = "zh"
     agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
     agent_task_id: str = ""
@@ -471,6 +491,7 @@ class GitHubContextBody(BaseModel):
     project_id: str = ""
     force_refresh: bool = False
     reanalyze_cached: bool = False
+    forceChunking: bool = False
     agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
     agent_task_id: str = ""
 
@@ -563,6 +584,305 @@ def provider_supports_images(provider: str) -> bool:
     return normalize_provider(provider) != "deepseek"
 
 
+def normalize_model_base_url(raw: str | None) -> str | None:
+    value = (raw or "").strip().strip('"').strip("'").rstrip("/")
+    if not value:
+        return None
+    if not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+    return value
+
+
+def infer_provider_kind(base_url: str | None, explicit_kind: str | None = None) -> str:
+    if explicit_kind:
+        return str(explicit_kind).strip()
+    normalized = normalize_model_base_url(base_url)
+    if not normalized:
+        return "official_openai"
+    host = urllib.parse.urlparse(normalized).netloc.lower()
+    if host == "api.openai.com":
+        return "official_openai"
+    return "third_party_proxy"
+
+
+def provider_env_name(provider_name: str, suffix: str) -> str:
+    normalized = normalize_provider(provider_name).upper().replace("-", "_")
+    return f"{normalized}_{suffix}"
+
+
+def provider_base_url(provider_name: str) -> str:
+    config = PROVIDER_CONFIGS.get(normalize_provider(provider_name), {})
+    env_name = config.get("base_url_env")
+    default_base_url = str(config.get("default_base_url") or "")
+    return os.getenv(env_name, default_base_url) if env_name else default_base_url
+
+
+def provider_model_name(provider_name: str, fallback: str = "") -> str:
+    config = PROVIDER_CONFIGS.get(normalize_provider(provider_name), {})
+    env_name = config.get("model_env")
+    default_model = str(config.get("default_model") or fallback)
+    return os.getenv(env_name, default_model) if env_name else fallback
+
+
+def provider_override_bool(provider_name: str, key: str) -> Optional[bool]:
+    value = os.getenv(provider_env_name(provider_name, key))
+    if value is None:
+        value = os.getenv(key)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def provider_override_int(provider_name: str, key: str, default: int) -> int:
+    value = os.getenv(provider_env_name(provider_name, key)) or os.getenv(key)
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def provider_override_float(provider_name: str, key: str, default: float) -> float:
+    value = os.getenv(provider_env_name(provider_name, key)) or os.getenv(key)
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def build_provider_routing_config(provider_name: str) -> dict[str, Any]:
+    normalized_provider = normalize_provider(provider_name)
+    base_url = provider_base_url(normalized_provider)
+    explicit_kind = (
+        os.getenv(provider_env_name(normalized_provider, "PROVIDER_KIND"))
+        or os.getenv("MODEL_PROVIDER_KIND")
+        or None
+    )
+    provider_kind = infer_provider_kind(base_url, explicit_kind)
+    proxy_override = provider_override_bool(normalized_provider, "PROXY_SAFE_MODE")
+    proxy_safe_mode = proxy_override if proxy_override is not None else provider_kind == "third_party_proxy"
+    shrink_input_override = provider_override_bool(normalized_provider, "SHRINK_INPUT_ON_RETRY")
+    reduce_output_override = provider_override_bool(normalized_provider, "REDUCE_OUTPUT_TOKENS_ON_RETRY")
+    endpoint_fallback_override = provider_override_bool(normalized_provider, "ENDPOINT_FALLBACK_ENABLED")
+    execution_mode = (
+        os.getenv(provider_env_name(normalized_provider, "EXECUTION_MODE"))
+        or ("proxy_safe" if proxy_safe_mode else "official_direct")
+    )
+    return {
+        "name": normalized_provider,
+        "baseUrl": base_url,
+        "providerKind": provider_kind,
+        "proxySafeMode": proxy_safe_mode,
+        "executionMode": execution_mode,
+        "directMaxInputChars": provider_override_int(
+            normalized_provider,
+            "DIRECT_MAX_INPUT_CHARS",
+            PROXY_SAFE_MAX_INPUT_CHARS if proxy_safe_mode else OFFICIAL_DIRECT_MAX_INPUT_CHARS,
+        ),
+        "proxySafeHardInputChars": provider_override_int(
+            normalized_provider,
+            "PROXY_SAFE_HARD_INPUT_CHARS",
+            PROXY_SAFE_HARD_INPUT_CHARS,
+        ),
+        "mapReduceThresholdChars": provider_override_int(
+            normalized_provider,
+            "MAP_REDUCE_THRESHOLD_CHARS",
+            PROXY_SAFE_MAX_INPUT_CHARS if proxy_safe_mode else OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS,
+        ),
+        "maxTransientRetries": provider_override_int(
+            normalized_provider,
+            "MAX_TRANSIENT_RETRIES",
+            2 if proxy_safe_mode else 0,
+        ),
+        "initialRetryDelayMs": provider_override_int(
+            normalized_provider,
+            "INITIAL_RETRY_DELAY_MS",
+            3000,
+        ),
+        "retryBackoffMultiplier": provider_override_float(
+            normalized_provider,
+            "RETRY_BACKOFF_MULTIPLIER",
+            2.0,
+        ),
+        "shrinkInputOnRetry": (
+            shrink_input_override
+            if shrink_input_override is not None else proxy_safe_mode
+        ),
+        "shrinkRatioOnTransientError": provider_override_float(
+            normalized_provider,
+            "SHRINK_RATIO_ON_TRANSIENT_ERROR",
+            0.75,
+        ),
+        "reduceOutputTokensOnRetry": (
+            reduce_output_override
+            if reduce_output_override is not None else proxy_safe_mode
+        ),
+        "maxOutputTokensPerCall": provider_override_int(
+            normalized_provider,
+            "MAX_OUTPUT_TOKENS_PER_CALL",
+            1200 if proxy_safe_mode else 0,
+        ),
+        "retryOutputTokens": provider_override_int(
+            normalized_provider,
+            "RETRY_OUTPUT_TOKENS",
+            800,
+        ),
+        "endpointFallbackEnabled": (
+            endpoint_fallback_override
+            if endpoint_fallback_override is not None else proxy_safe_mode
+        ),
+        "supportsStreaming": bool(provider_override_bool(normalized_provider, "SUPPORTS_STREAMING")),
+    }
+
+
+def should_use_proxy_safe_mode(provider: dict[str, Any]) -> bool:
+    if provider.get("proxySafeMode") is not None:
+        return bool(provider["proxySafeMode"])
+    return infer_provider_kind(provider.get("baseUrl"), provider.get("providerKind")) == "third_party_proxy"
+
+
+def should_use_map_reduce(
+    provider: dict[str, Any],
+    input_char_count: int,
+    user_options: dict[str, Any] | None = None,
+) -> bool:
+    user_options = user_options or {}
+    if user_options.get("forceChunking"):
+        return True
+    if should_use_proxy_safe_mode(provider):
+        return input_char_count > int(provider.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS)
+    official_limit = int(provider.get("mapReduceThresholdChars") or OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS)
+    return input_char_count > official_limit
+
+
+def estimate_input_size(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    try:
+        return len(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return len(str(value))
+
+
+def routing_decision(
+    provider_name: str,
+    input_char_count: int,
+    user_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    provider = build_provider_routing_config(provider_name)
+    normalized_base_url = normalize_model_base_url(provider.get("baseUrl"))
+    host = urllib.parse.urlparse(normalized_base_url).netloc.lower() if normalized_base_url else "api.openai.com"
+    use_map_reduce = should_use_map_reduce(provider, input_char_count, user_options)
+    if user_options and user_options.get("forceChunking"):
+        reason = "forceChunking requested"
+    elif should_use_proxy_safe_mode(provider):
+        limit = int(provider.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS)
+        reason = "third-party proxy over safe limit" if input_char_count > limit else "third-party proxy below safe limit"
+    else:
+        limit = int(provider.get("mapReduceThresholdChars") or OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS)
+        reason = "official over map-reduce threshold" if input_char_count > limit else "official below threshold"
+    return {
+        **provider,
+        "host": host,
+        "inputCharCount": input_char_count,
+        "approxTokenCount": input_char_count // 4,
+        "useMapReduce": use_map_reduce,
+        "reason": reason,
+    }
+
+
+def log_model_routing(
+    decision: dict[str, Any],
+    caller: str,
+    task_type: str,
+    model: str,
+    endpoint_type: str,
+) -> None:
+    print(
+        f"{MODEL_ROUTING_LOG_PREFIX}: "
+        f"caller={caller}, taskType={task_type}, model={model}, "
+        f"provider={decision.get('name')}, host={decision.get('host')}, "
+        f"kind={decision.get('providerKind')}, proxySafeMode={str(decision.get('proxySafeMode')).lower()}, "
+        f"inputChars={decision.get('inputCharCount')}, approxTokens={decision.get('approxTokenCount')}, "
+        f"endpoint={endpoint_type}, executionMode={decision.get('executionMode')}, "
+        f"useMapReduce={str(decision.get('useMapReduce')).lower()}, reason={decision.get('reason')}, "
+        f"timestamp={datetime.now().isoformat(timespec='seconds')}"
+    )
+
+
+def caller_name_from_stack() -> str:
+    for frame in inspect.stack()[2:8]:
+        name = frame.function
+        if name not in {"run_text_task", "caller_name_from_stack"}:
+            return name
+    return "unknown"
+
+
+def enforce_model_input_limits(decision: dict[str, Any], caller: str, allow_oversize_direct: bool = False) -> None:
+    if allow_oversize_direct or not should_use_proxy_safe_mode(decision):
+        return
+    input_chars = int(decision.get("inputCharCount") or 0)
+    direct_limit = int(decision.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS)
+    hard_limit = int(decision.get("proxySafeHardInputChars") or PROXY_SAFE_HARD_INPUT_CHARS)
+    if input_chars <= direct_limit:
+        return
+    limit = direct_limit
+    error_type = "ModelInputTooLargeForProxy"
+    message = "Input is too large for third-party proxy. Use project-level chunking before calling the model."
+    if input_chars > hard_limit:
+        limit = hard_limit
+        error_type = "ModelInputHardLimitExceededForProxy"
+        message = "Input exceeds the hard limit for third-party proxy. Chunking is required before calling the model."
+    raise HTTPException(
+        status_code=413,
+        detail={
+            "ok": False,
+            "type": error_type,
+            "caller": caller,
+            "inputCharCount": input_chars,
+            "limit": limit,
+            "message": message,
+        },
+    )
+
+
+def model_input_limit_exception(
+    *,
+    caller: str,
+    input_char_count: int,
+    limit: int,
+    hard_limit: int,
+    message: str = "",
+) -> HTTPException:
+    hard_exceeded = input_char_count > hard_limit
+    return HTTPException(
+        status_code=413,
+        detail={
+            "ok": False,
+            "type": "ModelInputHardLimitExceededForProxy" if hard_exceeded else "ModelInputTooLargeForProxy",
+            "caller": caller,
+            "inputCharCount": input_char_count,
+            "limit": hard_limit if hard_exceeded else limit,
+            "message": message
+            or (
+                "Compact/model input exceeds the hard third-party proxy limit."
+                if hard_exceeded
+                else "Compact/model input is still too large for third-party proxy."
+            ),
+        },
+    )
+
+
 def extract_model_api_error_message(error: Exception) -> str:
     if isinstance(error, APIStatusError):
         body = getattr(error, "body", None)
@@ -601,7 +921,169 @@ def extract_model_api_error_message(error: Exception) -> str:
     return str(error)
 
 
-def raise_model_api_http_exception(error: Exception) -> None:
+def extract_model_error_headers(error: Exception) -> dict[str, str]:
+    headers: Any = {}
+    if isinstance(error, APIStatusError):
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", {}) if response is not None else {}
+    elif isinstance(error, urllib.error.HTTPError):
+        headers = getattr(error, "headers", {}) or {}
+    result: dict[str, str] = {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        items = []
+    for key, value in items:
+        result[str(key).lower()] = str(value)
+    return result
+
+
+def retry_after_seconds_from_headers(headers: dict[str, str]) -> Optional[int]:
+    value = headers.get("retry-after")
+    if not value:
+        return None
+    try:
+        seconds = int(float(value.strip()))
+    except ValueError:
+        return None
+    return max(0, min(seconds, PROXY_RETRY_AFTER_MAX_SECONDS))
+
+
+def model_error_type_for_status(status_code: int, detail_text: str = "") -> Optional[str]:
+    text = detail_text.lower()
+    if status_code in PROXY_TIMEOUT_STATUS_CODES or "timeout" in text or "origin_response_timeout" in text:
+        return "ModelProxyTimeout"
+    if status_code in PROXY_TRANSIENT_STATUS_CODES or any(
+        marker in text
+        for marker in [
+            "bad gateway",
+            "connection reset",
+            "upstream unavailable",
+            "upstream error",
+            "network error",
+            "temporarily unavailable",
+        ]
+    ):
+        return "ModelTransientError"
+    if status_code in PROXY_PROVIDER_CONFIG_STATUS_CODES:
+        return "ModelProviderConfigError"
+    return None
+
+
+def structured_model_error_detail(
+    *,
+    error_type: str,
+    caller: str,
+    status_code: int,
+    decision: dict[str, Any],
+    input_char_count: int,
+    message: str,
+    retryable: bool,
+    attempts: Optional[list[dict[str, Any]]] = None,
+    retry_after_seconds: Optional[int] = None,
+    cloudflare_ray_id: str = "",
+    endpoint: str = "",
+    checkpoint_preserved: bool = False,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "ok": False,
+        "type": error_type,
+        "caller": caller,
+        "statusCode": status_code,
+        "retryable": retryable,
+        "providerKind": decision.get("providerKind"),
+        "proxySafeMode": decision.get("proxySafeMode"),
+        "inputCharCount": input_char_count,
+        "message": message,
+    }
+    if attempts:
+        detail["attempts"] = attempts
+    if retry_after_seconds is not None:
+        detail["retryAfterSeconds"] = retry_after_seconds
+    if cloudflare_ray_id:
+        detail["cloudflareRayId"] = cloudflare_ray_id
+    if endpoint:
+        detail["endpoint"] = endpoint
+    if checkpoint_preserved:
+        detail["checkpointPreserved"] = True
+    return detail
+
+
+def http_exception_detail_text(error: HTTPException) -> str:
+    detail = getattr(error, "detail", "")
+    if isinstance(detail, dict):
+        try:
+            return json.dumps(detail, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(detail)
+    return str(detail)
+
+
+def status_code_from_http_exception(error: HTTPException) -> int:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict) and detail.get("statusCode"):
+        try:
+            return int(detail["statusCode"])
+        except (TypeError, ValueError):
+            pass
+    return int(getattr(error, "status_code", 502) or 502)
+
+
+def retry_after_seconds_from_http_exception(error: HTTPException) -> Optional[int]:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict):
+        value = detail.get("retryAfterSeconds")
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def cloudflare_ray_from_http_exception(error: HTTPException) -> str:
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict):
+        return str(detail.get("cloudflareRayId") or "")
+    match = re.search(r"\bcf-ray[:=]\s*([A-Za-z0-9-]+)", str(detail), flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def save_model_failure_log(
+    *,
+    caller: str,
+    decision: dict[str, Any],
+    status_code: int,
+    input_char_count: int,
+    attempt: int,
+    endpoint: str,
+    stream: bool,
+    max_output_tokens: Optional[int],
+    retry_action: str,
+    error_message: str,
+    cloudflare_ray_id: str = "",
+) -> None:
+    MODEL_FAILURE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "caller": caller,
+        "providerKind": decision.get("providerKind"),
+        "proxySafeMode": decision.get("proxySafeMode"),
+        "statusCode": status_code,
+        "inputCharCount": input_char_count,
+        "attempt": attempt,
+        "endpoint": endpoint,
+        "stream": bool(stream),
+        "maxOutputTokens": max_output_tokens,
+        "retryAction": retry_action,
+        "cloudflareRayId": cloudflare_ray_id,
+        "errorMessage": short_signal(error_message, 500) if "short_signal" in globals() else str(error_message)[:500],
+    }
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = MODEL_FAILURE_LOG_DIR / f"{stamp}_{caller}_{attempt}_{uuid.uuid4().hex[:8]}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def raise_model_api_http_exception(error: Exception, caller: str = "") -> None:
     if isinstance(error, APIStatusError):
         upstream_status = error.status_code or 502
         http_status = upstream_status if 400 <= upstream_status < 600 else 502
@@ -611,6 +1093,29 @@ def raise_model_api_http_exception(error: Exception) -> None:
         raise error
 
     message = extract_model_api_error_message(error)
+    headers = extract_model_error_headers(error)
+    provider_name = normalize_provider(agent.current_provider)
+    decision = routing_decision(provider_name, 0)
+    error_type = model_error_type_for_status(http_status, message)
+    if error_type and should_use_proxy_safe_mode(decision):
+        raise HTTPException(
+            status_code=http_status,
+            detail=structured_model_error_detail(
+                error_type=error_type,
+                caller=caller,
+                status_code=http_status,
+                decision=decision,
+                input_char_count=0,
+                retryable=error_type != "ModelProviderConfigError",
+                retry_after_seconds=retry_after_seconds_from_headers(headers),
+                cloudflare_ray_id=headers.get("cf-ray", ""),
+                message=(
+                    "Third-party proxy timed out. The task can be resumed with smaller chunks."
+                    if error_type == "ModelProxyTimeout"
+                    else "Third-party proxy returned a transient upstream error."
+                ),
+            ),
+        ) from error
     raise HTTPException(
         status_code=http_status,
         detail=f"Model API error: {message}",
@@ -749,6 +1254,33 @@ def get_adapter(provider: Optional[str] = None):
         return agent.create_model_adapter(name), name
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def chat_completions_adapter_for_provider(provider_name: str) -> Optional[Any]:
+    name = normalize_provider(provider_name)
+    if name == "openai":
+        return agent.OpenAIChatCompletionsAdapter(
+            api_key_env="OPENAI_API_KEY",
+            base_url_env="OPENAI_BASE_URL",
+            model_env="OPENAI_MODEL",
+            fallback_model="gpt-5.5",
+        )
+    if name == "openai-compatible":
+        return agent.OpenAIChatCompletionsAdapter(
+            api_key_env="OPENAI_COMPATIBLE_API_KEY",
+            base_url_env="OPENAI_COMPATIBLE_BASE_URL",
+            model_env="OPENAI_COMPATIBLE_MODEL",
+            fallback_model=os.getenv("OPENAI_MODEL", "gpt-5.5"),
+        )
+    adapter = agent.create_model_adapter(name)
+    if "Chat" in adapter.__class__.__name__:
+        return adapter
+    return None
+
+
+def provider_default_endpoint(provider_name: str) -> str:
+    adapter = agent.create_model_adapter(normalize_provider(provider_name))
+    return "chat_completions" if "Chat" in adapter.__class__.__name__ else "responses"
 
 
 def output_application_metadata(path: Path, suffix: str) -> dict[str, str]:
@@ -1770,7 +2302,15 @@ def set_background_stage(task_id: str, stage_id: str, status: str, detail: str =
 
 def task_error_detail(error: Exception) -> str:
     if isinstance(error, HTTPException):
-        detail = str(error.detail)
+        if isinstance(error.detail, dict):
+            error_type = str(error.detail.get("type") or "")
+            if error_type == "ModelTransientError":
+                return "第三方中转站连续返回 502。已保存当前进度，可以稍后重试或降低输入规模。"
+            if error_type == "ModelProxyTimeout":
+                return "第三方中转站连续超时。已保存当前进度，可以稍后重试或降低输入规模。"
+            detail = str(error.detail.get("message") or error.detail)
+        else:
+            detail = str(error.detail)
     else:
         detail = str(error)
     if "524" in detail or "origin_response_timeout" in detail:
@@ -1895,7 +2435,7 @@ def run_agent_task(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
         assert_agent_task_not_cancelled()
-        raise_model_api_http_exception(error)
+        raise_model_api_http_exception(error, caller="run_agent_task")
     except agent.transient_network_errors() as error:
         assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
@@ -1906,9 +2446,27 @@ def run_agent_task(
         unregister_agent_task_adapter(task_id, adapter)
 
 
-def run_text_task(message: str, provider: Optional[str] = None, model: Optional[str] = None) -> str:
-    adapter, _ = get_adapter(provider)
+def run_text_task(
+    message: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    caller: str = "",
+    task_type: str = "text_task",
+    user_options: Optional[dict[str, Any]] = None,
+    allow_oversize_direct: bool = False,
+    endpoint_mode: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    stream: bool = False,
+) -> str:
+    adapter, provider_name = get_adapter(provider)
+    if endpoint_mode == "chat_completions":
+        adapter = chat_completions_adapter_for_provider(provider_name) or adapter
     chosen_model = model or adapter.default_model()
+    caller = caller or caller_name_from_stack()
+    decision = routing_decision(provider_name, len(message), user_options)
+    endpoint_type = "chat_completions" if "Chat" in adapter.__class__.__name__ else "responses"
+    log_model_routing(decision, caller, task_type, chosen_model, endpoint_type)
+    enforce_model_input_limits(decision, caller, allow_oversize_direct=allow_oversize_direct)
     task_id = current_agent_task_id.get("")
     assert_agent_task_not_cancelled()
     register_agent_task_adapter(task_id, adapter)
@@ -1918,6 +2476,8 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
             instructions=agent.SYSTEM_PROMPT,
             tools=[],
             input_items=[{"role": "user", "content": message}],
+            max_output_tokens=max_output_tokens,
+            stream=stream,
         )
         assert_agent_task_not_cancelled()
         return adapter.output_text(response)
@@ -1925,7 +2485,7 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
         raise HTTPException(status_code=499, detail=str(error)) from error
     except (APIStatusError, urllib.error.HTTPError) as error:
         assert_agent_task_not_cancelled()
-        raise_model_api_http_exception(error)
+        raise_model_api_http_exception(error, caller=caller)
     except agent.transient_network_errors() as error:
         assert_agent_task_not_cancelled()
         raise HTTPException(status_code=502, detail=f"Network error: {error}") from error
@@ -1934,6 +2494,300 @@ def run_text_task(message: str, provider: Optional[str] = None, model: Optional[
         raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         unregister_agent_task_adapter(task_id, adapter)
+
+
+def invoke_safe_builder(builder: Callable[..., Any], **kwargs: Any) -> Any:
+    signature = inspect.signature(builder)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return builder(**kwargs)
+    accepted = {
+        name: value
+        for name, value in kwargs.items()
+        if name in signature.parameters
+    }
+    return builder(**accepted)
+
+
+def safe_builder_prompt(result: Any) -> tuple[str, Any]:
+    if isinstance(result, str):
+        return result, None
+    if isinstance(result, dict):
+        prompt = result.get("prompt")
+        if isinstance(prompt, str):
+            return prompt, result.get("payload")
+    raise HTTPException(status_code=500, detail="safe_model_call builder must return a prompt string or {'prompt': string}.")
+
+
+def safe_model_call(
+    caller: str,
+    prompt: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    task_type: str = "text_task",
+    compact_builder: Optional[Callable[..., Any]] = None,
+    map_reduce_builder: Optional[Callable[..., Any]] = None,
+    user_options: Optional[dict[str, Any]] = None,
+    allow_oversize_direct: bool = False,
+) -> str:
+    provider_name = normalize_provider(provider or agent.current_provider)
+    original_input_chars = estimate_input_size(prompt)
+    decision = routing_decision(provider_name, original_input_chars, user_options)
+    soft_limit = int(decision.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS)
+    hard_limit = int(decision.get("proxySafeHardInputChars") or PROXY_SAFE_HARD_INPUT_CHARS)
+    use_compact_input = False
+    use_map_reduce = bool(decision.get("useMapReduce"))
+    final_prompt = prompt
+    compact_input_chars = 0
+    compact_payload = None
+
+    should_compact = should_use_proxy_safe_mode(decision) and original_input_chars > soft_limit
+    if should_compact and compact_builder:
+        compact_result = invoke_safe_builder(
+            compact_builder,
+            decision=decision,
+            soft_limit=soft_limit,
+            hard_limit=hard_limit,
+            max_chars=soft_limit,
+            caller=caller,
+        )
+        final_prompt, compact_payload = safe_builder_prompt(compact_result)
+        compact_input_chars = estimate_input_size(final_prompt)
+        use_compact_input = True
+
+    if should_use_proxy_safe_mode(decision) and estimate_input_size(final_prompt) > soft_limit and map_reduce_builder:
+        map_reduce_result = invoke_safe_builder(
+            map_reduce_builder,
+            decision=decision,
+            soft_limit=soft_limit,
+            hard_limit=hard_limit,
+            max_chars=soft_limit,
+            caller=caller,
+            compact_payload=compact_payload,
+        )
+        final_prompt, compact_payload = safe_builder_prompt(map_reduce_result)
+        compact_input_chars = estimate_input_size(final_prompt)
+        use_compact_input = True
+        use_map_reduce = True
+
+    if not should_use_proxy_safe_mode(decision) and use_map_reduce and map_reduce_builder:
+        map_reduce_result = invoke_safe_builder(
+            map_reduce_builder,
+            decision=decision,
+            soft_limit=soft_limit,
+            hard_limit=hard_limit,
+            max_chars=int(decision.get("mapReduceThresholdChars") or OFFICIAL_MAP_REDUCE_THRESHOLD_CHARS),
+            caller=caller,
+            compact_payload=compact_payload,
+        )
+        final_prompt, compact_payload = safe_builder_prompt(map_reduce_result)
+        compact_input_chars = estimate_input_size(final_prompt)
+        use_compact_input = True
+
+    final_input_chars = estimate_input_size(final_prompt)
+    print(
+        "safe_model_call: "
+        f"caller={caller}, taskType={task_type}, providerKind={decision.get('providerKind')}, "
+        f"proxySafeMode={str(decision.get('proxySafeMode')).lower()}, "
+        f"originalInputCharCount={original_input_chars}, compactInputCharCount={compact_input_chars}, "
+        f"finalInputCharCount={final_input_chars}, useCompactInput={str(use_compact_input).lower()}, "
+        f"useMapReduce={str(use_map_reduce).lower()}"
+    )
+
+    if should_use_proxy_safe_mode(decision) and not allow_oversize_direct and final_input_chars > soft_limit:
+        raise model_input_limit_exception(
+            caller=caller,
+            input_char_count=final_input_chars,
+            limit=soft_limit,
+            hard_limit=hard_limit,
+            message="Input is still too large after compact/map-reduce protection.",
+        )
+
+    provider_is_proxy = should_use_proxy_safe_mode(decision)
+    max_transient_retries = int(decision.get("maxTransientRetries") or 0) if provider_is_proxy else 0
+    original_endpoint = provider_default_endpoint(provider_name)
+    fallback_adapter = (
+        chat_completions_adapter_for_provider(provider_name)
+        if provider_is_proxy and bool(decision.get("endpointFallbackEnabled")) and original_endpoint == "responses"
+        else None
+    )
+    can_fallback_endpoint = fallback_adapter is not None
+    attempts: list[dict[str, Any]] = []
+    attempt_number = 1
+    attempt_prompt = final_prompt
+    attempt_input_chars = final_input_chars
+    endpoint_mode: Optional[str] = None
+    endpoint_name = original_endpoint
+    stream = False
+
+    def max_output_tokens_for_attempt(number: int) -> Optional[int]:
+        if not provider_is_proxy:
+            return None
+        if number >= 3 and bool(decision.get("reduceOutputTokensOnRetry")):
+            retry_tokens = int(decision.get("retryOutputTokens") or 0)
+            return retry_tokens or None
+        max_tokens = int(decision.get("maxOutputTokensPerCall") or 0)
+        return max_tokens or None
+
+    def retry_delay_seconds(failed_attempt: int, error: HTTPException) -> float:
+        retry_after = retry_after_seconds_from_http_exception(error)
+        if retry_after is not None:
+            return float(retry_after)
+        initial_ms = int(decision.get("initialRetryDelayMs") or 0)
+        multiplier = float(decision.get("retryBackoffMultiplier") or 1.0)
+        delay = (initial_ms / 1000.0) * (multiplier ** max(0, failed_attempt - 1))
+        return min(delay, float(PROXY_RETRY_AFTER_MAX_SECONDS))
+
+    def next_retry_action(failed_attempt: int) -> str:
+        if failed_attempt == 1:
+            return "retry_same_input"
+        if can_fallback_endpoint:
+            return "endpoint_fallback"
+        if bool(decision.get("shrinkInputOnRetry")) and compact_builder:
+            return "shrink_input"
+        if bool(decision.get("supportsStreaming")):
+            return "streaming_retry"
+        return "retry_same_input"
+
+    def retry_compact_limit(next_attempt: int, current_chars: int) -> int:
+        ratio = float(decision.get("shrinkRatioOnTransientError") or 0.75)
+        target = max(1000, int(current_chars * ratio))
+        if caller == "run_resume_bullet_writer_tool":
+            if next_attempt >= 4:
+                return min(target, BULLET_WRITER_EMERGENCY_COMPACT_CHARS)
+            return min(target, BULLET_WRITER_RETRY_COMPACT_CHARS)
+        return min(target, soft_limit)
+
+    def rebuild_prompt_for_retry(next_attempt: int, current_prompt: str, current_chars: int) -> tuple[str, Any]:
+        nonlocal compact_payload
+        if not bool(decision.get("shrinkInputOnRetry")) or not compact_builder:
+            return current_prompt, compact_payload
+        retry_mode = "emergency" if next_attempt >= 4 else "retry"
+        target_chars = retry_compact_limit(next_attempt, current_chars)
+        compact_result = invoke_safe_builder(
+            compact_builder,
+            decision=decision,
+            soft_limit=soft_limit,
+            hard_limit=hard_limit,
+            max_chars=target_chars,
+            caller=caller,
+            compact_payload=compact_payload,
+            retry_mode=retry_mode,
+            retry_target_chars=target_chars,
+        )
+        retry_prompt, retry_payload = safe_builder_prompt(compact_result)
+        compact_payload = retry_payload
+        return retry_prompt, retry_payload
+
+    def record_retry_progress(status_code: int, action: str) -> None:
+        task_id = current_agent_task_id.get("")
+        if not task_id:
+            return
+        if action in {"shrink_input", "endpoint_fallback", "streaming_retry"}:
+            append_background_task_message(task_id, "agent", f"第三方中转站返回 {status_code}，系统正在缩小输入并重试。")
+        else:
+            append_background_task_message(task_id, "agent", f"第三方中转站返回 {status_code}，系统正在有限重试。")
+
+    while True:
+        max_output_tokens = max_output_tokens_for_attempt(attempt_number)
+        try:
+            return run_text_task(
+                attempt_prompt,
+                provider=provider_name,
+                model=model,
+                caller=caller,
+                task_type=task_type,
+                user_options=user_options,
+                allow_oversize_direct=allow_oversize_direct,
+                endpoint_mode=endpoint_mode,
+                max_output_tokens=max_output_tokens,
+                stream=stream,
+            )
+        except HTTPException as error:
+            status_code = status_code_from_http_exception(error)
+            detail_text = http_exception_detail_text(error)
+            error_type = model_error_type_for_status(status_code, detail_text)
+            retryable = error_type in {"ModelTransientError", "ModelProxyTimeout"}
+            if not provider_is_proxy or not error_type or not retryable:
+                if provider_is_proxy and error_type == "ModelProviderConfigError":
+                    raise HTTPException(
+                        status_code=status_code,
+                        detail=structured_model_error_detail(
+                            error_type=error_type,
+                            caller=caller,
+                            status_code=status_code,
+                            decision=decision,
+                            input_char_count=attempt_input_chars,
+                            retryable=False,
+                            message="Model provider configuration appears invalid; check base_url, API key, protocol, and model name.",
+                        ),
+                    ) from error
+                raise
+
+            retry_action = next_retry_action(attempt_number)
+            attempt_record = {
+                "attempt": attempt_number,
+                "statusCode": status_code,
+                "inputCharCount": attempt_input_chars,
+                "endpoint": endpoint_name,
+                "stream": stream,
+                "maxOutputTokens": max_output_tokens,
+                "retryAction": retry_action if attempt_number <= max_transient_retries else "give_up",
+            }
+            attempts.append(attempt_record)
+            save_model_failure_log(
+                caller=caller,
+                decision=decision,
+                status_code=status_code,
+                input_char_count=attempt_input_chars,
+                attempt=attempt_number,
+                endpoint=endpoint_name,
+                stream=stream,
+                max_output_tokens=max_output_tokens,
+                retry_action=attempt_record["retryAction"],
+                error_message=detail_text,
+                cloudflare_ray_id=cloudflare_ray_from_http_exception(error),
+            )
+
+            if attempt_number > max_transient_retries:
+                message = (
+                    "Third-party proxy repeatedly timed out after safe_model_call retry protection."
+                    if error_type == "ModelProxyTimeout"
+                    else "Third-party proxy returned repeated transient upstream errors after safe_model_call retry protection."
+                )
+                raise HTTPException(
+                    status_code=status_code if status_code in {502, 503, 504, 524} else 502,
+                    detail=structured_model_error_detail(
+                        error_type=error_type,
+                        caller=caller,
+                        status_code=status_code,
+                        decision=decision,
+                        input_char_count=attempt_input_chars,
+                        retryable=True,
+                        attempts=attempts,
+                        cloudflare_ray_id=cloudflare_ray_from_http_exception(error),
+                        endpoint=endpoint_name,
+                        checkpoint_preserved=True,
+                        message=message,
+                    ),
+                ) from error
+
+            record_retry_progress(status_code, retry_action)
+            delay = retry_delay_seconds(attempt_number, error)
+            if delay > 0:
+                time.sleep(delay)
+
+            attempt_number += 1
+            if attempt_number >= 3:
+                attempt_prompt, compact_payload = rebuild_prompt_for_retry(
+                    attempt_number,
+                    attempt_prompt,
+                    attempt_input_chars,
+                )
+                attempt_input_chars = estimate_input_size(attempt_prompt)
+                if can_fallback_endpoint:
+                    endpoint_mode = "chat_completions"
+                    endpoint_name = "chat_completions"
+                stream = bool(decision.get("supportsStreaming") and endpoint_name == "chat_completions")
 
 
 APPLICATION_HINT_EXTRACTION_PROMPT = """
@@ -1961,7 +2815,7 @@ def resolve_application_hint(job_description: str) -> dict[str, str]:
 
     prompt = APPLICATION_HINT_EXTRACTION_PROMPT + trimmed
     try:
-        response = run_text_task(prompt)
+        response = safe_model_call(caller="resolve_application_hint", prompt=prompt, task_type="application_hint")
         payload = extract_json_object(response)
     except HTTPException:
         return empty
@@ -2026,6 +2880,246 @@ def load_memory_for_merge() -> Any:
 
 def normalized_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def read_json_file(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return fallback
+
+
+def write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def stable_hash(value: Any) -> str:
+    return hashlib.sha256(normalized_json(value).encode("utf-8")).hexdigest()
+
+
+def read_model_call_cache() -> dict[str, Any]:
+    payload = read_json_file(MODEL_CACHE_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_model_call_cache(cache: dict[str, Any]) -> None:
+    write_json_file(MODEL_CACHE_PATH, cache)
+
+
+def model_cache_key(task_type: str, model: str, prompt_template_version: str, input_payload: Any) -> str:
+    return stable_hash(
+        {
+            "taskType": task_type,
+            "model": model,
+            "promptTemplateVersion": prompt_template_version,
+            "inputHash": stable_hash(input_payload),
+        }
+    )
+
+
+def cached_json_model_call(
+    task_type: str,
+    prompt_template_version: str,
+    input_payload: Any,
+    prompt: str,
+    caller: str,
+) -> dict[str, Any]:
+    provider_name = normalize_provider(agent.current_provider)
+    model = provider_model_name(provider_name)
+    key = model_cache_key(task_type, model, prompt_template_version, input_payload)
+    cache = read_model_call_cache()
+    cached = cache.get(key)
+    if isinstance(cached, dict) and isinstance(cached.get("output_json"), dict):
+        return cached["output_json"]
+    output = extract_json_object(safe_model_call(caller=caller, prompt=prompt, task_type=task_type))
+    cache[key] = {
+        "cache_key": key,
+        "task_type": task_type,
+        "model": model,
+        "input_hash": stable_hash(input_payload),
+        "output_json": output,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    write_model_call_cache(cache)
+    return output
+
+
+def read_project_compact_facts_cache() -> dict[str, Any]:
+    payload = read_json_file(PROJECT_COMPACT_FACTS_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_project_compact_facts_cache(cache: dict[str, Any]) -> None:
+    write_json_file(PROJECT_COMPACT_FACTS_PATH, cache)
+
+
+def project_compact_cache_key(project_name: str, repo_name: str, source_hash: str) -> str:
+    return stable_hash({"project_name": project_name, "repo_name": repo_name, "source_hash": source_hash})
+
+
+def get_cached_project_compact_facts(project_name: str, repo_name: str, source_hash: str) -> Optional[dict[str, Any]]:
+    cache = read_project_compact_facts_cache()
+    record = cache.get(project_compact_cache_key(project_name, repo_name, source_hash))
+    if isinstance(record, dict) and isinstance(record.get("compact_facts_json"), dict):
+        return record["compact_facts_json"]
+    return None
+
+
+def save_project_compact_facts(project_name: str, repo_name: str, source_hash: str, facts: dict[str, Any]) -> None:
+    cache = read_project_compact_facts_cache()
+    key = project_compact_cache_key(project_name, repo_name, source_hash)
+    now = datetime.now().isoformat(timespec="seconds")
+    previous = cache.get(key) if isinstance(cache.get(key), dict) else {}
+    cache[key] = {
+        "id": key,
+        "project_name": project_name,
+        "repo_name": repo_name,
+        "source_hash": source_hash,
+        "compact_facts_json": facts,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    }
+    write_project_compact_facts_cache(cache)
+
+
+def read_chunk_checkpoints() -> dict[str, Any]:
+    payload = read_json_file(CHUNK_CHECKPOINTS_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_chunk_checkpoints(checkpoints: dict[str, Any]) -> None:
+    write_json_file(CHUNK_CHECKPOINTS_PATH, checkpoints)
+
+
+def checkpoint_key(task_id: str, project_name: str, repo_name: str, chunk_index: int, chunk_hash: str) -> str:
+    return stable_hash(
+        {
+            "task_id": task_id,
+            "project_name": project_name,
+            "repo_name": repo_name,
+            "chunk_index": chunk_index,
+            "chunk_hash": chunk_hash,
+        }
+    )
+
+
+def get_completed_chunk_checkpoint(
+    task_id: str,
+    project_name: str,
+    repo_name: str,
+    chunk_index: int,
+    chunk_hash: str,
+) -> Optional[dict[str, Any]]:
+    checkpoints = read_chunk_checkpoints()
+    record = checkpoints.get(checkpoint_key(task_id, project_name, repo_name, chunk_index, chunk_hash))
+    if isinstance(record, dict) and record.get("status") == "done" and isinstance(record.get("output_json"), dict):
+        return record["output_json"]
+    return None
+
+
+def save_chunk_checkpoint(
+    task_id: str,
+    project_name: str,
+    repo_name: str,
+    chunk_index: int,
+    chunk_hash: str,
+    status: str,
+    output_json: Optional[dict[str, Any]] = None,
+    error: str = "",
+) -> None:
+    checkpoints = read_chunk_checkpoints()
+    key = checkpoint_key(task_id, project_name, repo_name, chunk_index, chunk_hash)
+    now = datetime.now().isoformat(timespec="seconds")
+    previous = checkpoints.get(key) if isinstance(checkpoints.get(key), dict) else {}
+    checkpoints[key] = {
+        "id": key,
+        "task_id": task_id,
+        "project_name": project_name,
+        "repo_name": repo_name,
+        "chunk_index": chunk_index,
+        "chunk_hash": chunk_hash,
+        "status": status,
+        "output_json": output_json or {},
+        "error": error,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    }
+    write_chunk_checkpoints(checkpoints)
+
+
+def read_resume_candidate_checkpoints() -> dict[str, Any]:
+    payload = read_json_file(RESUME_CANDIDATE_CHECKPOINTS_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_resume_candidate_checkpoints(checkpoints: dict[str, Any]) -> None:
+    write_json_file(RESUME_CANDIDATE_CHECKPOINTS_PATH, checkpoints)
+
+
+def resume_candidate_checkpoint_key(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+) -> str:
+    return stable_hash(
+        {
+            "task_id": task_id,
+            "project_id": project_id,
+            "project_name": project_name,
+            "source_hash": source_hash,
+        }
+    )
+
+
+def get_completed_resume_candidate_checkpoint(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+) -> Optional[dict[str, Any]]:
+    if not task_id:
+        return None
+    checkpoints = read_resume_candidate_checkpoints()
+    key = resume_candidate_checkpoint_key(task_id, project_id, project_name, source_hash)
+    record = checkpoints.get(key)
+    if isinstance(record, dict) and record.get("status") == "done" and isinstance(record.get("candidate_json"), dict):
+        return record["candidate_json"]
+    return None
+
+
+def save_resume_candidate_checkpoint(
+    task_id: str,
+    project_id: str,
+    project_name: str,
+    source_hash: str,
+    status: str,
+    candidate_json: Optional[dict[str, Any]] = None,
+    error: str = "",
+) -> None:
+    if not task_id:
+        return
+    checkpoints = read_resume_candidate_checkpoints()
+    key = resume_candidate_checkpoint_key(task_id, project_id, project_name, source_hash)
+    now = datetime.now().isoformat(timespec="seconds")
+    previous = checkpoints.get(key) if isinstance(checkpoints.get(key), dict) else {}
+    checkpoints[key] = {
+        "id": key,
+        "task_id": task_id,
+        "project_id": project_id,
+        "project_name": project_name,
+        "source_hash": source_hash,
+        "status": status,
+        "candidate_json": candidate_json or {},
+        "error": error,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    }
+    write_resume_candidate_checkpoints(checkpoints)
 
 
 def normalize_match_text(value: Any) -> str:
@@ -2194,7 +3288,7 @@ Resume:
 {resume}
 """
     prompt = append_agent_progress_guidance(prompt, agent_progress_messages or [])
-    response = run_text_task(prompt)
+    response = safe_model_call(caller="update_memory_from_resume", prompt=prompt, task_type="memory_from_resume")
     payload = extract_json_object(response)
     merged_memory = payload.get("memory")
     if not isinstance(merged_memory, dict):
@@ -2261,6 +3355,323 @@ def build_project_analysis_payload(repo_contexts: list[dict[str, Any]]) -> list[
     return payload
 
 
+def repo_display_name(context: dict[str, Any]) -> str:
+    return str(context.get("repository") or context.get("url") or context.get("project_name") or "unknown-repo")
+
+
+def repo_project_name(context: dict[str, Any]) -> str:
+    return str(context.get("project_name") or context.get("project") or context.get("repository") or context.get("url") or "Unknown Project")
+
+
+def split_text_into_chunks(text: str, max_chars: int = REPO_CHUNK_TARGET_CHARS) -> list[str]:
+    text = str(text or "")
+    if len(text) <= max_chars:
+        return [text]
+    chunks = []
+    remaining = text
+    boundaries = ["\n\n  {", "\n\n", "\n# ", "\n## ", "\n### ", "\n", ", "]
+    while len(remaining) > max_chars:
+        cut = -1
+        window = remaining[:max_chars]
+        for boundary in boundaries:
+            candidate = window.rfind(boundary)
+            if candidate > max_chars * 0.55:
+                cut = candidate + len(boundary)
+                break
+        if cut <= 0:
+            cut = max_chars
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return [chunk for chunk in chunks if chunk]
+
+
+def source_files_from_repo_payload(repo_payload: dict[str, Any]) -> list[str]:
+    files = [str(item) for item in repo_payload.get("root_files", [])[:20]]
+    for commit in repo_payload.get("recent_commit_evidence", [])[:8]:
+        if isinstance(commit, dict):
+            files.extend(str(item) for item in commit.get("files", [])[:8])
+    cleaned = []
+    for file_name in files:
+        if file_name and file_name not in cleaned:
+            cleaned.append(file_name)
+        if len(cleaned) >= 30:
+            break
+    return cleaned
+
+
+def ensure_compact_prompt(prompt: str, caller: str) -> None:
+    decision = routing_decision(normalize_provider(agent.current_provider), len(prompt))
+    if should_use_proxy_safe_mode(decision) and len(prompt) > int(decision.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS):
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "ok": False,
+                "type": "ModelInputTooLargeForProxy",
+                "caller": caller,
+                "inputCharCount": len(prompt),
+                "limit": int(decision.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS),
+                "message": "Map-Reduce prompt is still too large for third-party proxy.",
+            },
+        )
+
+
+def build_repo_chunk_prompt(
+    project_name: str,
+    repo_name: str,
+    chunk_text: str,
+    chunk_index: int,
+    total_chunks: int,
+    source_files: list[str],
+) -> str:
+    return f"""
+Analyze one repository chunk and return compact evidence facts only.
+
+Rules:
+- Use only the chunk content below.
+- Do not write resume bullets; produce evidence-backed facts that can later support Project Memory.
+- Do not invent metrics, scale, deployment, users, ownership, or performance.
+- Keep every array short.
+- Return ONLY valid JSON with exactly this shape:
+  {{
+    "projectName": "{project_name}",
+    "repoName": "{repo_name}",
+    "chunkIndex": {chunk_index},
+    "technicalFacts": [],
+    "resumeRelevantClaims": [],
+    "metricCandidates": [],
+    "evidenceSources": [],
+    "riskFlags": []
+  }}
+
+Context header:
+projectName: {project_name}
+repoName: {repo_name}
+chunkIndex: {chunk_index}
+totalChunks: {total_chunks}
+sourceFiles: {json.dumps(source_files[:30], ensure_ascii=False)}
+
+Repository chunk:
+{chunk_text}
+"""
+
+
+def analyze_repo_chunk(
+    task_id: str,
+    project_name: str,
+    repo_name: str,
+    chunk_text: str,
+    chunk_index: int,
+    total_chunks: int,
+    source_files: list[str],
+) -> dict[str, Any]:
+    chunk_hash = stable_hash(
+        {
+            "project_name": project_name,
+            "repo_name": repo_name,
+            "chunk_index": chunk_index,
+            "chunk_text": chunk_text,
+        }
+    )
+    cached = get_completed_chunk_checkpoint(task_id, project_name, repo_name, chunk_index, chunk_hash)
+    if cached:
+        return cached
+    prompt = build_repo_chunk_prompt(project_name, repo_name, chunk_text, chunk_index, total_chunks, source_files)
+    ensure_compact_prompt(prompt, "repo_chunk_map")
+    try:
+        payload = cached_json_model_call(
+            "repo_chunk_map",
+            "v1",
+            {
+                "projectName": project_name,
+                "repoName": repo_name,
+                "chunkIndex": chunk_index,
+                "chunkHash": chunk_hash,
+            },
+            prompt,
+            "repo_chunk_map",
+        )
+    except HTTPException as error:
+        if error.status_code != 524:
+            save_chunk_checkpoint(task_id, project_name, repo_name, chunk_index, chunk_hash, "failed", error=str(error.detail))
+            raise
+        retry_text = truncate_text(chunk_text, max(1000, int(len(chunk_text) * 0.7)))
+        retry_prompt = build_repo_chunk_prompt(project_name, repo_name, retry_text, chunk_index, total_chunks, source_files)
+        ensure_compact_prompt(retry_prompt, "repo_chunk_map_retry")
+        try:
+            payload = extract_json_object(safe_model_call(caller="repo_chunk_map_retry", prompt=retry_prompt, task_type="repo_chunk_map"))
+        except HTTPException as retry_error:
+            save_chunk_checkpoint(
+                task_id,
+                project_name,
+                repo_name,
+                chunk_index,
+                chunk_hash,
+                "failed",
+                error=str(retry_error.detail),
+            )
+            raise HTTPException(
+                status_code=524,
+                detail={
+                    "ok": False,
+                    "type": "ModelProxyTimeout",
+                    "statusCode": 524,
+                    "retryable": True,
+                    "message": "Third-party proxy timed out. The task has been chunked; reduce chunk size or resume from failed chunk.",
+                    "failedChunk": {
+                        "projectName": project_name,
+                        "repoName": repo_name,
+                        "chunkIndex": chunk_index,
+                    },
+                },
+            ) from retry_error
+    for key in ["technicalFacts", "resumeRelevantClaims", "metricCandidates", "evidenceSources", "riskFlags"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    payload["projectName"] = payload.get("projectName") or project_name
+    payload["repoName"] = payload.get("repoName") or repo_name
+    payload["chunkIndex"] = payload.get("chunkIndex") or chunk_index
+    save_chunk_checkpoint(task_id, project_name, repo_name, chunk_index, chunk_hash, "done", output_json=payload)
+    return payload
+
+
+def reduce_repo_chunk_facts(project_name: str, repo_name: str, chunk_facts: list[dict[str, Any]]) -> dict[str, Any]:
+    batches = split_text_into_chunks(json.dumps(chunk_facts, ensure_ascii=False, indent=2), REDUCE_BATCH_TARGET_CHARS)
+    reduced_batches = []
+    for batch_index, batch_text in enumerate(batches, start=1):
+        prompt = f"""
+Reduce compact chunk facts for one repository.
+
+Rules:
+- Use only the provided compact chunk facts, not raw repository content.
+- Merge duplicates and keep the result short.
+- Do not invent metrics or stronger claims.
+- Return ONLY valid JSON with exactly these keys:
+  "projectName", "repoName", "projectSummary", "technicalStack", "keyModules",
+  "resumeRelevantClaims", "metricCandidates", "evidenceSources", "recommendedResumeAngles", "riskFlags".
+
+projectName: {project_name}
+repoName: {repo_name}
+batchIndex: {batch_index}
+totalBatches: {len(batches)}
+
+Chunk facts batch:
+{batch_text}
+"""
+        ensure_compact_prompt(prompt, "repo_level_reduce")
+        reduced_batches.append(
+            cached_json_model_call(
+                "repo_level_reduce",
+                "v1",
+                {"projectName": project_name, "repoName": repo_name, "batchIndex": batch_index, "batchText": batch_text},
+                prompt,
+                "repo_level_reduce",
+            )
+        )
+    if len(reduced_batches) == 1:
+        payload = reduced_batches[0]
+    else:
+        prompt = f"""
+Final-reduce compact repository facts.
+
+Rules:
+- Use only these intermediate compact facts.
+- Return ONLY valid JSON with exactly these keys:
+  "projectName", "repoName", "projectSummary", "technicalStack", "keyModules",
+  "resumeRelevantClaims", "metricCandidates", "evidenceSources", "recommendedResumeAngles", "riskFlags".
+
+projectName: {project_name}
+repoName: {repo_name}
+
+Intermediate facts:
+{json.dumps(reduced_batches, ensure_ascii=False, indent=2)}
+"""
+        ensure_compact_prompt(prompt, "repo_level_final_reduce")
+        payload = cached_json_model_call(
+            "repo_level_final_reduce",
+            "v1",
+            {"projectName": project_name, "repoName": repo_name, "reducedBatches": reduced_batches},
+            prompt,
+            "repo_level_final_reduce",
+        )
+    for key in ["technicalStack", "keyModules", "resumeRelevantClaims", "metricCandidates", "evidenceSources", "recommendedResumeAngles", "riskFlags"]:
+        if not isinstance(payload.get(key), list):
+            payload[key] = []
+    payload["projectName"] = payload.get("projectName") or project_name
+    payload["repoName"] = payload.get("repoName") or repo_name
+    return payload
+
+
+def compact_repo_facts_from_context(context: dict[str, Any]) -> dict[str, Any]:
+    repo_payload = build_project_analysis_payload([context])[0]
+    project_name = repo_project_name(context)
+    repo_name = repo_display_name(context)
+    source_hash = stable_hash(repo_payload)
+    cached = get_cached_project_compact_facts(project_name, repo_name, source_hash)
+    if cached:
+        return cached
+    serialized = json.dumps(repo_payload, ensure_ascii=False, indent=2)
+    chunks = split_text_into_chunks(serialized, REPO_CHUNK_TARGET_CHARS)
+    source_files = source_files_from_repo_payload(repo_payload)
+    task_id = current_agent_task_id.get("") or "repo-analysis"
+    chunk_facts = [
+        analyze_repo_chunk(task_id, project_name, repo_name, chunk, index, len(chunks), source_files)
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+    repo_facts = reduce_repo_chunk_facts(project_name, repo_name, chunk_facts)
+    repo_facts["chunkCount"] = len(chunks)
+    save_project_compact_facts(project_name, repo_name, source_hash, repo_facts)
+    return repo_facts
+
+
+def update_project_memory_from_compact_repo_facts(
+    current_project_memory: dict[str, Any],
+    repo_facts: dict[str, Any],
+    agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    project_name = str(repo_facts.get("projectName") or repo_facts.get("project_name") or "")
+    repo_name = str(repo_facts.get("repoName") or repo_facts.get("repo_name") or "")
+    scoped_memory = scoped_project_memory(current_project_memory, project_name=project_name, project_id="")
+    prompt = f"""
+Update project_memory.json from compact repository facts.
+
+Rules:
+- Use only the compact repo facts below. Do not request or infer raw repository content.
+- Return a scoped project_memory object containing only the project affected by these repo facts.
+- Preserve existing supported facts for that project.
+- Keep unsupported metrics empty or omitted. Do not invent product impact, scale, users, performance, or business results.
+- Return only valid JSON with exactly these keys:
+  "changed": boolean,
+  "additions": array of short strings,
+  "project_memory": object
+
+Target project: {project_name}
+Repository: {repo_name}
+
+Current scoped project_memory.json:
+{json.dumps(scoped_memory, ensure_ascii=False, indent=2)}
+
+Compact repository facts:
+{json.dumps(repo_facts, ensure_ascii=False, indent=2)}
+"""
+    prompt = append_agent_progress_guidance(prompt, agent_progress_messages or [])
+    ensure_compact_prompt(prompt, "project_level_reduce")
+    payload = cached_json_model_call(
+        "project_level_reduce",
+        "v1",
+        {"projectName": project_name, "repoName": repo_name, "scopedMemory": scoped_memory, "repoFacts": repo_facts},
+        prompt,
+        "project_level_reduce",
+    )
+    scoped_update = payload.get("project_memory")
+    if not isinstance(scoped_update, dict):
+        raise HTTPException(status_code=500, detail="Agent JSON response must include a project_memory object.")
+    merged = merge_scoped_project_memory(current_project_memory, scoped_update, project_name=project_name, project_id="")
+    payload["project_memory"] = merged
+    return payload
+
+
 def read_current_project_memory() -> dict[str, Any]:
     try:
         current = json.loads(agent.read_project_memory())
@@ -2274,6 +3685,7 @@ def read_current_project_memory() -> dict[str, Any]:
 def update_project_memory_from_repo_analysis(
     repo_contexts: list[dict[str, Any]],
     agent_progress_messages: Optional[list[dict[str, Any]]] = None,
+    force_chunking: bool = False,
 ) -> dict[str, Any]:
     if not repo_contexts:
         return {
@@ -2303,6 +3715,7 @@ def update_project_memory_from_repo_analysis(
     changed_any = False
     additions: list[str] = []
     processed_repositories: list[str] = []
+    map_reduce_repositories: list[dict[str, Any]] = []
     skipped_repositories = [
         str(context.get("repository") or context.get("url") or "")
         for context in repo_contexts
@@ -2322,8 +3735,42 @@ Repository analysis payload for exactly one repository:
 {json.dumps(repo_analysis, ensure_ascii=False, indent=2)}
 """
         prompt = append_agent_progress_guidance(prompt, agent_progress_messages or [])
-        response = run_text_task(prompt)
-        payload = extract_json_object(response)
+        decision = routing_decision(
+            normalize_provider(agent.current_provider),
+            len(prompt),
+            {"forceChunking": force_chunking},
+        )
+        if decision.get("useMapReduce"):
+            print(
+                "safe_model_call: "
+                "caller=update_project_memory_from_repo_analysis, taskType=project_memory_from_repo, "
+                f"providerKind={decision.get('providerKind')}, proxySafeMode={str(decision.get('proxySafeMode')).lower()}, "
+                f"originalInputCharCount={len(prompt)}, compactInputCharCount=0, "
+                f"finalInputCharCount={len(prompt)}, useCompactInput=false, "
+                f"useMapReduce={str(decision.get('useMapReduce')).lower()}"
+            )
+            repo_facts = compact_repo_facts_from_context(context)
+            map_reduce_repositories.append(
+                {
+                    "projectName": repo_facts.get("projectName") or repo_project_name(context),
+                    "repoName": repo_facts.get("repoName") or repo_display_name(context),
+                    "chunkCount": repo_facts.get("chunkCount") or 1,
+                    "reason": decision.get("reason"),
+                }
+            )
+            payload = update_project_memory_from_compact_repo_facts(
+                current_project_memory,
+                repo_facts,
+                agent_progress_messages=agent_progress_messages,
+            )
+        else:
+            response = safe_model_call(
+                caller="update_project_memory_from_repo_analysis",
+                prompt=prompt,
+                task_type="project_memory_from_repo",
+                user_options={"forceChunking": force_chunking},
+            )
+            payload = extract_json_object(response)
         next_project_memory = payload.get("project_memory")
         if not isinstance(next_project_memory, dict):
             raise HTTPException(status_code=500, detail="Agent JSON response must include a project_memory object.")
@@ -2343,6 +3790,7 @@ Repository analysis payload for exactly one repository:
         "updated": changed_any,
         "source": "repo-analysis",
         "mode": "sequential-per-repository",
+        "map_reduce_repositories": map_reduce_repositories,
         "processed_repositories": processed_repositories,
         "skipped_repositories": skipped_repositories,
         "additions": additions,
@@ -2545,6 +3993,13 @@ def truncate_text(value: Any, max_chars: int = MAX_STAGED_TEXT_CHARS) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "\n... [truncated]"
+
+
+def provider_safe_text_limit(default_chars: int, proxy_chars: int) -> int:
+    decision = routing_decision(normalize_provider(agent.current_provider), 0)
+    if should_use_proxy_safe_mode(decision):
+        return min(default_chars, proxy_chars)
+    return default_chars
 
 
 def compact_value_for_prompt(value: Any, max_string_chars: int = 1200, max_list_items: int = 6, depth: int = 0) -> Any:
@@ -3516,18 +4971,26 @@ def latex_section_spans(resume_latex: str) -> list[dict[str, Any]]:
 
 
 def find_latex_section(resume_latex: str, section_name: str) -> dict[str, Any] | None:
+    def normalized_section(value: str) -> str:
+        return re.sub(r"[\s/_-]+", "", str(value or "").lower())
+
     target = section_name.lower()
+    normalized_target = normalized_section(target)
     aliases = {
-        "summary": ["professional summary", "summary", "profile", "summary/profile-section"],
-        "summary/profile-section": ["professional summary", "summary", "profile"],
-        "skills-section": ["technical skills", "skills"],
-        "experience-section": ["experience", "work experience"],
-        "project": ["projects"],
-        "projects": ["projects"],
+        "summary": ["professional summary", "summary", "profile", "summary/profile-section", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "summary/profile-section": ["professional summary", "summary", "profile", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "skills-section": ["technical skills", "skills", "\u6280\u80fd", "\u6280\u672f\u6280\u80fd", "\u4e13\u4e1a\u6280\u80fd"],
+        "experience-section": ["experience", "work experience", "professional experience", "\u7ecf\u5386", "\u5de5\u4f5c\u7ecf\u5386", "\u5b9e\u4e60\u7ecf\u5386", "\u9879\u76ee\u7ecf\u5386"],
+        "project": ["projects", "project-section", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
+        "projects": ["projects", "project-section", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
+        "project-section": ["projects", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
     }
     names = aliases.get(target, [target])
+    normalized_names = {normalized_section(name) for name in names}
     for span in latex_section_spans(resume_latex):
-        if span["name"].lower() in names or target in span["name"].lower():
+        span_name = span["name"].lower()
+        normalized_span = normalized_section(span_name)
+        if normalized_span in normalized_names or normalized_target in normalized_span:
             return span
     return None
 
@@ -3599,12 +5062,56 @@ def replace_resume_block(current_resume: str, block_payload: dict[str, Any], rep
     if document:
         return document
     original = str(block_payload.get("latex") or "")
-    replacement = replacement.strip()
+    replacement = strip_markdown_code_fence(replacement)
+    if block_payload.get("scope") == "project_block" and replacement.lstrip().startswith("\\section"):
+        section = find_latex_section(current_resume, str(block_payload.get("section_name") or "projects"))
+        if section and section["text"] in current_resume and replacement:
+            return current_resume.replace(section["text"], replacement, 1)
     if original and original in current_resume and replacement:
         return current_resume.replace(original, replacement, 1)
     if block_payload.get("scope") == "document" and replacement:
         return replacement
     raise HTTPException(status_code=400, detail="Compact retry did not return a replaceable LaTeX block.")
+
+
+def strip_markdown_code_fence(content: Any) -> str:
+    stripped = str(content or "").strip()
+    fenced = re.search(r"```[A-Za-z0-9_-]*\s*(.*?)\s*```", stripped, flags=re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[A-Za-z0-9_-]*\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped).strip()
+    latex_start = re.search(r"\\(?:documentclass|begin\{document\}|section\{|resume[A-Za-z]+)", stripped)
+    if latex_start and latex_start.start() > 0:
+        stripped = stripped[latex_start.start() :].strip()
+    return stripped
+
+
+def looks_like_latex_fragment(content: Any) -> bool:
+    text = strip_markdown_code_fence(content)
+    return bool(re.search(r"\\(?:section|resume[A-Za-z]+|begin\{|end\{|item\b|textbf\{)", text))
+
+
+def complete_resume_from_merge_response(
+    answer: str,
+    current_resume: str,
+    target_block: dict[str, Any],
+    error_detail: str,
+) -> str:
+    normalized_answer = strip_markdown_code_fence(answer)
+    document = agent.extract_latex_document(normalized_answer)
+    if document:
+        return document
+    if not looks_like_latex_fragment(normalized_answer):
+        raise HTTPException(status_code=400, detail=error_detail)
+    try:
+        merged = replace_resume_block(current_resume, target_block, normalized_answer)
+    except HTTPException as error:
+        raise HTTPException(status_code=400, detail=error_detail) from error
+    if not agent.looks_like_latex_resume(merged):
+        raise HTTPException(status_code=400, detail=error_detail)
+    return merged
 
 
 RAW_PROMPT_MARKERS = ["diff --git", "@@", "+++ ", "--- "]
@@ -3714,6 +5221,149 @@ Return only the merged LaTeX block or section. Do not include Markdown fences or
 Compact retry payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 """
+
+
+def compact_merge_candidate(candidate: Any, max_string_chars: int = 420, max_list_items: int = 4) -> Any:
+    if not isinstance(candidate, dict):
+        return compact_value_for_prompt(candidate, max_string_chars, max_list_items)
+    keep_keys = [
+        "section_type",
+        "project_id",
+        "project_name",
+        "source_name",
+        "candidate_id",
+        "fit",
+        "keep_or_replace",
+        "fit_reason",
+        "job_alignment",
+        "final_bullets",
+        "recommended_bullets",
+        "recommended_skills_section",
+        "skills_to_emphasize",
+        "entry_recommendations",
+        "recommended_summary",
+        "allowed_claims",
+        "forbidden_claims",
+        "validation",
+        "risks",
+    ]
+    compacted = {
+        key: compact_value_for_prompt(candidate.get(key), max_string_chars, max_list_items)
+        for key in keep_keys
+        if key in candidate
+    }
+    if not compacted:
+        return compact_value_for_prompt(candidate, max_string_chars, max_list_items)
+    return compacted
+
+
+def compact_latex_for_merge_prompt(latex: Any, max_chars: int, block_hint: str = "") -> str:
+    text = str(latex or "")
+    if len(text) <= max_chars:
+        return text
+    hint_terms = [term.lower() for term in re.findall(r"[A-Za-z0-9+#.-]{3,}", block_hint or "")]
+    important_lines = []
+    fallback_lines = []
+    for line in text.splitlines():
+        stripped = line.rstrip()
+        lower = stripped.lower()
+        if not stripped:
+            continue
+        is_important = (
+            "\\section" in lower
+            or "\\resumeprojectheading" in lower
+            or "\\resumesubheading" in lower
+            or "\\resumeitem" in lower
+            or "\\resumeitemlist" in lower
+            or "\\resumesubheadinglist" in lower
+            or "\\begin{" in lower
+            or "\\end{" in lower
+            or any(term in lower for term in hint_terms)
+        )
+        if is_important:
+            important_lines.append(stripped)
+        else:
+            fallback_lines.append(stripped)
+    ordered = important_lines or fallback_lines
+    kept = []
+    current = 0
+    suffix = "\n% ... [target block truncated for compact merge prompt only]"
+    budget = max(200, max_chars - len(suffix))
+    for line in ordered:
+        line_size = len(line) + 1
+        if kept and current + line_size > budget:
+            break
+        kept.append(line)
+        current += line_size
+    if not kept:
+        return truncate_text(text, max_chars)
+    return "\n".join(kept) + suffix
+
+
+def reduce_final_merge_payload_for_limit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def prompt_size() -> int:
+        return len(build_retry_merge_prompt(reduced))
+
+    if prompt_size() <= max_chars:
+        return reduced
+
+    reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 420, 4)
+    reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 420, 5)
+    reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 180, 6)
+    reduced["forbidden_claims"] = compact_value_for_prompt(reduced.get("forbidden_claims", []), 180, 6)
+    reduced["formatting_rules"] = reduced.get("formatting_rules", [])[:3]
+    reduced["latex_safety_rules"] = reduced.get("latex_safety_rules", [])[:3]
+    if prompt_size() <= max_chars:
+        return reduced
+
+    target_block = reduced.get("target_resume_block", {})
+    if isinstance(target_block, dict):
+        non_latex_size = prompt_size() - len(str(target_block.get("latex") or ""))
+        latex_budget = max(1200, max_chars - non_latex_size - 500)
+        target_block["latex"] = compact_latex_for_merge_prompt(
+            target_block.get("latex"),
+            latex_budget,
+            str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+        )
+        target_block["prompt_latex_is_excerpt"] = True
+    if prompt_size() <= max_chars:
+        return reduced
+
+    reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 240, 2)
+    reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 240, 3)
+    reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 120, 3)
+    reduced["forbidden_claims"] = compact_value_for_prompt(reduced.get("forbidden_claims", []), 120, 3)
+    reduced["formatting_rules"] = [
+        "Return only the merged target LaTeX block or section.",
+        "Preserve LaTeX list boundaries and do not invent unsupported claims.",
+    ]
+    reduced["latex_safety_rules"] = ["Keep LaTeX commands and itemize/list environments balanced."]
+    if isinstance(target_block, dict):
+        target_block["latex"] = compact_latex_for_merge_prompt(
+            target_block.get("latex"),
+            900,
+            str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+        )
+    if prompt_size() > max_chars:
+        reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 120, 1)
+        reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 120, 2)
+        reduced["allowed_claims"] = []
+        reduced["forbidden_claims"] = []
+        if isinstance(target_block, dict):
+            target_block["latex"] = compact_latex_for_merge_prompt(
+                target_block.get("latex"),
+                420,
+                str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+            )
+    return reduced
+
+
+def final_merge_compact_prompt(payload: dict[str, Any], max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS) -> dict[str, Any]:
+    retry_payload = payload if "target_resume_block" in payload else merge_retry_payload_for_prompt(payload)
+    compact_payload = reduce_final_merge_payload_for_limit(retry_payload, max_chars)
+    return {"prompt": build_retry_merge_prompt(compact_payload), "payload": compact_payload}
 
 
 def call_model_with_context_retry(
@@ -4119,16 +5769,18 @@ Rules:
   {{"selected_indices": [0], "reason": "short explanation"}}
 
 Job description:
-{truncate_text(job_description, 12000)}
+{truncate_text(job_description, provider_safe_text_limit(12000, 7000))}
 
 Original resume:
-{truncate_text(resume, 18000)}
+{truncate_text(resume, provider_safe_text_limit(18000, 9000))}
 
 Project Memory projects:
 {json.dumps(compact_projects, ensure_ascii=False, indent=2)}
 """
     try:
-        payload = extract_json_object(run_text_task(prompt))
+        payload = extract_json_object(
+            safe_model_call(caller="select_resume_projects", prompt=prompt, task_type="resume_project_selection")
+        )
     except HTTPException:
         return projects[:MAX_STAGED_PROJECTS]
 
@@ -4147,6 +5799,483 @@ Project Memory projects:
         if len(selected) >= MAX_STAGED_PROJECTS:
             break
     return selected or projects[:MAX_STAGED_PROJECTS]
+
+
+def compact_resume_snippet_for_bullet_writer(resume: str, section_type: str, source_name: str) -> dict[str, Any]:
+    section_name = "Project-section" if section_type == "project" else "Experience-section"
+    snippet = resume_block_for_prompt(resume, section_name, source_name)
+    if snippet and snippet.get("latex"):
+        latex = preserve_resume_snippet_lines(snippet.get("latex"), source_name, max_lines=18)
+        return {
+            **snippet,
+            "latex": latex,
+        }
+    section = find_latex_section(resume, "projects" if section_type == "project" else "experience")
+    latex = preserve_resume_snippet_lines(section.get("text") if section else resume, source_name, max_lines=22)
+    return {
+        "scope": "resume_excerpt",
+        "section_name": section_name,
+        "block_hint": source_name,
+        "latex": latex,
+    }
+
+
+def compact_bullet_writer_value(value: Any, max_string_chars: int = 450, max_list_items: int = 5) -> Any:
+    return compact_value_for_prompt(value, max_string_chars=max_string_chars, max_list_items=max_list_items)
+
+
+def preserve_resume_snippet_lines(text: Any, source_name: str, max_lines: int = 20) -> str:
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    source_terms = [term.lower() for term in re.findall(r"[A-Za-z0-9+#.-]{3,}", source_name or "")]
+    scored = []
+    for index, line in enumerate(lines):
+        lower = line.lower()
+        score = 0
+        if any(term in lower for term in source_terms):
+            score += 8
+        if "\\resumeprojectheading" in lower or "\\section" in lower:
+            score += 6
+        if "\\resumeitem" in lower or lower.strip().startswith(r"\item"):
+            score += 4
+        if any(word in lower for word in ["implemented", "automated", "debugged", "used", "built", "validated"]):
+            score += 2
+        scored.append((score, index, line))
+    kept_indexes = sorted(index for score, index, _ in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_lines])
+    return "\n".join(lines[index] for index in kept_indexes)
+
+
+def compact_jd_terms(job_description: str) -> list[str]:
+    requirements = jd_requirements_for_prompt(job_description)
+    values = []
+    for key in ["must_have_skills", "responsibilities", "tools_platforms", "soft_skills", "repeated_ats_keywords", "evidence_types_to_emphasize"]:
+        for item in requirements.get(key, []) if isinstance(requirements.get(key), list) else []:
+            append_unique(values, item, 40)
+    return values[:20]
+
+
+def claim_relevance_score(text: Any, jd_terms: list[str], evidence_sources: list[str], confidence: str = "medium") -> int:
+    lowered = str(text or "").lower()
+    score = 0
+    for term in jd_terms:
+        term_text = str(term or "").lower()
+        if term_text and term_text in lowered:
+            score += 4
+    if evidence_sources:
+        score += 8
+    if confidence == "high":
+        score += 5
+    elif confidence == "medium":
+        score += 2
+    if any(word in lowered for word in ["metric", "result", "reduced", "improved", "validated", "debugged", "automated"]):
+        score += 3
+    return score
+
+
+def shortest_evidence_sources(values: list[Any], limit: int = 4) -> list[str]:
+    sources = []
+    for value in values:
+        text = short_signal(value, 180)
+        if not text:
+            continue
+        append_unique(sources, text, limit * 3)
+    sources.sort(key=len)
+    return sources[:limit]
+
+
+def listish(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, dict):
+        return list(value.values())
+    if value is None or value == "":
+        return []
+    return [value]
+
+
+def structured_star_facts(source_facts: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped = {field: [] for field in ["situation", "task", "action", "result"]}
+    for fact in project_star_facts(source_facts if isinstance(source_facts, dict) else {}):
+        field = normalize_star_field(str(fact.get("field_type") or "result"))
+        if field not in grouped:
+            field = "result"
+        text = fact.get("normalized_fact") or fact.get("raw_answer") or fact.get("value") or fact
+        grouped[field].append(
+            {
+                "fact": short_signal(text, 320),
+                "evidenceSources": ["user-confirmed STAR facts"],
+                "confidence": fact.get("confidence") or "high",
+            }
+        )
+    return {key: values[:5] for key, values in grouped.items()}
+
+
+def build_resume_relevant_claims(
+    source_name: str,
+    source_facts: dict[str, Any],
+    evidence_card: dict[str, Any],
+    allowed_claims: list[str],
+    forbidden_claims: list[str],
+    jd_terms: list[str],
+) -> list[dict[str, Any]]:
+    base_sources = shortest_evidence_sources(
+        evidence_card.get("source_refs", [])
+        + evidence_card.get("artifacts", [])
+        + [source_name, "project_memory.json"],
+        5,
+    )
+    forbidden_text = json.dumps(forbidden_claims, ensure_ascii=False).lower()
+    candidates = []
+    for claim in allowed_claims:
+        candidates.append((claim, base_sources, "high"))
+    for key in ["workflows", "confirmed_features", "recent_changes", "tech_stack"]:
+        values = listish(source_facts.get(key, []) if isinstance(source_facts, dict) else [])
+        for value in values:
+            candidates.append((value, ["project_memory.json"] + base_sources[:2], "medium"))
+    for key in ["methods", "features", "business_or_user_value", "testing_signals", "debugging_signals", "automation_signals"]:
+        for value in evidence_card.get(key, []) if isinstance(evidence_card.get(key), list) else []:
+            candidates.append((value, base_sources, "medium"))
+
+    claims = []
+    seen = set()
+    for raw_claim, sources, confidence in candidates:
+        claim = short_signal(raw_claim, 280)
+        if not claim:
+            continue
+        normalized = claim.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        safe = not any(token and token in forbidden_text for token in re.findall(r"[A-Za-z0-9+#.-]{3,}", normalized))
+        claim_sources = shortest_evidence_sources(sources, 4)
+        claims.append(
+            {
+                "claim": claim,
+                "evidenceSources": claim_sources,
+                "confidence": confidence,
+                "safeForResume": bool(safe and claim_sources),
+                "relevanceScore": claim_relevance_score(claim, jd_terms, claim_sources, confidence),
+            }
+        )
+    claims.sort(key=lambda item: (-int(item.get("relevanceScore", 0)), item["claim"].lower()))
+    return claims
+
+
+def build_metric_candidates(
+    source_facts: dict[str, Any],
+    evidence_card: dict[str, Any],
+    jd_terms: list[str],
+) -> list[dict[str, Any]]:
+    candidates = []
+    for value in evidence_card.get("data_or_scale", []) if isinstance(evidence_card.get("data_or_scale"), list) else []:
+        sources = shortest_evidence_sources(evidence_card.get("source_refs", []) + ["project_memory.json"], 3)
+        candidates.append(
+            {
+                "metric": short_signal(value, 220),
+                "type": "verified",
+                "evidenceSources": sources,
+                "safeForResume": bool(sources),
+                "relevanceScore": claim_relevance_score(value, jd_terms, sources, "high"),
+            }
+        )
+    for fact in project_star_facts(source_facts if isinstance(source_facts, dict) else {}):
+        if normalize_star_field(str(fact.get("field_type") or "")) != "result":
+            continue
+        text = fact.get("normalized_fact") or fact.get("raw_answer") or ""
+        if not text:
+            continue
+        candidates.append(
+            {
+                "metric": short_signal(text, 220),
+                "type": "user-confirmed",
+                "evidenceSources": ["user-confirmed STAR facts"],
+                "safeForResume": True,
+                "relevanceScore": claim_relevance_score(text, jd_terms, ["user-confirmed STAR facts"], "high"),
+            }
+        )
+    candidates.sort(key=lambda item: (-int(item.get("relevanceScore", 0)), item["metric"].lower()))
+    return candidates[:8]
+
+
+def build_current_project_compact_facts(
+    source_name: str,
+    source_facts: dict[str, Any],
+    evidence_card: dict[str, Any],
+    allowed_claims: list[str],
+    forbidden_claims: list[str],
+    job_description: str,
+) -> dict[str, Any]:
+    jd_terms = compact_jd_terms(job_description)
+    identity = source_facts.get("identity") if isinstance(source_facts.get("identity"), dict) else {}
+    summary_parts = [
+        identity.get("positioning"),
+        identity.get("core_problem"),
+        identity.get("core_value"),
+        source_facts.get("project_name") if isinstance(source_facts, dict) else "",
+    ]
+    claims = build_resume_relevant_claims(source_name, source_facts, evidence_card, allowed_claims, forbidden_claims, jd_terms)
+    metrics = build_metric_candidates(source_facts, evidence_card, jd_terms)
+    return {
+        "projectName": source_name,
+        "projectSummary": " | ".join(short_signal(part, 180) for part in summary_parts if str(part or "").strip())[:700],
+        "jdRelevance": jd_terms[:12],
+        "technicalStack": shortest_evidence_sources(listish(source_facts.get("tech_stack", []) if isinstance(source_facts, dict) else []) + listish(evidence_card.get("technologies", [])), 12),
+        "keyModules": shortest_evidence_sources(listish(evidence_card.get("artifacts", [])) + listish(evidence_card.get("features", [])), 12),
+        "userContributionSignals": shortest_evidence_sources(listish(evidence_card.get("methods", [])) + listish(evidence_card.get("automation_signals", [])) + listish(evidence_card.get("debugging_signals", [])), 12),
+        "resumeRelevantClaims": claims[:14],
+        "metricCandidates": metrics,
+        "starFacts": structured_star_facts(source_facts),
+        "riskFlags": shortest_evidence_sources(evidence_card.get("forbidden_claims", []) + forbidden_claims, 8),
+    }
+
+
+def build_compact_bullet_writer_input(
+    section_type: str,
+    source_name: str,
+    job_description: str,
+    resume: str,
+    source_facts: dict[str, Any],
+    evidence_card: dict[str, Any],
+    role_profile: dict[str, Any],
+    role_lens: dict[str, Any],
+    existing_bullets: list[str],
+    allowed_claims: list[str],
+    forbidden_claims: list[str],
+    language: str,
+    extra_rules: str = "",
+) -> dict[str, Any]:
+    current_project_facts = build_current_project_compact_facts(
+        source_name,
+        source_facts,
+        evidence_card,
+        allowed_claims,
+        forbidden_claims,
+        job_description,
+    )
+    return {
+        "section_type": section_type,
+        "source_name": source_name,
+        "compact_jd_requirements": compact_bullet_writer_value(jd_requirements_for_prompt(job_description), 350, 8),
+        "role_profile": compact_bullet_writer_value(role_profile, 300, 5),
+        "current_project_compact_facts": current_project_facts,
+        "current_project_evidence_summary": {
+            "evidenceSources": shortest_evidence_sources(listish(evidence_card.get("source_refs", [])) + listish(evidence_card.get("artifacts", [])), 10),
+            "technologies": current_project_facts["technicalStack"],
+            "keyModules": current_project_facts["keyModules"],
+            "safeClaims": [claim for claim in current_project_facts["resumeRelevantClaims"] if claim.get("safeForResume")][:10],
+            "metricCandidates": current_project_facts["metricCandidates"],
+            "riskFlags": current_project_facts["riskFlags"],
+        },
+        "role_lens_priorities": compact_bullet_writer_value(role_lens, 300, 5),
+        "relevant_star_facts": current_project_facts["starFacts"],
+        "existing_resume_snippet": compact_resume_snippet_for_bullet_writer(resume, section_type, source_name),
+        "existing_bullets": compact_bullet_writer_value(existing_bullets, 280, 5),
+        "bullet_constraints": {
+            "language": language,
+            "output_language_instruction": output_language_instruction(language),
+            "must_return_json": True,
+            "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
+            "star_required": True,
+            "do_not_invent": ["metrics", "tools", "files", "commits", "dates", "ownership", "deployment", "users", "business impact"],
+            "style": "concise ATS-friendly bullets with concrete method, workflow value, and evidence-grounded result",
+            "extra_rules": truncate_text(extra_rules, provider_safe_text_limit(1200, 500)),
+        },
+    }
+
+
+def trim_list_field(container: dict[str, Any], key: str, limit: int) -> None:
+    if isinstance(container.get(key), list):
+        container[key] = container[key][:limit]
+
+
+def trim_compact_jd_requirements(value: Any, limit: int) -> Any:
+    if isinstance(value, list):
+        return value[:limit]
+    if not isinstance(value, dict):
+        return value
+    trimmed = json.loads(json.dumps(value, ensure_ascii=False))
+    for key, nested in list(trimmed.items()):
+        if isinstance(nested, list):
+            trimmed[key] = nested[:limit]
+    return trimmed
+
+
+def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> dict[str, Any]:
+    mode = str(retry_mode or "normal").lower()
+    if mode not in {"retry", "emergency"}:
+        return payload
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+    facts = reduced.get("current_project_compact_facts", {})
+    evidence_summary = reduced.get("current_project_evidence_summary", {})
+    constraints = reduced.get("bullet_constraints", {})
+    if isinstance(facts, dict):
+        facts["resumeRelevantClaims"] = sorted(
+            facts.get("resumeRelevantClaims", []),
+            key=lambda item: (
+                -int(item.get("relevanceScore", 0)) if isinstance(item, dict) else 0,
+                not bool(item.get("safeForResume")) if isinstance(item, dict) else True,
+                str(item.get("claim", "")) if isinstance(item, dict) else str(item),
+            ),
+        )
+        facts["metricCandidates"] = sorted(
+            facts.get("metricCandidates", []),
+            key=lambda item: (
+                0 if isinstance(item, dict) and item.get("type") == "user-confirmed" else 1,
+                -int(item.get("relevanceScore", 0)) if isinstance(item, dict) else 0,
+                str(item.get("metric", "")) if isinstance(item, dict) else str(item),
+            ),
+        )
+        trim_list_field(facts, "resumeRelevantClaims", 5 if mode == "retry" else 3)
+        trim_list_field(facts, "metricCandidates", 4 if mode == "retry" else 3)
+        trim_list_field(facts, "keyModules", 6 if mode == "retry" else 3)
+        trim_list_field(facts, "userContributionSignals", 6 if mode == "retry" else 3)
+        trim_list_field(facts, "riskFlags", 5 if mode == "retry" else 4)
+        facts["technicalStack"] = facts.get("technicalStack", [])[:8 if mode == "retry" else 5]
+        facts["jdRelevance"] = facts.get("jdRelevance", [])[:8 if mode == "retry" else 6]
+    if isinstance(evidence_summary, dict):
+        trim_list_field(evidence_summary, "evidenceSources", 5 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "safeClaims", 5 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "metricCandidates", 4 if mode == "retry" else 3)
+        trim_list_field(evidence_summary, "riskFlags", 5 if mode == "retry" else 4)
+    reduced["compact_jd_requirements"] = trim_compact_jd_requirements(
+        reduced.get("compact_jd_requirements"),
+        8 if mode == "retry" else 6,
+    )
+    if isinstance(reduced.get("existing_bullets"), list):
+        reduced["existing_bullets"] = reduced["existing_bullets"][:3 if mode == "retry" else 2]
+    snippet = reduced.get("existing_resume_snippet")
+    if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
+        lines = [line for line in snippet["latex"].splitlines() if line.strip()]
+        snippet["latex"] = "\n".join(lines[:8 if mode == "retry" else 4])
+    if isinstance(constraints, dict):
+        constraints["retry_mode"] = mode
+        constraints["max_final_bullets"] = 3 if mode == "retry" else 2
+        constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 300 if mode == "retry" else 160)
+        constraints["retry_rules"] = [
+            "Use only the current project summary, top JD requirements, high-relevance claims, evidence sources, user-confirmed metrics, and risk flags.",
+            "Return 2-3 bullets in retry mode or 2 bullets in emergency mode.",
+            "Do not invent numbers or drop user-confirmed facts.",
+        ]
+    return reduced
+
+
+def build_compact_project_input(**kwargs: Any) -> dict[str, Any]:
+    return build_compact_bullet_writer_input(section_type="project", **kwargs)
+
+
+def build_compact_experience_input(**kwargs: Any) -> dict[str, Any]:
+    return build_compact_bullet_writer_input(section_type="experience", **kwargs)
+
+
+def build_compact_final_merge_input(payload: dict[str, Any], max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS) -> dict[str, Any]:
+    retry_payload = payload if "target_resume_block" in payload else merge_retry_payload_for_prompt(payload)
+    return reduce_final_merge_payload_for_limit(retry_payload, max_chars)
+
+
+def build_compact_bullet_writer_prompt(payload: dict[str, Any]) -> str:
+    return f"""
+You are the compact WorkAgent resume bullet writer.
+
+Use only the compact payload below. Do not request or infer raw repo context, full code, unrelated projects, or full chat history.
+
+Return ONLY valid JSON with exactly these keys:
+  "section_type": "project" | "experience",
+  "source_name": string,
+  "job_alignment": string,
+  "star_analysis": array of objects with keys "candidate_fact", "situation", "task", "action", "result", "missing_star_fields", "evidence_source",
+  "react_analysis": array of objects with keys "candidate_fact", "why_writable", "why_it_belongs", "business_capability", "technical_capability", "risk_avoided",
+  "final_bullets": array of objects with keys "bullet", "evidence", "confidence",
+  "skills_to_emphasize": array of strings,
+  "risks": array of strings
+
+Rules:
+- Write only for payload.source_name and payload.section_type.
+- Do not use unrelated projects.
+- Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, or business impact.
+- Use STAR analysis before final bullets.
+- If a metric/result is unsupported, list it in missing_star_fields and write a conservative qualitative result.
+- Final bullets must combine a concrete method, a substantive workflow/business capability, and an evidence-grounded result/value.
+- Avoid stack-only, CRUD-only, and shallow UI-only bullets.
+- When payload.bullet_constraints.max_final_bullets is present, keep final_bullets at or below that count.
+
+Compact bullet writer payload:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+"""
+
+
+def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def prompt_size() -> int:
+        return len(build_compact_bullet_writer_prompt(reduced))
+
+    facts = reduced.get("current_project_compact_facts", {})
+    evidence_summary = reduced.get("current_project_evidence_summary", {})
+    constraints = reduced.get("bullet_constraints", {})
+
+    if isinstance(facts, dict):
+        facts["resumeRelevantClaims"] = sorted(
+            facts.get("resumeRelevantClaims", []),
+            key=lambda item: (-int(item.get("relevanceScore", 0)), not bool(item.get("safeForResume")), item.get("claim", "")),
+        )
+        facts["metricCandidates"] = sorted(
+            facts.get("metricCandidates", []),
+            key=lambda item: (-int(item.get("relevanceScore", 0)), not bool(item.get("safeForResume")), item.get("metric", "")),
+        )
+
+    reduction_steps = [
+        ("existing_bullets", 4),
+        ("existing_resume_snippet.latex_lines", 14),
+        ("current_project_evidence_summary.safeClaims", 8),
+        ("current_project_compact_facts.resumeRelevantClaims", 10),
+        ("current_project_compact_facts.metricCandidates", 5),
+        ("current_project_compact_facts.keyModules", 8),
+        ("current_project_compact_facts.userContributionSignals", 8),
+        ("current_project_evidence_summary.evidenceSources", 7),
+        ("current_project_compact_facts.resumeRelevantClaims", 7),
+        ("current_project_compact_facts.metricCandidates", 3),
+        ("current_project_compact_facts.riskFlags", 5),
+        ("current_project_compact_facts.resumeRelevantClaims", 5),
+    ]
+
+    for path, limit in reduction_steps:
+        if prompt_size() <= max_chars:
+            break
+        if path == "existing_resume_snippet.latex_lines":
+            snippet = reduced.get("existing_resume_snippet", {})
+            if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
+                lines = [line for line in snippet["latex"].splitlines() if line.strip()]
+                snippet["latex"] = "\n".join(lines[:limit])
+            continue
+        parent = reduced
+        parts = path.split(".")
+        for part in parts[:-1]:
+            parent = parent.get(part, {}) if isinstance(parent, dict) else {}
+        key = parts[-1]
+        if isinstance(parent, dict) and isinstance(parent.get(key), list):
+            parent[key] = parent[key][:limit]
+
+    if prompt_size() > max_chars and isinstance(constraints, dict):
+        constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 180)
+
+    if prompt_size() > max_chars and isinstance(facts, dict):
+        facts["resumeRelevantClaims"] = facts.get("resumeRelevantClaims", [])[:3]
+        facts["metricCandidates"] = facts.get("metricCandidates", [])[:2]
+        facts["keyModules"] = facts.get("keyModules", [])[:5]
+        facts["userContributionSignals"] = facts.get("userContributionSignals", [])[:5]
+        if isinstance(evidence_summary, dict):
+            evidence_summary["safeClaims"] = evidence_summary.get("safeClaims", [])[:3]
+            evidence_summary["evidenceSources"] = evidence_summary.get("evidenceSources", [])[:5]
+
+    return reduced
+
+
+def bullet_writer_proxy_limit() -> int:
+    decision = routing_decision(normalize_provider(agent.current_provider), 0)
+    return int(decision.get("directMaxInputChars") or PROXY_SAFE_MAX_INPUT_CHARS)
 
 
 def run_resume_bullet_writer_tool(
@@ -4211,7 +6340,7 @@ Structured JD requirements:
 {json.dumps(jd_requirements, ensure_ascii=False, indent=2)}
 
 Original resume:
-{truncate_text(resume, 22000)}
+{truncate_text(resume, provider_safe_text_limit(22000, 8000))}
 
 Source facts:
 {json.dumps(prompt_source_facts, ensure_ascii=False, indent=2)}
@@ -4240,7 +6369,47 @@ STAR enforcement:
   data_or_scale or user-confirmed star_facts explicitly supports the number.
 - Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
-    payload = extract_json_object(run_text_task(prompt))
+    compact_payload = None
+
+    def compact_bullet_prompt(
+        max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS,
+        retry_mode: str = "normal",
+        **_: Any,
+    ) -> dict[str, Any]:
+        common = dict(
+            source_name=source_name,
+            job_description=job_description,
+            resume=resume,
+            source_facts=source_facts,
+            evidence_card=evidence_card,
+            role_profile=role_profile,
+            role_lens=role_lens,
+            existing_bullets=existing_bullets,
+            allowed_claims=allowed_claims,
+            forbidden_claims=forbidden_claims,
+            language=language,
+            extra_rules=extra_rules,
+        )
+        if section_type == "project":
+            payload = build_compact_project_input(**common)
+        elif section_type == "experience":
+            payload = build_compact_experience_input(**common)
+        else:
+            payload = build_compact_bullet_writer_input(section_type=section_type, **common)
+        payload = apply_bullet_writer_retry_mode(payload, retry_mode)
+        compact_prompt = build_compact_bullet_writer_prompt(payload)
+        if len(compact_prompt) > max_chars:
+            payload = reduce_compact_bullet_payload_for_limit(payload, max_chars=max_chars)
+            compact_prompt = build_compact_bullet_writer_prompt(payload)
+        return {"prompt": compact_prompt, "payload": payload}
+
+    response = safe_model_call(
+        caller="run_resume_bullet_writer_tool",
+        prompt=prompt,
+        task_type="resume_bullet_writer",
+        compact_builder=compact_bullet_prompt,
+    )
+    payload = extract_json_object(response)
     for key in ["star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
@@ -4303,30 +6472,373 @@ def build_project_resume_candidate(
     progress_guidance: str = "",
 ) -> dict[str, Any]:
     source_facts = compact_project_for_prompt(project)
-    payload = run_resume_bullet_writer_tool(
-        section_type="project",
-        source_name=str(project.get("project_name") or project.get("name") or project.get("project_id") or ""),
-        job_description=job_description,
-        resume=resume,
-        source_facts=source_facts,
-        evidence=evidence,
-        existing_bullets=[],
-        language=language,
-        extra_rules=(
-            "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
-            "Select only the strongest concise bullets; final layout will allocate more bullets to higher-ranked "
-            "projects and fewer bullets to lower-ranked projects. The first bullet must explain what the project is "
-            "and what workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
-            + progress_guidance
-        ),
+    project_id = str(project.get("project_id") or "")
+    source_name = str(project.get("project_name") or project.get("name") or project.get("project_id") or "")
+    source_hash = stable_hash(
+        {
+            "job_description": job_description,
+            "project": source_facts,
+            "evidence": evidence,
+            "language": language,
+            "progress_guidance": progress_guidance,
+        }
     )
+    task_id = current_agent_task_id.get("")
+    cached_candidate = get_completed_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash)
+    if cached_candidate:
+        return cached_candidate
+    try:
+        payload = run_resume_bullet_writer_tool(
+            section_type="project",
+            source_name=source_name,
+            job_description=job_description,
+            resume=resume,
+            source_facts=source_facts,
+            evidence=evidence,
+            existing_bullets=[],
+            language=language,
+            extra_rules=(
+                "Project Memory is the primary source of truth. Chroma evidence is supporting proof only. "
+                "Select only the strongest concise bullets; final layout will allocate more bullets to higher-ranked "
+                "projects and fewer bullets to lower-ranked projects. The first bullet must explain what the project is "
+                "and what workflow or problem it addresses. Return fit, keep_or_replace, and fit_reason if possible."
+                + progress_guidance
+            ),
+        )
+    except HTTPException as error:
+        save_resume_candidate_checkpoint(
+            task_id,
+            project_id,
+            source_name,
+            source_hash,
+            "failed",
+            error=http_exception_detail_text(error),
+        )
+        raise
     payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
     payload["project_name"] = payload.get("project_name") or project.get("project_name") or project.get("name") or ""
     payload["fit"] = payload.get("fit") if payload.get("fit") in {"high", "medium", "low"} else "medium"
     payload["keep_or_replace"] = payload.get("keep_or_replace") or "update"
     payload["fit_reason"] = payload.get("fit_reason") or payload.get("job_alignment", "")
     payload["recommended_bullets"] = payload.get("final_bullets", [])
+    save_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash, "done", candidate_json=payload)
     return payload
+
+
+SKILL_CATEGORY_KEYWORDS = {
+    "Languages": ["Python", "Java", "JavaScript", "TypeScript", "SQL", "HTML", "CSS", "PowerShell", "Shell", "Bash"],
+    "Backend / API": ["FastAPI", "Flask", "Django", "Node.js", "Express", "REST", "API", "OpenAI API", "GitHub API"],
+    "Frontend / UI": ["React", "React.js", "Vite", "Electron", "HTML", "CSS", "JavaScript", "TypeScript"],
+    "Database / Storage": ["SQLite", "better-sqlite3", "PostgreSQL", "MySQL", "MongoDB", "Chroma", "vector store"],
+    "Cloud / DevOps / Infrastructure": ["Docker", "Kubernetes", "Terraform", "AWS", "Azure", "Linux", "CI/CD", "GitHub Actions", "Jenkins"],
+    "AI / Automation": ["RAG", "embedding", "embeddings", "LLM", "OpenAI", "prompt", "chunking", "Map-Reduce", "automation", "batch", "cache"],
+    "Testing / Quality": ["pytest", "unittest", "Playwright", "Cypress", "Selenium", "validation", "QA", "testing"],
+    "Collaboration / Documentation": ["documentation", "communication", "collaboration", "stakeholder", "requirements", "reporting"],
+}
+
+
+SKILL_ALIASES = {
+    "react.js": "React",
+    "reactjs": "React",
+    "sqlite3": "SQLite",
+    "better-sqlite3": "SQLite",
+    "github integration": "GitHub API",
+    "github api": "GitHub API",
+    "openai api": "OpenAI API",
+    "embeddings": "embedding",
+    "maps-reduce": "Map-Reduce",
+    "map reduce": "Map-Reduce",
+}
+
+
+def canonical_skill_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    alias = SKILL_ALIASES.get(normalized.lower())
+    return alias or normalized
+
+
+def skill_category(skill: str) -> str:
+    lower = skill.lower()
+    for category, keywords in SKILL_CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() == lower or keyword.lower() in lower:
+                return category
+    return "Tools / Methods"
+
+
+def skill_relevance(skill: str, jd_terms: list[str]) -> str:
+    lower = skill.lower()
+    if any(str(term).lower() in lower or lower in str(term).lower() for term in jd_terms):
+        return "high"
+    if any(word in lower for word in ["api", "automation", "sql", "python", "react", "testing", "documentation"]):
+        return "medium"
+    return "low"
+
+
+def add_candidate_skill(
+    skills: dict[str, dict[str, Any]],
+    skill: Any,
+    evidence_project: str,
+    evidence_sources: list[Any],
+    jd_terms: list[str],
+    confidence: str = "medium",
+) -> None:
+    name = canonical_skill_name(skill)
+    if not name or len(name) > 60:
+        return
+    sources = shortest_evidence_sources(evidence_sources, 5)
+    if not sources:
+        return
+    key = name.lower()
+    current = skills.get(key)
+    relevance = skill_relevance(name, jd_terms)
+    if current is None:
+        skills[key] = {
+            "skill": name,
+            "category": skill_category(name),
+            "evidenceProjects": [evidence_project] if evidence_project else [],
+            "evidenceSources": sources,
+            "jdRelevance": relevance,
+            "confidence": confidence,
+            "score": claim_relevance_score(name, jd_terms, sources, confidence),
+        }
+        return
+    if evidence_project and evidence_project not in current["evidenceProjects"]:
+        current["evidenceProjects"].append(evidence_project)
+    for source in sources:
+        append_unique(current["evidenceSources"], source, 6)
+    if current["jdRelevance"] != "high" and relevance == "high":
+        current["jdRelevance"] = "high"
+    if current["confidence"] != "high" and confidence == "high":
+        current["confidence"] = "high"
+    current["score"] = max(int(current.get("score", 0)), claim_relevance_score(name, jd_terms, current["evidenceSources"], current["confidence"]))
+
+
+def extract_existing_resume_skills(resume: str) -> list[str]:
+    section = find_latex_section(resume, "skills")
+    text = section.get("text") if section else resume
+    values = []
+    known = sorted({skill for keywords in SKILL_CATEGORY_KEYWORDS.values() for skill in keywords}, key=len, reverse=True)
+    lower = text.lower()
+    for skill in known:
+        if skill.lower() in lower:
+            append_unique(values, canonical_skill_name(skill), 80)
+    for match in re.findall(r"\\textbf\{([^}]+)\}\s*[:：]\s*([^\n]+)", text):
+        for item in re.split(r"[,/|;]", match[1]):
+            cleaned = canonical_skill_name(re.sub(r"\\[A-Za-z]+\{?|[{}]", "", item))
+            append_unique(values, cleaned, 80)
+    return values
+
+
+def jd_skill_requirements(job_description: str) -> dict[str, list[str]]:
+    text = str(job_description or "")
+    result = {
+        "languages": [],
+        "frameworks": [],
+        "cloudInfra": [],
+        "databases": [],
+        "devops": [],
+        "testing": [],
+        "automation": [],
+        "aiMl": [],
+        "softSkills": [],
+    }
+    mapping = {
+        "languages": ["Languages"],
+        "frameworks": ["Backend / API", "Frontend / UI"],
+        "cloudInfra": ["Cloud / DevOps / Infrastructure"],
+        "databases": ["Database / Storage"],
+        "devops": ["Cloud / DevOps / Infrastructure"],
+        "testing": ["Testing / Quality"],
+        "automation": ["AI / Automation"],
+        "aiMl": ["AI / Automation"],
+        "softSkills": ["Collaboration / Documentation"],
+    }
+    for output_key, categories in mapping.items():
+        for category in categories:
+            for skill in SKILL_CATEGORY_KEYWORDS.get(category, []):
+                if skill.lower() in text.lower():
+                    append_unique(result[output_key], canonical_skill_name(skill), 12)
+    for skill in jd_requirements_for_prompt(text).get("soft_skills", []):
+        append_unique(result["softSkills"], skill, 12)
+    return result
+
+
+def build_project_skill_evidence(
+    project_memory: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+    jd_terms: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    candidate_by_name = {
+        normalize_match_text(candidate.get("project_name") or candidate.get("source_name") or candidate.get("project_id")): candidate
+        for candidate in project_candidates
+        if isinstance(candidate, dict)
+    }
+    skill_map: dict[str, dict[str, Any]] = {}
+    project_evidence = []
+    for project in project_list_from_memory(project_memory):
+        project_name = str(project.get("project_name") or project.get("name") or project.get("project_id") or "Project")
+        compact_facts = build_current_project_compact_facts(
+            project_name,
+            project,
+            {
+                "technologies": listish(project.get("tech_stack", [])),
+                "methods": listish(project.get("workflows", [])) + listish(project.get("confirmed_features", [])),
+                "features": listish(project.get("confirmed_features", [])),
+                "artifacts": shortest_evidence_sources(listish(project.get("evidence_notes", [])) + listish(project.get("recent_changes", [])), 8),
+                "source_refs": ["project_memory.json"],
+                "allowed_claims": [],
+                "forbidden_claims": [],
+            },
+            [],
+            [],
+            " ".join(jd_terms),
+        )
+        candidate = candidate_by_name.get(normalize_match_text(project_name), {})
+        candidate_bullets = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+        evidence_sources = ["project_memory.json"] + compact_facts.get("keyModules", [])[:5]
+        for skill in compact_facts.get("technicalStack", []):
+            add_candidate_skill(skill_map, skill, project_name, evidence_sources, jd_terms, "high")
+        for signal in compact_facts.get("userContributionSignals", []):
+            for category_keywords in SKILL_CATEGORY_KEYWORDS.values():
+                for skill in category_keywords:
+                    if skill.lower() in str(signal).lower():
+                        add_candidate_skill(skill_map, skill, project_name, evidence_sources + [signal], jd_terms, "medium")
+        for bullet in candidate_bullets:
+            bullet_text = bullet.get("bullet") if isinstance(bullet, dict) else str(bullet)
+            for category_keywords in SKILL_CATEGORY_KEYWORDS.values():
+                for skill in category_keywords:
+                    if skill.lower() in str(bullet_text).lower():
+                        add_candidate_skill(skill_map, skill, project_name, evidence_sources + [bullet_text], jd_terms, "high")
+        project_evidence.append(
+            {
+                "projectName": project_name,
+                "technicalStack": compact_facts.get("technicalStack", [])[:10],
+                "keyModules": compact_facts.get("keyModules", [])[:8],
+                "evidenceSources": evidence_sources[:8],
+                "relevanceToJD": compact_facts.get("jdRelevance", [])[:8],
+            }
+        )
+    skills = list(skill_map.values())
+    skills.sort(key=lambda item: (-int(item.get("score", 0)), item["category"], item["skill"].lower()))
+    return project_evidence, skills
+
+
+def build_compact_skills_input(
+    job_description: str,
+    resume: str,
+    project_memory: dict[str, Any],
+    project_candidates: list[dict[str, Any]],
+    language: str,
+    progress_guidance: str = "",
+) -> dict[str, Any]:
+    jd_requirements = jd_skill_requirements(job_description)
+    jd_terms = []
+    for values in jd_requirements.values():
+        for value in values:
+            append_unique(jd_terms, value, 40)
+    existing_skills = extract_existing_resume_skills(resume)
+    project_skill_evidence, candidate_skills = build_project_skill_evidence(project_memory, project_candidates, jd_terms)
+    skill_map = {item["skill"].lower(): item for item in candidate_skills if isinstance(item, dict) and item.get("skill")}
+    for skill in existing_skills:
+        add_candidate_skill(
+            skill_map,
+            skill,
+            "resume.txt",
+            ["resume skills section"],
+            jd_terms,
+            "medium",
+        )
+    candidate_skills = list(skill_map.values())
+    candidate_skills.sort(key=lambda item: (-int(item.get("score", 0)), item["category"], item["skill"].lower()))
+    return {
+        "compactJdSkillRequirements": jd_requirements,
+        "candidateSkills": candidate_skills[:48],
+        "existingResumeSkills": existing_skills[:48],
+        "projectSkillEvidence": project_skill_evidence[:8],
+        "targetRole": jd_core_for_prompt(job_description),
+        "formatConstraints": {
+            "language": language,
+            "outputLanguageInstruction": output_language_instruction(language),
+            "maxCategories": 4,
+            "maxSkillsPerCategory": 8,
+            "atsFriendly": True,
+            "noFabrication": True,
+            "requireEvidenceForEverySkill": True,
+            "extraGuidance": short_signal(progress_guidance, 500),
+        },
+        "riskFlags": [
+            "Do not add skills without evidenceSources.",
+            "Do not include low-relevance skills just to fill space.",
+            "Merge aliases such as SQLite/better-sqlite3 and React/React.js.",
+        ],
+    }
+
+
+def build_compact_skills_prompt(payload: dict[str, Any]) -> str:
+    return f"""
+Generate structured Skills-section tailoring recommendations from compact skills evidence only.
+
+Return ONLY valid JSON with exactly these keys:
+  "skills_strategy": string,
+  "skills_to_emphasize": array of strings,
+  "skills_to_deemphasize": array of strings,
+  "skills_to_add_if_supported": array of objects with keys "skill", "supporting_source", "confidence",
+  "skills_to_remove_or_avoid": array of strings,
+  "recommended_skills_section": string,
+  "risks": array of strings
+
+Rules:
+- Use only compactJdSkillRequirements, candidateSkills, existingResumeSkills, and projectSkillEvidence.
+- Every added or emphasized skill must appear in candidateSkills with evidenceSources.
+- Do not invent tools, frameworks, platforms, databases, languages, certifications, or proficiency levels.
+- Merge duplicate or alias skills.
+- Prefer high JD relevance and high confidence.
+- Keep the section concise: at most 4 categories and 8 skills per category.
+- Do not read or infer raw repo context, full project memory, code, or chat history.
+
+Compact skills payload:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+"""
+
+
+def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def prompt_size() -> int:
+        return len(build_compact_skills_prompt(reduced))
+
+    skills = reduced.get("candidateSkills", [])
+    if isinstance(skills, list):
+        skills.sort(
+            key=lambda item: (
+                {"high": 0, "medium": 1, "low": 2}.get(str(item.get("jdRelevance", "low")), 2),
+                {"high": 0, "medium": 1, "low": 2}.get(str(item.get("confidence", "low")), 2),
+                -int(item.get("score", 0)),
+                item.get("skill", "").lower(),
+            )
+        )
+    for limit in [36, 28, 22, 16, 12]:
+        if prompt_size() <= max_chars:
+            break
+        if isinstance(reduced.get("candidateSkills"), list):
+            reduced["candidateSkills"] = reduced["candidateSkills"][:limit]
+    for limit in [6, 4]:
+        if prompt_size() <= max_chars:
+            break
+        if isinstance(reduced.get("projectSkillEvidence"), list):
+            reduced["projectSkillEvidence"] = reduced["projectSkillEvidence"][:limit]
+    if prompt_size() > max_chars and isinstance(reduced.get("existingResumeSkills"), list):
+        reduced["existingResumeSkills"] = reduced["existingResumeSkills"][:24]
+    if prompt_size() > max_chars:
+        for skill in reduced.get("candidateSkills", []):
+            if isinstance(skill, dict):
+                skill["evidenceSources"] = shortest_evidence_sources(skill.get("evidenceSources", []), 2)
+                skill["evidenceProjects"] = skill.get("evidenceProjects", [])[:2]
+    return reduced
 
 
 def build_skills_resume_candidate(
@@ -4361,10 +6873,10 @@ Output language requirement:
 {output_language_instruction(language)}
 
 Job description:
-{truncate_text(job_description, 12000)}
+{truncate_text(job_description, provider_safe_text_limit(12000, 7000))}
 
 Original resume:
-{truncate_text(resume, 22000)}
+{truncate_text(resume, provider_safe_text_limit(22000, 8000))}
 
 Project Memory:
 {json.dumps(prompt_project_memory, ensure_ascii=False, indent=2)}
@@ -4373,10 +6885,44 @@ Staged project candidates:
 {json.dumps(prompt_project_candidates, ensure_ascii=False, indent=2)}
 {progress_guidance}
 """
-    payload = extract_json_object(run_text_task(prompt))
+    compact_payload = None
+
+    def compact_skills_prompt(max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS, **_: Any) -> dict[str, Any]:
+        nonlocal compact_payload
+        compact_payload = build_compact_skills_input(
+            job_description=job_description,
+            resume=resume,
+            project_memory=project_memory,
+            project_candidates=project_candidates,
+            language=language,
+            progress_guidance=progress_guidance,
+        )
+        compact_prompt = build_compact_skills_prompt(compact_payload)
+        if len(compact_prompt) > max_chars:
+            compact_payload = reduce_compact_skills_payload_for_limit(compact_payload, max_chars)
+            compact_prompt = build_compact_skills_prompt(compact_payload)
+        return {"prompt": compact_prompt, "payload": compact_payload}
+
+    response = safe_model_call(
+        caller="build_skills_resume_candidate",
+        prompt=prompt,
+        task_type="skills_resume_candidate",
+        compact_builder=compact_skills_prompt,
+    )
+    payload = extract_json_object(response)
     for key in ["skills_to_emphasize", "skills_to_deemphasize", "skills_to_add_if_supported", "skills_to_remove_or_avoid", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    supported_skills = {
+        canonical_skill_name(item.get("skill")).lower()
+        for item in (compact_payload.get("candidateSkills", []) if "compact_payload" in locals() and isinstance(compact_payload, dict) else [])
+        if isinstance(item, dict) and item.get("evidenceSources")
+    }
+    if supported_skills:
+        payload["skills_to_add_if_supported"] = [
+            item for item in payload["skills_to_add_if_supported"]
+            if not isinstance(item, dict) or canonical_skill_name(item.get("skill")).lower() in supported_skills
+        ]
     return payload
 
 
@@ -4436,6 +6982,212 @@ def build_experience_resume_candidate(
     return payload
 
 
+def summary_fit_score(candidate: dict[str, Any]) -> int:
+    fit = str(candidate.get("fit") or "").lower()
+    score = {"high": 90, "medium": 60, "low": 30}.get(fit, 50)
+    validation = candidate.get("bullet_writer_validation") if isinstance(candidate.get("bullet_writer_validation"), dict) else {}
+    if validation.get("accepted"):
+        score += 8
+    if candidate.get("recommended_bullets") or candidate.get("final_bullets"):
+        score += 5
+    return score
+
+
+def summary_bullet_texts(candidate: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    bullets = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+    results = []
+    for item in bullets[:limit]:
+        if isinstance(item, dict):
+            bullet = item.get("bullet") or item.get("text") or ""
+            evidence = item.get("evidence") or item.get("supporting_source") or ""
+            confidence = item.get("confidence") or "medium"
+        else:
+            bullet = str(item)
+            evidence = ""
+            confidence = "medium"
+        if not str(bullet).strip():
+            continue
+        sources = shortest_evidence_sources([evidence, candidate.get("project_name"), candidate.get("source_name"), "staged project candidate"], 3)
+        results.append(
+            {
+                "claim": short_signal(bullet, 260),
+                "evidenceSources": sources,
+                "confidence": confidence,
+                "safeForSummary": bool(sources),
+            }
+        )
+    return results
+
+
+def compact_skills_for_summary(skills_candidate: dict[str, Any], max_skills: int = 18) -> list[dict[str, Any]]:
+    skills = []
+    for value in listish(skills_candidate.get("skills_to_emphasize", [])):
+        name = canonical_skill_name(value)
+        if name:
+            skills.append({"skill": name, "evidenceSources": ["skills candidate"], "confidence": "medium"})
+    for item in listish(skills_candidate.get("skills_to_add_if_supported", [])):
+        if isinstance(item, dict):
+            name = canonical_skill_name(item.get("skill"))
+            source = item.get("supporting_source") or item.get("evidence") or "skills candidate"
+            confidence = item.get("confidence") or "medium"
+        else:
+            name = canonical_skill_name(item)
+            source = "skills candidate"
+            confidence = "medium"
+        if name:
+            skills.append({"skill": name, "evidenceSources": shortest_evidence_sources([source], 2), "confidence": confidence})
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in skills:
+        key = item["skill"].lower()
+        if key not in deduped:
+            deduped[key] = item
+    return list(deduped.values())[:max_skills]
+
+
+def build_compact_summary_input(
+    job_description: str,
+    resume: str,
+    project_candidates: list[dict[str, Any]],
+    skills_candidate: dict[str, Any],
+    experience_candidate: dict[str, Any],
+    language: str,
+    progress_guidance: str = "",
+    max_projects: int = 4,
+    max_skills: int = 18,
+) -> dict[str, Any]:
+    role_core = jd_core_for_prompt(job_description)
+    role_profile = classify_role_family(job_description)
+    sorted_projects = sorted(
+        [candidate for candidate in project_candidates if isinstance(candidate, dict)],
+        key=lambda item: (-summary_fit_score(item), str(item.get("project_name") or item.get("source_name") or "")),
+    )[:max_projects]
+    highlights = []
+    strongest_evidence = []
+    risk_flags = []
+    for candidate in sorted_projects:
+        project_name = str(candidate.get("project_name") or candidate.get("source_name") or candidate.get("project_id") or "Project")
+        evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
+        claims = summary_bullet_texts(candidate, 3)
+        sources = shortest_evidence_sources(
+            listish(evidence_card.get("source_refs", []))
+            + listish(evidence_card.get("artifacts", []))
+            + [project_name, "staged project candidate"],
+            5,
+        )
+        metrics = []
+        for item in listish(evidence_card.get("data_or_scale", [])) + listish(candidate.get("metricCandidates", [])):
+            metrics.append({"metric": short_signal(item, 180), "evidenceSources": sources[:3], "confidence": "medium"})
+        for source in sources:
+            append_unique(strongest_evidence, source, 16)
+        for risk in listish(candidate.get("risks", [])) + listish(evidence_card.get("forbidden_claims", [])):
+            append_unique(risk_flags, risk, 12)
+        highlights.append(
+            {
+                "projectName": project_name,
+                "oneLineSummary": short_signal(candidate.get("fit_reason") or candidate.get("job_alignment") or candidate.get("projectSummary") or project_name, 260),
+                "keyTechnologies": shortest_evidence_sources(listish(evidence_card.get("technologies", [])) + listish(candidate.get("skills_to_emphasize", [])), 8),
+                "strongestClaims": claims,
+                "metrics": metrics[:4],
+                "evidenceSources": sources,
+                "fitScore": summary_fit_score(candidate),
+            }
+        )
+    compact_skills = compact_skills_for_summary(skills_candidate, max_skills)
+    for skill in compact_skills:
+        for source in skill.get("evidenceSources", []):
+            append_unique(strongest_evidence, source, 16)
+    return {
+        "targetRole": role_core,
+        "compactJdRequirements": compact_bullet_writer_value(jd_requirements_for_prompt(job_description), 260, 6),
+        "candidatePositioning": {
+            "primary": role_profile.get("role_family"),
+            "secondary": role_profile.get("secondary_role_families", [])[:3],
+            "roleFocus": role_core.get("role_focus", [])[:5],
+        },
+        "topProjectHighlights": highlights,
+        "compactSkills": compact_skills,
+        "experienceSignals": compact_bullet_writer_value(
+            {
+                "strategy": experience_candidate.get("experience_strategy") or experience_candidate.get("job_alignment"),
+                "supported_bullets": experience_candidate.get("final_bullets", [])[:4],
+                "risks": experience_candidate.get("risks", [])[:5],
+            },
+            260,
+            5,
+        ),
+        "strongestEvidence": strongest_evidence[:16],
+        "riskFlags": risk_flags[:12],
+        "summaryConstraints": {
+            "language": language,
+            "outputLanguageInstruction": output_language_instruction(language),
+            "maxLines": 3,
+            "atsFriendly": True,
+            "noFabrication": True,
+            "noUnsupportedMetrics": True,
+            "noUnsupportedYearsExperience": True,
+            "extraGuidance": short_signal(progress_guidance, 400),
+        },
+    }
+
+
+def build_compact_summary_prompt(payload: dict[str, Any]) -> str:
+    return f"""
+Generate structured resume Summary/Profile tailoring recommendations from compact summary evidence only.
+
+Return ONLY valid JSON with exactly these keys:
+  "summary_strategy": string,
+  "recommended_summary": string,
+  "keywords_to_include": array of strings,
+  "claims_to_avoid": array of strings,
+  "evidence_basis": array of strings,
+  "risks": array of strings
+
+Rules:
+- Use only the compact summary payload below.
+- Do not invent years of experience, seniority, production scale, users, QPS, P99, cost, accuracy, or unsupported metrics.
+- Mention only skills and project strengths with evidenceSources or staged candidate support.
+- Prefer concise ATS-friendly language aligned to targetRole and compactJdRequirements.
+- If evidence is thin, use conservative positioning rather than inflated claims.
+- Do not read or infer raw repo context, full project memory, full achievements, code, or chat history.
+
+Compact summary payload:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+"""
+
+
+def reduce_compact_summary_payload_for_limit(payload: dict[str, Any], max_chars: int = 12000) -> dict[str, Any]:
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def prompt_size() -> int:
+        return len(build_compact_summary_prompt(reduced))
+
+    if isinstance(reduced.get("topProjectHighlights"), list):
+        reduced["topProjectHighlights"].sort(key=lambda item: -int(item.get("fitScore", 0)))
+    for project_limit, skill_limit, claim_limit in [(3, 16, 3), (3, 14, 2), (2, 12, 2), (2, 10, 1)]:
+        if prompt_size() <= max_chars:
+            break
+        if isinstance(reduced.get("topProjectHighlights"), list):
+            reduced["topProjectHighlights"] = reduced["topProjectHighlights"][:project_limit]
+            for project in reduced["topProjectHighlights"]:
+                if isinstance(project, dict):
+                    project["strongestClaims"] = project.get("strongestClaims", [])[:claim_limit]
+                    project["metrics"] = project.get("metrics", [])[:2]
+                    project["evidenceSources"] = shortest_evidence_sources(project.get("evidenceSources", []), 3)
+        if isinstance(reduced.get("compactSkills"), list):
+            reduced["compactSkills"] = reduced["compactSkills"][:skill_limit]
+        if isinstance(reduced.get("strongestEvidence"), list):
+            reduced["strongestEvidence"] = reduced["strongestEvidence"][:10]
+    return reduced
+
+
+class ResumeCompactInputBuilder:
+    build_compact_summary_input = staticmethod(build_compact_summary_input)
+    build_compact_skills_input = staticmethod(build_compact_skills_input)
+    build_compact_project_input = staticmethod(build_compact_project_input)
+    build_compact_experience_input = staticmethod(build_compact_experience_input)
+    build_compact_final_merge_input = staticmethod(build_compact_final_merge_input)
+
+
 def build_summary_resume_candidate(
     job_description: str,
     resume: str,
@@ -4473,10 +7225,10 @@ Output language requirement:
 {output_language_instruction(language)}
 
 Job description:
-{truncate_text(job_description, 12000)}
+{truncate_text(job_description, provider_safe_text_limit(12000, 7000))}
 
 Original resume:
-{truncate_text(resume, 26000)}
+{truncate_text(resume, provider_safe_text_limit(26000, 9000))}
 
 Project Memory:
 {json.dumps(prompt_project_memory, ensure_ascii=False, indent=2)}
@@ -4491,10 +7243,47 @@ Staged Experience candidate:
 {json.dumps(prompt_experience_candidate, ensure_ascii=False, indent=2)}
 {progress_guidance}
 """
-    payload = extract_json_object(run_text_task(prompt))
+    compact_payload = None
+
+    def compact_summary_prompt(max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS, **_: Any) -> dict[str, Any]:
+        nonlocal compact_payload
+        compact_payload = build_compact_summary_input(
+            job_description=job_description,
+            resume=resume,
+            project_candidates=project_candidates,
+            skills_candidate=skills_candidate,
+            experience_candidate=experience_candidate,
+            language=language,
+            progress_guidance=progress_guidance,
+        )
+        target = min(12000, max_chars)
+        compact_prompt = build_compact_summary_prompt(compact_payload)
+        if len(compact_prompt) > target:
+            compact_payload = reduce_compact_summary_payload_for_limit(compact_payload, target)
+            compact_prompt = build_compact_summary_prompt(compact_payload)
+        if len(compact_prompt) > max_chars:
+            compact_payload = reduce_compact_summary_payload_for_limit(compact_payload, max_chars)
+            compact_prompt = build_compact_summary_prompt(compact_payload)
+        return {"prompt": compact_prompt, "payload": compact_payload}
+
+    response = safe_model_call(
+        caller="build_summary_resume_candidate",
+        prompt=prompt,
+        task_type="summary_resume_candidate",
+        compact_builder=compact_summary_prompt,
+    )
+    payload = extract_json_object(response)
     for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    if "compact_payload" in locals() and isinstance(compact_payload, dict):
+        supported_skills = {canonical_skill_name(item.get("skill")).lower() for item in compact_payload.get("compactSkills", []) if isinstance(item, dict)}
+        if supported_skills:
+            payload["keywords_to_include"] = [
+                item for item in payload["keywords_to_include"]
+                if canonical_skill_name(item).lower() in supported_skills
+                or any(canonical_skill_name(item).lower() in str(project).lower() for project in compact_payload.get("topProjectHighlights", []))
+            ][:18]
     return payload
 
 
@@ -4522,7 +7311,12 @@ def apply_resume_project_candidate(
     def call_merge_model(payload: dict[str, Any]) -> str:
         if payload.get("retry"):
             retry_payload = payload["retry_payload"]
-            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            block = safe_model_call(
+                caller="apply_resume_project_candidate_retry",
+                prompt=build_retry_merge_prompt(retry_payload),
+                task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
+            )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
         prompt_project_candidate = compact_bullet_candidate_for_prompt(payload["candidate"])
@@ -4548,21 +7342,29 @@ Loop step:
 - Return only LaTeX code with no Markdown fences and no analysis text.
 
 Job description:
-{truncate_text(payload["job_description"], 12000)}
+{truncate_text(payload["job_description"], provider_safe_text_limit(12000, 6000))}
 
 Current LaTeX resume:
-{truncate_text(payload["current_resume"], 30000)}
+{truncate_text(payload["current_resume"], provider_safe_text_limit(30000, 13000))}
 
 One staged Project candidate:
 {json.dumps(prompt_project_candidate, ensure_ascii=False, indent=2)}
 """
         )
-        return run_text_task(prompt)
+        return safe_model_call(
+            caller="apply_resume_project_candidate",
+            prompt=prompt,
+            task_type="final_resume_merge",
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
+        )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after project merge step {index}.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        f"Agent did not return valid LaTeX resume code after project merge step {index}.",
+    )
 
 
 def apply_resume_section_candidate(
@@ -4586,7 +7388,12 @@ def apply_resume_section_candidate(
     def call_merge_model(payload: dict[str, Any]) -> str:
         if payload.get("retry"):
             retry_payload = payload["retry_payload"]
-            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            block = safe_model_call(
+                caller="apply_resume_section_candidate_retry",
+                prompt=build_retry_merge_prompt(retry_payload),
+                task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
+            )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
         prompt_candidate = compact_value_for_prompt(payload["candidate"], 900, 8)
@@ -4609,21 +7416,29 @@ Rules:
 - Return only LaTeX code with no Markdown fences and no analysis text.
 
 Job description:
-{truncate_text(payload["job_description"], 12000)}
+{truncate_text(payload["job_description"], provider_safe_text_limit(12000, 6000))}
 
 Current LaTeX resume:
-{truncate_text(payload["current_resume"], 30000)}
+{truncate_text(payload["current_resume"], provider_safe_text_limit(30000, 13000))}
 
 One staged {section_name} candidate:
 {json.dumps(prompt_candidate, ensure_ascii=False, indent=2)}
 """
         )
-        return run_text_task(prompt)
+        return safe_model_call(
+            caller=f"apply_resume_section_candidate:{section_name}",
+            prompt=prompt,
+            task_type="final_resume_merge",
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
+        )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after {section_name} merge step.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        f"Agent did not return valid LaTeX resume code after {section_name} merge step.",
+    )
 
 
 def project_bullet_budget(index: int, total: int) -> int:
@@ -4683,7 +7498,12 @@ def apply_projects_section_layout(
     def call_layout_model(payload: dict[str, Any]) -> str:
         if payload.get("retry"):
             retry_payload = payload["retry_payload"]
-            block = run_text_task(build_retry_merge_prompt(retry_payload))
+            block = safe_model_call(
+                caller="apply_projects_section_layout_retry",
+                prompt=build_retry_merge_prompt(retry_payload),
+                task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
+            )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
         prompt_candidate = compact_value_for_prompt(payload["candidate"], 2400, 10)
@@ -4710,21 +7530,29 @@ Rules:
 - Return only LaTeX code with no Markdown fences and no analysis text.
 
 Job description:
-{truncate_text(payload["job_description"], 12000)}
+{truncate_text(payload["job_description"], provider_safe_text_limit(12000, 6000))}
 
 Current LaTeX resume:
-{truncate_text(payload["current_resume"], 30000)}
+{truncate_text(payload["current_resume"], provider_safe_text_limit(30000, 13000))}
 
 Projects-section layout candidate data:
 {json.dumps(prompt_candidate, ensure_ascii=False, indent=2)}
 """
         )
-        return run_text_task(prompt)
+        return safe_model_call(
+            caller="apply_projects_section_layout",
+            prompt=prompt,
+            task_type="final_resume_merge",
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
+        )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_layout_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code after Projects-section layout step.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        "Agent did not return valid LaTeX resume code after Projects-section layout step.",
+    )
 
 
 def build_resume_gap_report(
@@ -5170,6 +7998,7 @@ def fetch_github_context_api(
     project_id: str = "",
     force_refresh: bool = False,
     reanalyze_cached: bool = False,
+    force_chunking: bool = False,
     agent_progress_messages: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     if not approved:
@@ -5314,6 +8143,7 @@ def fetch_github_context_api(
         project_memory_update = update_project_memory_from_repo_analysis(
             repo_contexts,
             agent_progress_messages=agent_progress_messages,
+            force_chunking=force_chunking,
         )
         for result in scan_results:
             key = result["repository"]
@@ -5672,7 +8502,7 @@ Respond briefly to the user inside the progress modal.
 - Do not save files, modify artifacts, or claim the current result has changed.
 {output_language_instruction(body.language)}
 """
-        answer = run_text_task(prompt)
+        answer = safe_model_call(caller="agent_progress_guidance_reply", prompt=prompt, task_type="agent_progress_reply")
         return {"answer": answer}
 
 
@@ -5931,7 +8761,7 @@ def resume_pdf_to_latex_task(body: ResumePdfToLatexBody):
         body.language,
         body.agent_progress_messages,
     )
-    answer = run_text_task(prompt)
+    answer = safe_model_call(caller="resume_pdf_to_latex", prompt=prompt, task_type="resume_pdf_to_latex")
     latex = agent.extract_latex_document(answer)
     if not latex or not agent.looks_like_latex_resume(latex):
         raise HTTPException(
@@ -6039,7 +8869,7 @@ def generate_interview_prep_task(body: InterviewPrepBody):
         body.agent_progress_messages,
     )
     application_hint = resolve_saved_application_hint()
-    answer = run_text_task(prompt)
+    answer = safe_model_call(caller="generate_interview_prep", prompt=prompt, task_type="interview_prep")
     if not looks_like_interview_prep(answer):
         raise HTTPException(
             status_code=400,
@@ -6121,6 +8951,7 @@ def github_context_task(body: GitHubContextBody):
             project_id=body.project_id,
             force_refresh=body.force_refresh,
             reanalyze_cached=body.reanalyze_cached,
+            force_chunking=body.forceChunking,
             agent_progress_messages=body.agent_progress_messages,
         )
     except agent.transient_network_errors() as error:

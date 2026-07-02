@@ -24,6 +24,38 @@ function statusLabel(status) {
   return "正在执行";
 }
 
+function ErrorDetail({ detail }) {
+  if (!detail || typeof detail !== "object") return null;
+  const failedChunk = detail.failedChunk || {};
+  const rows = [
+    ["Type", detail.type],
+    ["Caller", detail.caller],
+    ["Status", detail.statusCode || detail.status],
+    ["Retryable", detail.retryable === true ? "yes" : detail.retryable === false ? "no" : ""],
+    ["Project", failedChunk.projectName],
+    ["Repository", failedChunk.repoName],
+    ["Chunk", failedChunk.chunkIndex],
+    ["Input chars", detail.inputCharCount],
+    ["Limit", detail.limit],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+
+  if (!rows.length) return null;
+
+  return (
+    <div className="agent-progress-error-detail">
+      <div className="agent-progress-error-detail-title">Structured error detail</div>
+      <dl>
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{String(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 export default function AgentProgressModal({
   task,
   onCancel,
@@ -148,7 +180,12 @@ export default function AgentProgressModal({
           </main>
         </div>
 
-        {task.error && <div className="agent-progress-error" role="alert">{task.error}</div>}
+        {task.error && (
+          <div className="agent-progress-error" role="alert">
+            <div>{task.error}</div>
+            <ErrorDetail detail={task.errorDetail} />
+          </div>
+        )}
 
         <footer className="agent-progress-footer">
           <textarea
