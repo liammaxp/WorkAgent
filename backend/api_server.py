@@ -4971,18 +4971,26 @@ def latex_section_spans(resume_latex: str) -> list[dict[str, Any]]:
 
 
 def find_latex_section(resume_latex: str, section_name: str) -> dict[str, Any] | None:
+    def normalized_section(value: str) -> str:
+        return re.sub(r"[\s/_-]+", "", str(value or "").lower())
+
     target = section_name.lower()
+    normalized_target = normalized_section(target)
     aliases = {
-        "summary": ["professional summary", "summary", "profile", "summary/profile-section"],
-        "summary/profile-section": ["professional summary", "summary", "profile"],
-        "skills-section": ["technical skills", "skills"],
-        "experience-section": ["experience", "work experience"],
-        "project": ["projects"],
-        "projects": ["projects"],
+        "summary": ["professional summary", "summary", "profile", "summary/profile-section", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "summary/profile-section": ["professional summary", "summary", "profile", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "skills-section": ["technical skills", "skills", "\u6280\u80fd", "\u6280\u672f\u6280\u80fd", "\u4e13\u4e1a\u6280\u80fd"],
+        "experience-section": ["experience", "work experience", "professional experience", "\u7ecf\u5386", "\u5de5\u4f5c\u7ecf\u5386", "\u5b9e\u4e60\u7ecf\u5386", "\u9879\u76ee\u7ecf\u5386"],
+        "project": ["projects", "project-section", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
+        "projects": ["projects", "project-section", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
+        "project-section": ["projects", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
     }
     names = aliases.get(target, [target])
+    normalized_names = {normalized_section(name) for name in names}
     for span in latex_section_spans(resume_latex):
-        if span["name"].lower() in names or target in span["name"].lower():
+        span_name = span["name"].lower()
+        normalized_span = normalized_section(span_name)
+        if normalized_span in normalized_names or normalized_target in normalized_span:
             return span
     return None
 
@@ -5054,12 +5062,56 @@ def replace_resume_block(current_resume: str, block_payload: dict[str, Any], rep
     if document:
         return document
     original = str(block_payload.get("latex") or "")
-    replacement = replacement.strip()
+    replacement = strip_markdown_code_fence(replacement)
+    if block_payload.get("scope") == "project_block" and replacement.lstrip().startswith("\\section"):
+        section = find_latex_section(current_resume, str(block_payload.get("section_name") or "projects"))
+        if section and section["text"] in current_resume and replacement:
+            return current_resume.replace(section["text"], replacement, 1)
     if original and original in current_resume and replacement:
         return current_resume.replace(original, replacement, 1)
     if block_payload.get("scope") == "document" and replacement:
         return replacement
     raise HTTPException(status_code=400, detail="Compact retry did not return a replaceable LaTeX block.")
+
+
+def strip_markdown_code_fence(content: Any) -> str:
+    stripped = str(content or "").strip()
+    fenced = re.search(r"```[A-Za-z0-9_-]*\s*(.*?)\s*```", stripped, flags=re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[A-Za-z0-9_-]*\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped).strip()
+    latex_start = re.search(r"\\(?:documentclass|begin\{document\}|section\{|resume[A-Za-z]+)", stripped)
+    if latex_start and latex_start.start() > 0:
+        stripped = stripped[latex_start.start() :].strip()
+    return stripped
+
+
+def looks_like_latex_fragment(content: Any) -> bool:
+    text = strip_markdown_code_fence(content)
+    return bool(re.search(r"\\(?:section|resume[A-Za-z]+|begin\{|end\{|item\b|textbf\{)", text))
+
+
+def complete_resume_from_merge_response(
+    answer: str,
+    current_resume: str,
+    target_block: dict[str, Any],
+    error_detail: str,
+) -> str:
+    normalized_answer = strip_markdown_code_fence(answer)
+    document = agent.extract_latex_document(normalized_answer)
+    if document:
+        return document
+    if not looks_like_latex_fragment(normalized_answer):
+        raise HTTPException(status_code=400, detail=error_detail)
+    try:
+        merged = replace_resume_block(current_resume, target_block, normalized_answer)
+    except HTTPException as error:
+        raise HTTPException(status_code=400, detail=error_detail) from error
+    if not agent.looks_like_latex_resume(merged):
+        raise HTTPException(status_code=400, detail=error_detail)
+    return merged
 
 
 RAW_PROMPT_MARKERS = ["diff --git", "@@", "+++ ", "--- "]
@@ -5169,6 +5221,149 @@ Return only the merged LaTeX block or section. Do not include Markdown fences or
 Compact retry payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 """
+
+
+def compact_merge_candidate(candidate: Any, max_string_chars: int = 420, max_list_items: int = 4) -> Any:
+    if not isinstance(candidate, dict):
+        return compact_value_for_prompt(candidate, max_string_chars, max_list_items)
+    keep_keys = [
+        "section_type",
+        "project_id",
+        "project_name",
+        "source_name",
+        "candidate_id",
+        "fit",
+        "keep_or_replace",
+        "fit_reason",
+        "job_alignment",
+        "final_bullets",
+        "recommended_bullets",
+        "recommended_skills_section",
+        "skills_to_emphasize",
+        "entry_recommendations",
+        "recommended_summary",
+        "allowed_claims",
+        "forbidden_claims",
+        "validation",
+        "risks",
+    ]
+    compacted = {
+        key: compact_value_for_prompt(candidate.get(key), max_string_chars, max_list_items)
+        for key in keep_keys
+        if key in candidate
+    }
+    if not compacted:
+        return compact_value_for_prompt(candidate, max_string_chars, max_list_items)
+    return compacted
+
+
+def compact_latex_for_merge_prompt(latex: Any, max_chars: int, block_hint: str = "") -> str:
+    text = str(latex or "")
+    if len(text) <= max_chars:
+        return text
+    hint_terms = [term.lower() for term in re.findall(r"[A-Za-z0-9+#.-]{3,}", block_hint or "")]
+    important_lines = []
+    fallback_lines = []
+    for line in text.splitlines():
+        stripped = line.rstrip()
+        lower = stripped.lower()
+        if not stripped:
+            continue
+        is_important = (
+            "\\section" in lower
+            or "\\resumeprojectheading" in lower
+            or "\\resumesubheading" in lower
+            or "\\resumeitem" in lower
+            or "\\resumeitemlist" in lower
+            or "\\resumesubheadinglist" in lower
+            or "\\begin{" in lower
+            or "\\end{" in lower
+            or any(term in lower for term in hint_terms)
+        )
+        if is_important:
+            important_lines.append(stripped)
+        else:
+            fallback_lines.append(stripped)
+    ordered = important_lines or fallback_lines
+    kept = []
+    current = 0
+    suffix = "\n% ... [target block truncated for compact merge prompt only]"
+    budget = max(200, max_chars - len(suffix))
+    for line in ordered:
+        line_size = len(line) + 1
+        if kept and current + line_size > budget:
+            break
+        kept.append(line)
+        current += line_size
+    if not kept:
+        return truncate_text(text, max_chars)
+    return "\n".join(kept) + suffix
+
+
+def reduce_final_merge_payload_for_limit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    reduced = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def prompt_size() -> int:
+        return len(build_retry_merge_prompt(reduced))
+
+    if prompt_size() <= max_chars:
+        return reduced
+
+    reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 420, 4)
+    reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 420, 5)
+    reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 180, 6)
+    reduced["forbidden_claims"] = compact_value_for_prompt(reduced.get("forbidden_claims", []), 180, 6)
+    reduced["formatting_rules"] = reduced.get("formatting_rules", [])[:3]
+    reduced["latex_safety_rules"] = reduced.get("latex_safety_rules", [])[:3]
+    if prompt_size() <= max_chars:
+        return reduced
+
+    target_block = reduced.get("target_resume_block", {})
+    if isinstance(target_block, dict):
+        non_latex_size = prompt_size() - len(str(target_block.get("latex") or ""))
+        latex_budget = max(1200, max_chars - non_latex_size - 500)
+        target_block["latex"] = compact_latex_for_merge_prompt(
+            target_block.get("latex"),
+            latex_budget,
+            str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+        )
+        target_block["prompt_latex_is_excerpt"] = True
+    if prompt_size() <= max_chars:
+        return reduced
+
+    reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 240, 2)
+    reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 240, 3)
+    reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 120, 3)
+    reduced["forbidden_claims"] = compact_value_for_prompt(reduced.get("forbidden_claims", []), 120, 3)
+    reduced["formatting_rules"] = [
+        "Return only the merged target LaTeX block or section.",
+        "Preserve LaTeX list boundaries and do not invent unsupported claims.",
+    ]
+    reduced["latex_safety_rules"] = ["Keep LaTeX commands and itemize/list environments balanced."]
+    if isinstance(target_block, dict):
+        target_block["latex"] = compact_latex_for_merge_prompt(
+            target_block.get("latex"),
+            900,
+            str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+        )
+    if prompt_size() > max_chars:
+        reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 120, 1)
+        reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 120, 2)
+        reduced["allowed_claims"] = []
+        reduced["forbidden_claims"] = []
+        if isinstance(target_block, dict):
+            target_block["latex"] = compact_latex_for_merge_prompt(
+                target_block.get("latex"),
+                420,
+                str(target_block.get("block_hint") or target_block.get("section_name") or ""),
+            )
+    return reduced
+
+
+def final_merge_compact_prompt(payload: dict[str, Any], max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS) -> dict[str, Any]:
+    retry_payload = payload if "target_resume_block" in payload else merge_retry_payload_for_prompt(payload)
+    compact_payload = reduce_final_merge_payload_for_limit(retry_payload, max_chars)
+    return {"prompt": build_retry_merge_prompt(compact_payload), "payload": compact_payload}
 
 
 def call_model_with_context_retry(
@@ -5975,8 +6170,9 @@ def build_compact_experience_input(**kwargs: Any) -> dict[str, Any]:
     return build_compact_bullet_writer_input(section_type="experience", **kwargs)
 
 
-def build_compact_final_merge_input(payload: dict[str, Any]) -> dict[str, Any]:
-    return merge_retry_payload_for_prompt(payload)
+def build_compact_final_merge_input(payload: dict[str, Any], max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS) -> dict[str, Any]:
+    retry_payload = payload if "target_resume_block" in payload else merge_retry_payload_for_prompt(payload)
+    return reduce_final_merge_payload_for_limit(retry_payload, max_chars)
 
 
 def build_compact_bullet_writer_prompt(payload: dict[str, Any]) -> str:
@@ -7119,6 +7315,7 @@ def apply_resume_project_candidate(
                 caller="apply_resume_project_candidate_retry",
                 prompt=build_retry_merge_prompt(retry_payload),
                 task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
             )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
@@ -7158,13 +7355,16 @@ One staged Project candidate:
             caller="apply_resume_project_candidate",
             prompt=prompt,
             task_type="final_resume_merge",
-            compact_builder=lambda **_: build_retry_merge_prompt(merge_retry_payload_for_prompt(payload)),
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
         )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after project merge step {index}.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        f"Agent did not return valid LaTeX resume code after project merge step {index}.",
+    )
 
 
 def apply_resume_section_candidate(
@@ -7192,6 +7392,7 @@ def apply_resume_section_candidate(
                 caller="apply_resume_section_candidate_retry",
                 prompt=build_retry_merge_prompt(retry_payload),
                 task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
             )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
@@ -7228,13 +7429,16 @@ One staged {section_name} candidate:
             caller=f"apply_resume_section_candidate:{section_name}",
             prompt=prompt,
             task_type="final_resume_merge",
-            compact_builder=lambda **_: build_retry_merge_prompt(merge_retry_payload_for_prompt(payload)),
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
         )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_merge_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail=f"Agent did not return valid LaTeX resume code after {section_name} merge step.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        f"Agent did not return valid LaTeX resume code after {section_name} merge step.",
+    )
 
 
 def project_bullet_budget(index: int, total: int) -> int:
@@ -7298,6 +7502,7 @@ def apply_projects_section_layout(
                 caller="apply_projects_section_layout_retry",
                 prompt=build_retry_merge_prompt(retry_payload),
                 task_type="final_resume_merge",
+                compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(retry_payload, max_chars),
             )
             return replace_resume_block(current_resume, retry_payload["target_resume_block"], block)
 
@@ -7338,13 +7543,16 @@ Projects-section layout candidate data:
             caller="apply_projects_section_layout",
             prompt=prompt,
             task_type="final_resume_merge",
-            compact_builder=lambda **_: build_retry_merge_prompt(merge_retry_payload_for_prompt(payload)),
+            compact_builder=lambda max_chars=PROXY_SAFE_MAX_INPUT_CHARS, **_: final_merge_compact_prompt(payload, max_chars),
         )
 
     answer = call_model_with_context_retry(normal_payload, merge_retry_payload_for_prompt, call_layout_model)
-    if not agent.looks_like_latex_resume(answer):
-        raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code after Projects-section layout step.")
-    return answer
+    return complete_resume_from_merge_response(
+        answer,
+        current_resume,
+        merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
+        "Agent did not return valid LaTeX resume code after Projects-section layout step.",
+    )
 
 
 def build_resume_gap_report(
