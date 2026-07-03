@@ -919,7 +919,11 @@ def latex_structure_issues(latex):
 
 def latex_placeholder_issues(latex):
     issues = []
-    if re.search(r"\[\s*truncated\s*\]|\.\.\.\s*\[\s*truncated\s*\]", latex, flags=re.IGNORECASE):
+    if re.search(
+        r"\[\s*(?:\d+\s+more\s+items\s+)?truncated\s*\]|\bmore items\b|\btruncated\b",
+        latex,
+        flags=re.IGNORECASE,
+    ):
         issues.append("Resume LaTeX contains truncated placeholder text.")
     return issues
 

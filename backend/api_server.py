@@ -23,6 +23,7 @@ import uuid
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -32,6 +33,14 @@ from openai import APIStatusError
 from pydantic import BaseModel, Field
 
 import main as agent
+from tech_ontology import (
+    build_tech_ontology_index,
+    enrich_jd_profile_with_tech_ontology,
+    extract_possible_tech_terms,
+    load_tech_ontology,
+    normalize_tech_term,
+    retrieve_tech_context_for_terms,
+)
 
 app = FastAPI(title="WorkAgent API", version="1.0.0")
 
@@ -119,6 +128,9 @@ Resume Bullet Writing Rules:
 - Final bullets should use a strong action verb plus concrete technical method, substantive
   logic/business capability, and result or value. Natural phrasing is allowed; do not force
   every sentence into the same "to ..." template.
+- Do not merely describe what the project is. For each bullet, explain the implementation mechanism.
+  Prefer bullets that combine a tool or method, a concrete function, and a solved problem or role-relevant value.
+  A strong bullet should read like engineering evidence, not a product summary.
 - The technical method must be a concrete implementation approach, algorithm, data flow, debugging
   approach, or system mechanism. A technology stack alone is not a technical method.
 - Never invent business scale, ownership level, QPS, latency, cost, users, accuracy, deployment,
@@ -160,6 +172,12 @@ Technical Skills Rules:
 - Preserve the base resume's compact Technical Skills LaTeX style: use
   \\begin{itemize}[leftmargin=0.15in, label={}], \\small{...}, and one \\item containing inline
   \\textbf{Category:} skill lists separated by \\\\ line breaks.
+- Generate Technical Skills using the JD, selected resume evidence, current resume skills, user memory,
+  known project technology stack, GitHub evidence, and tech ontology context. Do not limit the skills section
+  only to technologies mentioned in the final project bullets. Include skills that are truthful, relevant,
+  and supported by at least one user-specific source. Do not add unsupported JD-only or ontology-only skills.
+  Use cautious wording such as "fundamentals", "familiarity", or "concepts" when evidence is weaker.
+- Tech ontology explains what a technology is; it does not prove the candidate knows that technology.
 - Do not use visible bullets or one \\item per skill category in Technical Skills.
 - Keep Technical Skills in the same font/size as the base resume; do not introduce a plain \\begin{itemize}
   skills list.
@@ -205,6 +223,9 @@ Prefer: action verb + project/module + technical action + verified result/impact
 
 Rules:
 - Use only supported facts from the original resume, Project Memory, staged candidates, and approved evidence.
+- Do not merely describe what the project is. For each bullet, explain the implementation mechanism.
+- Prefer bullets that combine a tool or method, a concrete function, and a solved problem or role-relevant value.
+- A strong bullet should read like engineering evidence, not a product summary.
 - Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, business impact, or performance claims.
 - STAR is mandatory for analysis. Each final bullet should be backed by:
   Situation: problem, workflow, users, data, files, requests, applications, or business context.
@@ -323,6 +344,14 @@ MAX_PROMPT_CLAIMS = 12
 MAX_PROMPT_SIGNAL_CHARS = 240
 MAX_PROMPT_FILE_SUMMARY_CHARS = 500
 MAX_PROMPT_EVIDENCE_CHARS = 9000
+MAX_TECH_ONTOLOGY_PROMPT_ENTRIES = 10
+MAX_TECH_ONTOLOGY_ENTRY_CHARS = 800
+MAX_TECH_ONTOLOGY_SAFE_PHRASES = 5
+MAX_TECH_ONTOLOGY_WEAK_PHRASES = 3
+MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS = 5
+MAX_SKILL_CANDIDATES_FOR_PROMPT = 40
+MAX_BULLET_DEPTH_MECHANISMS = 12
+MAX_BULLET_DEPTH_PROBLEMS = 8
 PROXY_SAFE_MAX_INPUT_CHARS = 25000
 PROXY_SAFE_HARD_INPUT_CHARS = 35000
 OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
@@ -1538,6 +1567,10 @@ def save_file_content(name: str, content: str) -> None:
         return
     if name == "tailored_resume":
         hint = resolve_saved_application_hint()
+        content = normalize_latex_for_resume_output(content)
+        language_quality_error = tailored_resume_language_quality_error(content)
+        if language_quality_error:
+            raise ValueError(language_quality_error)
         agent.save_tailored_resume(content, company=hint["company"], role=hint["role"])
         return
     if name == "cover_letter":
@@ -1716,6 +1749,30 @@ def schedule_shutdown() -> None:
 
 def normalize_language(language: str) -> str:
     return "en" if (language or "").lower().strip().startswith("en") else "zh"
+
+
+def contains_cjk(text: Any) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def job_description_prefers_chinese() -> bool:
+    try:
+        job_description = agent.read_job_description()
+    except (FileNotFoundError, ValueError):
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", job_description))
+    latin_words = len(re.findall(r"[A-Za-z]{3,}", job_description))
+    return cjk_count >= 20 and cjk_count >= latin_words
+
+
+def job_language_resume_sentence_rule() -> str:
+    if not job_description_prefers_chinese():
+        return ""
+    return (
+        " Because the saved job description is Chinese, write every user-facing resume sentence "
+        "and bullet in Chinese. Preserve only proper nouns and technical names such as Python, "
+        "FastAPI, React, SQLite, Android, Git/GitHub, API, and company/school/project names in English."
+    )
 
 
 def output_language_instruction(language: str) -> str:
@@ -1909,22 +1966,138 @@ Extracted PDF text:
     return append_agent_progress_guidance(prompt, agent_progress_messages or [])
 
 
+ZH_SECTION_HEADINGS = {
+    "Professional Summary": "专业总结",
+    "Summary": "专业总结",
+    "Education": "教育经历",
+    "Experience": "经历",
+    "Work Experience": "经历",
+    "Projects": "项目经历",
+    "Technical Skills": "技术技能",
+    "Skills": "技术技能",
+}
+
+ZH_SKILL_HEADINGS = {
+    "Languages": "编程语言",
+    "Backend, Web \\& Databases": "后端、Web 与数据库",
+    "Backend, Web & Databases": "后端、Web 与数据库",
+    "Testing, Build \\& Debugging": "测试、构建与调试",
+    "Testing, Build & Debugging": "测试、构建与调试",
+    "Tools \\& Workflow": "工具与工作流",
+    "Tools & Workflow": "工具与工作流",
+    "Technologies \\& Tools": "技术与工具",
+    "Technologies & Tools": "技术与工具",
+}
+
+
+def normalize_latex_section_comment_newlines(latex: str) -> str:
+    return re.sub(r"(%[^\n]*?)(\\section\{)", r"\1\n\2", str(latex or ""))
+
+
+def localize_latex_resume_headings(latex: str) -> str:
+    text = str(latex or "")
+    for english, chinese in ZH_SECTION_HEADINGS.items():
+        text = text.replace(f"\\section{{{english}}}", f"\\section{{{chinese}}}")
+    for english, chinese in ZH_SKILL_HEADINGS.items():
+        text = text.replace(f"\\textbf{{{english}:}}", f"{chinese}:")
+    text = text.replace(r"\textbf{Courses}:", "核心课程:")
+    text = text.replace(r"\textbf{Interest}:", "兴趣方向:")
+    return text
+
+
+def unbold_simple_latex_text(text: str) -> str:
+    result = str(text or "")
+    for _ in range(4):
+        previous = result
+        result = re.sub(r"\\textbf\{([^{}]*)\}", r"\1", result)
+        if result == previous:
+            break
+    return result
+
+
+def remove_unnecessary_chinese_resume_bold(latex: str) -> str:
+    text = str(latex or "")
+    for start, end, span in reversed(resume_item_spans(text)):
+        content = span[len(r"\resumeItem{") : -1]
+        cleaned = unbold_simple_latex_text(content)
+        if cleaned != content:
+            text = text[:start] + r"\resumeItem{" + cleaned + "}" + text[end:]
+
+    skills_section = find_latex_section(text, "skills-section")
+    if skills_section:
+        cleaned_section = unbold_simple_latex_text(skills_section["text"])
+        text = text[: skills_section["start"]] + cleaned_section + text[skills_section["end"] :]
+    return text
+
+
+def normalize_latex_for_resume_output(latex: str) -> str:
+    text = normalize_latex_section_comment_newlines(latex)
+    if job_description_prefers_chinese():
+        text = localize_latex_resume_headings(text)
+        text = remove_unnecessary_chinese_resume_bold(text)
+    return text
+
+
+def latex_executable(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    executable = name if name.lower().endswith(".exe") else f"{name}.exe"
+    candidates = []
+    for home in [os.environ.get("USERPROFILE"), str(Path.home()), r"C:\Users\z"]:
+        if not home:
+            continue
+        candidates.append(Path(home) / "AppData" / "Local" / "Programs" / "MiKTeX" / "miktex" / "bin" / "x64" / executable)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except OSError:
+            return str(candidate)
+    return None
+
+
 def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]]:
     commands = []
     try:
         tex_content = tex_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         tex_content = ""
+    has_cjk = contains_cjk(tex_content)
     prefers_pdftex = (
-        "glyphtounicode" in tex_content
-        or "\\pdfgentounicode" in tex_content
-        or "\\pdfglyphtounicode" in tex_content
+        not has_cjk
+        and (
+            "glyphtounicode" in tex_content
+            or "\\pdfgentounicode" in tex_content
+            or "\\pdfglyphtounicode" in tex_content
+        )
     )
 
-    xelatex = shutil.which("xelatex")
-    pdflatex = shutil.which("pdflatex")
-    latexmk = shutil.which("latexmk")
+    xelatex = latex_executable("xelatex")
+    pdflatex = latex_executable("pdflatex")
+    latexmk = latex_executable("latexmk")
 
+    if has_cjk and latexmk:
+        commands.append(
+            [
+                latexmk,
+                "-xelatex",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-outdir={build_dir}",
+                str(tex_path),
+            ]
+        )
+    if has_cjk and xelatex:
+        commands.append(
+            [
+                xelatex,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-output-directory={build_dir}",
+                str(tex_path),
+            ]
+        )
     if prefers_pdftex and latexmk:
         commands.append(
             [
@@ -1946,7 +2119,7 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
                 str(tex_path),
             ]
         )
-    if xelatex:
+    if not has_cjk and xelatex:
         commands.append(
             [
                 xelatex,
@@ -1956,7 +2129,7 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
                 str(tex_path),
             ]
         )
-    if not prefers_pdftex and pdflatex:
+    if not has_cjk and not prefers_pdftex and pdflatex:
         commands.append(
             [
                 pdflatex,
@@ -1966,7 +2139,7 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
                 str(tex_path),
             ]
         )
-    if latexmk:
+    if not has_cjk and latexmk:
         commands.append(
             [
                 latexmk,
@@ -1991,7 +2164,7 @@ def latex_commands_for_resume(tex_path: Path, build_dir: Path) -> list[list[str]
 
 
 def latex_document_for_pdf_export(document: str) -> str:
-    export_document = document
+    export_document = normalize_latex_for_resume_output(document)
     if "\\input{glyphtounicode}" in export_document and "\\ifdefined\\pdfglyphtounicode" not in export_document:
         export_document = export_document.replace(
             "\\input{glyphtounicode}",
@@ -2001,6 +2174,27 @@ def latex_document_for_pdf_export(document: str) -> str:
         export_document = export_document.replace(
             "\\pdfgentounicode=1",
             "\\ifdefined\\pdfgentounicode\n\\pdfgentounicode=1\n\\fi",
+        )
+    if contains_cjk(export_document) and "\\usepackage{xeCJK}" not in export_document:
+        cjk_preamble = (
+            "\\usepackage{iftex}\n"
+            "\\ifXeTeX\n"
+            "\\usepackage{fontspec}\n"
+            "\\usepackage{xeCJK}\n"
+            "\\IfFontExistsTF{SimSun}{\\setCJKmainfont{SimSun}}{%\n"
+            "  \\IfFontExistsTF{Noto Serif CJK SC}{\\setCJKmainfont{Noto Serif CJK SC}}{%\n"
+            "    \\IfFontExistsTF{Source Han Serif SC}{\\setCJKmainfont{Source Han Serif SC}}{%\n"
+            "      \\IfFontExistsTF{Microsoft YaHei}{\\setCJKmainfont{Microsoft YaHei}}{}%\n"
+            "    }%\n"
+            "  }%\n"
+            "}\n"
+            "\\fi\n"
+        )
+        export_document = re.sub(
+            r"(\\documentclass(?:\[[^\]]*\])?\{[^}]+\}\s*)",
+            lambda match: match.group(1) + cjk_preamble,
+            export_document,
+            count=1,
         )
     return export_document
 
@@ -4086,8 +4280,26 @@ def short_signal(value: Any, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> str:
     return truncate_text(str(value or "").strip(), max_chars)
 
 
+TRUNCATED_PLACEHOLDER_RE = re.compile(
+    r"\[\s*(?:\d+\s+more\s+items\s+)?truncated\s*\]|\bmore items\b|\btruncated\b|\.\.\.",
+    flags=re.IGNORECASE,
+)
+
+
+def is_truncated_placeholder_text(value: Any) -> bool:
+    return bool(TRUNCATED_PLACEHOLDER_RE.search(str(value or "")))
+
+
 def append_unique(items: list[str], value: Any, limit: int) -> None:
     text = short_signal(value)
+    if text and text not in items and len(items) < limit:
+        items.append(text)
+
+
+def append_resume_output_unique(items: list[str], value: Any, limit: int, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> None:
+    text = short_signal(value, max_chars)
+    if is_truncated_placeholder_text(text):
+        return
     if text and text not in items and len(items) < limit:
         items.append(text)
 
@@ -4418,6 +4630,8 @@ def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "jd_requirements": compact_value_for_prompt(candidate.get("jd_requirements", {}), 700, 8),
         "evidence_card": compact_value_for_prompt(candidate.get("evidence_card", {}), 900, 8),
         "role_lens": compact_value_for_prompt(candidate.get("role_lens", {}), 700, 8),
+        "tech_ontology_context": compact_value_for_prompt(candidate.get("tech_ontology_context", []), 500, 5),
+        "bullet_depth_profile": compact_value_for_prompt(candidate.get("bullet_depth_profile", {}), 700, 8),
         "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
         "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
         "validation": validation_for_prompt(candidate.get("bullet_writer_validation"), candidate_id=candidate_id, project=str(project_name or "")),
@@ -4559,11 +4773,15 @@ ROLE_LENS_PRIORITIES = {
 
 PROTECTED_UNSUPPORTED_TOOLS = [
     "AWS",
+    "GCP",
     "Azure",
+    "AWS ECS",
     "Kubernetes",
     "Docker",
     "Terraform",
+    "Helm",
     "Jenkins",
+    "ELK",
     "SAP",
     "Oracle",
     "Power BI",
@@ -5029,8 +5247,8 @@ def find_latex_section(resume_latex: str, section_name: str) -> dict[str, Any] |
     target = section_name.lower()
     normalized_target = normalized_section(target)
     aliases = {
-        "summary": ["professional summary", "summary", "profile", "summary/profile-section", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
-        "summary/profile-section": ["professional summary", "summary", "profile", "\u4e13\u4e1a\u6458\u8981", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "summary": ["professional summary", "summary", "profile", "summary/profile-section", "\u4e13\u4e1a\u6458\u8981", "\u4e13\u4e1a\u603b\u7ed3", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
+        "summary/profile-section": ["professional summary", "summary", "profile", "\u4e13\u4e1a\u6458\u8981", "\u4e13\u4e1a\u603b\u7ed3", "\u4e2a\u4eba\u7b80\u4ecb", "\u7b80\u4ecb"],
         "skills-section": ["technical skills", "skills", "\u6280\u80fd", "\u6280\u672f\u6280\u80fd", "\u4e13\u4e1a\u6280\u80fd"],
         "experience-section": ["experience", "work experience", "professional experience", "\u7ecf\u5386", "\u5de5\u4f5c\u7ecf\u5386", "\u5b9e\u4e60\u7ecf\u5386", "\u9879\u76ee\u7ecf\u5386"],
         "project": ["projects", "project-section", "\u9879\u76ee", "\u9879\u76ee\u7ecf\u5386", "\u9879\u76ee\u7ecf\u9a8c"],
@@ -5255,6 +5473,7 @@ def merge_retry_payload_for_prompt(original_payload: dict[str, Any]) -> dict[str
             "Do not add AWS, Kubernetes, Terraform, Jenkins, Docker, or cloud claims unless allowed_claims explicitly support them.",
             PROJECT_PRIORITY_INSTRUCTION,
             "Do not re-add omitted projects or expand lower-ranked projects beyond their target bullet budget.",
+            "Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language. Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.",
         ],
         "length_budget": {
             "original_bullet_count": target_block.get("original_bullet_count", 0),
@@ -5281,6 +5500,8 @@ Preserve valid LaTeX. Do not invent technologies, impact metrics, deployment, ow
 Prefer the candidate wording that best matches the JD while remaining evidence-grounded.
 For Projects-section merges: {PROJECT_PRIORITY_INSTRUCTION}
 Preserve selected project order, keep omitted projects out, and reduce lower-ranked project bullets first when space is limited.
+Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
+Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
 Keep the section/project length close to the original budget.
 Return only the merged LaTeX block or section. Do not include Markdown fences or explanation.
 
@@ -5321,6 +5542,8 @@ def compact_merge_candidate(candidate: Any, max_string_chars: int = 420, max_lis
         "recommended_summary",
         "allowed_claims",
         "forbidden_claims",
+        "tech_ontology_context",
+        "bullet_depth_profile",
         "validation",
         "risks",
     ]
@@ -5626,6 +5849,12 @@ def ranking_terms_from_profile(jd_profile: dict[str, Any], role_profile: dict[st
     ]:
         value = jd_profile.get(key) if isinstance(jd_profile, dict) else None
         for item in listish(value):
+            append_unique(terms, item, 60)
+    for item in listish(jd_profile.get("detected_technologies") if isinstance(jd_profile, dict) else []):
+        if isinstance(item, dict):
+            append_unique(terms, item.get("term"), 60)
+            append_unique(terms, item.get("category"), 60)
+        else:
             append_unique(terms, item, 60)
     for key in ["role_focus", "high_priority_keywords"]:
         for item in listish(role_profile.get(key) if isinstance(role_profile, dict) else None):
@@ -6312,6 +6541,145 @@ def resume_item_spans(text: str) -> list[tuple[int, int, str]]:
     return spans
 
 
+ENGLISH_RESUME_SENTENCE_MARKERS = {
+    "achieved",
+    "adapted",
+    "addressed",
+    "analyzed",
+    "automated",
+    "built",
+    "collaborated",
+    "configured",
+    "created",
+    "debugged",
+    "delivered",
+    "designed",
+    "developed",
+    "documented",
+    "enabled",
+    "enhanced",
+    "generated",
+    "implemented",
+    "improved",
+    "integrated",
+    "maintained",
+    "managed",
+    "optimized",
+    "processed",
+    "reduced",
+    "supported",
+    "tested",
+    "used",
+    "utilized",
+    "validated",
+    "with",
+    "through",
+    "using",
+}
+
+
+def latex_fragment_plain_text(fragment: str) -> str:
+    text = str(fragment or "")
+    text = re.sub(r"(?<!\\)%.*", " ", text)
+    replacements = {
+        r"\&": "&",
+        r"\%": "%",
+        r"\#": "#",
+        r"\_": "_",
+        r"\$": "$",
+        r"\{": "{",
+        r"\}": "}",
+        r"\\": " ",
+    }
+    for latex_value, plain_value in replacements.items():
+        text = text.replace(latex_value, plain_value)
+    for _ in range(4):
+        previous = text
+        text = re.sub(r"\\href\{[^{}]*\}\{([^{}]*)\}", r"\1", text)
+        text = re.sub(r"\\(?:textbf|textit|emph|underline|small)\{([^{}]*)\}", r"\1", text)
+        text = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?\{([^{}]*)\}", r"\1", text)
+        if text == previous:
+            break
+    text = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?", " ", text)
+    text = re.sub(r"[{}]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def latex_resume_item_texts(section_text: str) -> list[str]:
+    items = []
+    for _start, _end, span in resume_item_spans(section_text):
+        content = span[len(r"\resumeItem{") : -1].strip()
+        if content:
+            items.append(content)
+    for match in re.finditer(r"(?m)^\s*\\item\s+(?!\\resume)(.+)$", str(section_text or "")):
+        raw_item = match.group(1).strip()
+        if raw_item:
+            items.append(raw_item)
+    return items
+
+
+def latex_fragment_looks_like_english_sentence(fragment: str) -> bool:
+    plain_text = latex_fragment_plain_text(fragment)
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", plain_text))
+    if cjk_count >= 8:
+        return False
+    latin_words = re.findall(r"\b[A-Za-z][A-Za-z'/-]{2,}\b", plain_text)
+    if len(latin_words) < 7:
+        return False
+    lower_words = {word.lower().strip("'") for word in latin_words}
+    if lower_words & ENGLISH_RESUME_SENTENCE_MARKERS:
+        return True
+    return len(latin_words) >= 10 and bool(re.search(r"[.!?;:]", plain_text))
+
+
+def chinese_resume_language_quality_issues(resume_latex: str) -> list[str]:
+    if not job_description_prefers_chinese():
+        return []
+    normalized_resume = normalize_latex_for_resume_output(resume_latex)
+    sections_to_check = [
+        ("summary", "Summary"),
+        ("experience-section", "Experience"),
+        ("projects", "Projects"),
+    ]
+    issues = []
+    for section_key, label in sections_to_check:
+        section = find_latex_section(normalized_resume, section_key)
+        if not section:
+            continue
+        items = latex_resume_item_texts(section["text"])
+        if not items and section_key == "summary":
+            section_body = re.sub(r"\\section\{[^}]+\}", " ", section["text"], count=1)
+            items = [section_body]
+        english_samples = [
+            latex_fragment_plain_text(item)
+            for item in items
+            if latex_fragment_looks_like_english_sentence(item)
+        ]
+        if english_samples:
+            sample = english_samples[0]
+            if len(sample) > 120:
+                sample = sample[:117].rstrip() + "..."
+            issues.append(f"{label} contains English sentence text: {sample}")
+    return issues
+
+
+def tailored_resume_language_quality_error(resume_latex: str) -> str:
+    issues = chinese_resume_language_quality_issues(resume_latex)
+    if not issues:
+        return ""
+    return (
+        "Chinese job description resume still contains English sentence bullets. "
+        "Regenerate or translate the affected resume sections before saving: "
+        + "; ".join(issues)
+    )
+
+
+def validate_tailored_resume_language_quality_or_raise(resume_latex: str) -> None:
+    error_detail = tailored_resume_language_quality_error(resume_latex)
+    if error_detail:
+        raise HTTPException(status_code=400, detail=error_detail)
+
+
 def candidate_bullet_texts(candidate: dict[str, Any] | None) -> list[str]:
     if not isinstance(candidate, dict):
         return []
@@ -6319,9 +6687,9 @@ def candidate_bullet_texts(candidate: dict[str, Any] | None) -> list[str]:
     bullets = []
     for item in raw_bullets if isinstance(raw_bullets, list) else []:
         text = item.get("bullet") if isinstance(item, dict) else item
-        if re.search(r"\[\s*truncated\s*\]|\btruncated\b|\bmore items\b|\.\.\.", str(text or ""), flags=re.IGNORECASE):
+        if is_truncated_placeholder_text(text):
             continue
-        append_unique(bullets, text, 12)
+        append_resume_output_unique(bullets, text, 12)
     return bullets
 
 
@@ -6389,9 +6757,9 @@ def build_project_block_from_candidate(entry: dict[str, Any], candidate: dict[st
     evidence_card = (candidate or {}).get("evidence_card") if isinstance((candidate or {}).get("evidence_card"), dict) else {}
     technologies = []
     for item in (candidate or {}).get("skills_to_emphasize", []) if isinstance((candidate or {}).get("skills_to_emphasize"), list) else []:
-        append_unique(technologies, item, 6)
+        append_resume_output_unique(technologies, item, 6)
     for item in evidence_card.get("technologies", []) if isinstance(evidence_card.get("technologies"), list) else []:
-        append_unique(technologies, item, 6)
+        append_resume_output_unique(technologies, item, 6)
     tech_suffix = f" $|$ \\emph{{{latex_escape_text(', '.join(technologies[:5]))}}}" if technologies else ""
     bullets = candidate_bullet_texts(candidate)[:budget]
     return (
@@ -6778,7 +7146,10 @@ def select_staged_projects_with_ranking(
     projects = project_list_from_memory(project_memory)
     if not projects:
         return [], {"selected_projects": [], "omitted_projects": []}
-    jd_profile = jd_requirements_for_prompt(job_description)
+    jd_profile = enrich_jd_profile_with_tech_ontology(
+        jd_requirements_for_prompt(job_description),
+        job_description,
+    )
     role_profile = classify_role_family(job_description)
     constraints = default_resume_constraints(resume_constraints)
     if not allow_project_selection:
@@ -6894,6 +7265,339 @@ def listish(value: Any) -> list[Any]:
     if value is None or value == "":
         return []
     return [value]
+
+
+TECH_ONTOLOGY_NON_EVIDENCE_SOURCES = {"jd_keywords", "tech_ontology", "ontology_related"}
+USER_SPECIFIC_SKILL_SOURCE_LABELS = {
+    "current_resume",
+    "project_evidence",
+    "github_evidence",
+    "user_memory",
+    "coursework",
+    "prior_resume_versions",
+    "project_database",
+}
+
+
+def append_limited_unique(items: list[str], value: Any, limit: int, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> None:
+    text = short_signal(value, max_chars)
+    if text and text not in items and len(items) < limit:
+        items.append(text)
+
+
+def compact_tech_context_entries(entries: list[dict[str, Any]], limit: int = MAX_TECH_ONTOLOGY_PROMPT_ENTRIES) -> list[dict[str, Any]]:
+    compacted = []
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not entry.get("term"):
+            continue
+        compact = {
+            "term": entry.get("term"),
+            "category": entry.get("category", ""),
+            "resume_category": entry.get("resume_category", ""),
+            "role_families": listish(entry.get("role_families", []))[:6],
+            "related_terms": listish(entry.get("related_terms", []))[:6],
+            "safe_resume_phrases": listish(entry.get("safe_resume_phrases", []))[:MAX_TECH_ONTOLOGY_SAFE_PHRASES],
+            "weak_evidence_phrases": listish(entry.get("weak_evidence_phrases", []))[:MAX_TECH_ONTOLOGY_WEAK_PHRASES],
+            "do_not_claim_without_evidence": listish(entry.get("do_not_claim_without_evidence", []))[
+                :MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS
+            ],
+        }
+        while len(json.dumps(compact, ensure_ascii=False)) > MAX_TECH_ONTOLOGY_ENTRY_CHARS:
+            trimmed = False
+            for key in ["related_terms", "safe_resume_phrases", "do_not_claim_without_evidence"]:
+                if len(compact.get(key, [])) > 1:
+                    compact[key] = compact[key][:-1]
+                    trimmed = True
+                    break
+            if not trimmed:
+                break
+        compacted.append(compact)
+        if len(compacted) >= limit:
+            break
+    return compacted
+
+
+def tech_context_for_texts(*texts: Any, top_k: int = MAX_TECH_ONTOLOGY_PROMPT_ENTRIES) -> list[dict[str, Any]]:
+    entries = load_tech_ontology()
+    if not entries:
+        return []
+    terms: list[str] = []
+    for text in texts:
+        for term in extract_possible_tech_terms(str(text or "")):
+            append_limited_unique(terms, term, top_k * 3, 80)
+    return retrieve_tech_context_for_terms(terms, entries, top_k=top_k)
+
+
+def tech_context_lookup(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        for label in [entry.get("term")] + listish(entry.get("aliases", [])):
+            normalized = normalize_tech_term(str(label or ""))
+            if normalized:
+                lookup[normalized] = entry
+    return lookup
+
+
+@lru_cache(maxsize=1)
+def cached_tech_ontology_index() -> dict[str, Any]:
+    return build_tech_ontology_index(load_tech_ontology())
+
+
+def tech_entry_for_skill(skill: Any, tech_context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    normalized = normalize_tech_term(str(skill or ""))
+    if not normalized:
+        return {}
+    context_lookup = tech_context_lookup(tech_context or [])
+    if normalized in context_lookup:
+        return context_lookup[normalized]
+    return cached_tech_ontology_index().get("exact", {}).get(normalized, {})
+
+
+def tech_forbidden_claims(entries: list[dict[str, Any]], limit: int = MAX_PROMPT_CLAIMS) -> list[str]:
+    claims: list[str] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        for claim in listish(entry.get("do_not_claim_without_evidence", []))[:MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS]:
+            append_limited_unique(claims, claim, limit, 180)
+    return claims
+
+
+def ontology_base_category(entry: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            str(entry.get("category") or ""),
+            str(entry.get("resume_category") or ""),
+            " ".join(str(item) for item in listish(entry.get("common_jd_contexts", []))),
+        ]
+    ).lower()
+    if any(term in text for term in ["programming language", "query language", "scripting"]):
+        return "Languages"
+    if any(term in text for term in ["frontend", "markup", "styling"]):
+        return "Frontend / UI"
+    if any(term in text for term in ["backend", "api", "runtime", "authentication", "messaging"]):
+        return "Backend / API"
+    if any(term in text for term in ["database", "storage", "data store", "erp", "operations system"]):
+        return "Database / Storage"
+    if any(term in text for term in ["cloud", "container", "orchestration", "infrastructure", "observability"]):
+        return "Cloud / DevOps / Infrastructure"
+    if any(term in text for term in ["testing", "build", "ci/cd", "release"]):
+        return "Testing / Quality"
+    if any(term in text for term in ["ai", "llm", "retrieval", "semantic", "agent", "embedding", "prompt"]):
+        return "AI / Automation"
+    if any(term in text for term in ["analysis", "spreadsheet", "costing", "financial", "reporting"]):
+        return "Data / Reporting"
+    if any(term in text for term in ["collaboration", "project management", "productivity"]):
+        return "Tools / Workflow"
+    return ""
+
+
+def ontology_resume_category_for_role(skill: str, role_family: str = "", tech_context: list[dict[str, Any]] | None = None) -> str:
+    entry = tech_entry_for_skill(skill, tech_context)
+    if not entry:
+        return ""
+    base = ontology_base_category(entry)
+    lower = str(skill or "").lower()
+    role = role_family or "software_engineering"
+    if role == "supply_chain_operations":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if base in {"Backend / API", "Database / Storage", "Data / Reporting"} or "inventory" in lower:
+            return "Backend, Data & Inventory Systems"
+        if base == "Testing / Quality" or any(term in lower for term in ["logging", "monitoring", "documentation"]):
+            return "Troubleshooting & Documentation"
+        return "Tools & Workflow"
+    if role == "it_analyst":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if base in {"Backend / API", "Frontend / UI", "AI / Automation", "Database / Storage"}:
+            return "Application & Automation"
+        if base == "Cloud / DevOps / Infrastructure" or lower in {"azure", "microsoft 365"}:
+            return "Cloud / Microsoft Fundamentals"
+        if base == "Testing / Quality" or lower in {"logging", "monitoring"}:
+            return "Troubleshooting & Documentation"
+        return "Tools & Workflow"
+    if role == "infrastructure_devops":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if lower in {"docker", "kubernetes", "helm"}:
+            return "Containers & Orchestration"
+        if lower in {"ci/cd", "jenkins", "github actions", "gradle", "maven"}:
+            return "CI/CD & Build"
+        if base == "Cloud / DevOps / Infrastructure":
+            return "Cloud & Infrastructure" if lower not in {"logging", "monitoring", "elk"} else "Monitoring & Debugging"
+        if base == "Testing / Quality":
+            return "Monitoring & Debugging"
+        return "Tools & Workflow"
+    if role == "data_analyst":
+        if base == "Languages":
+            return "Languages & Querying"
+        if base == "Database / Storage":
+            return "Databases"
+        if base in {"Data / Reporting", "AI / Automation"}:
+            return "Data Analysis"
+        return "Tools & Workflow"
+    if role == "product_business_analyst":
+        if base in {"Data / Reporting", "Database / Storage"}:
+            return "Data & Reporting"
+        if base in {"Cloud / DevOps / Infrastructure", "Backend / API", "AI / Automation"}:
+            return "Technical Tools"
+        if base == "Tools / Workflow":
+            return "Collaboration & Workflow"
+        return "Analysis & Documentation"
+    if base == "Languages":
+        return "Languages"
+    if base in {"Backend / API", "Frontend / UI", "Database / Storage", "AI / Automation"}:
+        return "Backend, Web & Databases"
+    if base in {"Testing / Quality", "Cloud / DevOps / Infrastructure"}:
+        return "Testing, Build & Debugging"
+    return "Tools & Workflow"
+
+
+def project_text_for_tech_matching(evidence_card: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "technologies": listish(evidence_card.get("technologies", [])),
+            "methods": listish(evidence_card.get("methods", [])),
+            "features": listish(evidence_card.get("features", [])),
+            "artifacts": listish(evidence_card.get("artifacts", [])),
+            "business_or_user_value": listish(evidence_card.get("business_or_user_value", [])),
+            "testing": listish(evidence_card.get("testing_signals", [])),
+            "debugging": listish(evidence_card.get("debugging_signals", [])),
+            "automation": listish(evidence_card.get("automation_signals", [])),
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_bullet_depth_profile(
+    evidence_card: dict,
+    role_profile: dict,
+    jd_profile: dict,
+    tech_context: list[dict] | None = None,
+) -> dict:
+    """
+    Identify resume-usable technical depth signals.
+    """
+
+    card = evidence_card if isinstance(evidence_card, dict) else {}
+    evidence_text = project_text_for_tech_matching(card).lower()
+    mechanisms: list[str] = []
+    implemented_functions: list[str] = []
+    problems_solved: list[str] = []
+    role_relevance: list[str] = []
+    unsupported_metrics: list[str] = ["percentage improvement", "latency reduction", "accuracy improvement"]
+
+    for entry in tech_context or []:
+        term = str(entry.get("term") or "")
+        if term and term.lower() in evidence_text:
+            for phrase in listish(entry.get("safe_resume_phrases", []))[:3]:
+                append_limited_unique(mechanisms, phrase, MAX_BULLET_DEPTH_MECHANISMS, 140)
+    for value in listish(card.get("technologies", [])) + listish(card.get("methods", [])):
+        lower = str(value).lower()
+        if any(term in lower for term in ["api", "route", "endpoint", "backend", "fastapi", "flask"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        elif any(term in lower for term in ["sqlite", "sql", "mongodb", "postgres", "mysql", "firestore", "database"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        elif any(term in lower for term in ["retrieval", "chroma", "embedding", "semantic", "rag", "vector"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        elif any(term in lower for term in ["validation", "schema", "lookup", "matching", "ranking", "filter"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        elif any(term in lower for term in ["script", "powershell", "bash", "automation", "setup"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        elif any(term in lower for term in ["test", "debug", "logging", "error", "retry"]):
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+        else:
+            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+
+    for value in listish(card.get("features", [])) + listish(card.get("methods", [])):
+        append_limited_unique(implemented_functions, value, 12, 140)
+    for value in listish(card.get("business_or_user_value", [])) + listish(card.get("inferred_results", [])):
+        append_limited_unique(problems_solved, value, MAX_BULLET_DEPTH_PROBLEMS, 160)
+    for value in listish(role_profile.get("high_priority_keywords", [])) + listish(role_profile.get("role_focus", [])):
+        if str(value).lower() in evidence_text or len(role_relevance) < 4:
+            append_limited_unique(role_relevance, value, 10, 80)
+
+    supported_metrics = []
+    for value in listish(card.get("data_or_scale", [])):
+        append_limited_unique(supported_metrics, value, 6, 140)
+
+    return {
+        "project_name": card.get("name", ""),
+        "mechanisms": mechanisms[:MAX_BULLET_DEPTH_MECHANISMS],
+        "implemented_functions": implemented_functions[:12],
+        "problems_solved": problems_solved[:MAX_BULLET_DEPTH_PROBLEMS],
+        "role_relevance": role_relevance[:10],
+        "supported_metrics": supported_metrics,
+        "unsupported_metrics": unsupported_metrics,
+        "metric_rule": "Never include percentage, latency, accuracy, user, scale, or cost metrics unless supported_metrics contains them.",
+    }
+
+
+def validate_bullet_depth(
+    bullet: str,
+    evidence_card: dict,
+    depth_profile: dict,
+    role_profile: dict,
+) -> dict:
+    """
+    Validate whether a bullet is technically substantial and evidence-grounded.
+    """
+
+    text = str(bullet or "")
+    lower = text.lower()
+    evidence_text = json.dumps(evidence_card or {}, ensure_ascii=False).lower()
+    mechanism_terms = [str(item).lower() for item in listish(depth_profile.get("mechanisms", []))]
+    function_terms = [str(item).lower() for item in listish(depth_profile.get("implemented_functions", []))]
+    value_terms = [str(item).lower() for item in listish(depth_profile.get("problems_solved", []))]
+    role_terms = [str(item).lower() for item in listish(depth_profile.get("role_relevance", [])) + listish(role_profile.get("high_priority_keywords", []))]
+    has_mechanism = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in mechanism_terms)
+    has_function = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in function_terms)
+    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "track", "traceable", "accuracy", "repeatable", "maintain"])
+    if not has_value:
+        has_value = any(term and any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3]) for term in value_terms)
+    has_role = not role_terms or any(term and term in lower for term in role_terms)
+    unsupported_metric = bool(re.search(r"\b\d+%|\$\d+|\b\d+x\b|\b\d+\s*(?:users|qps|ms|seconds|hours)\b", lower)) and not depth_profile.get("supported_metrics")
+    vague_terms = ["various", "multiple", "improved", "helped", "worked on", "responsible for", "used technology", "developed system"]
+    issues = []
+    if not has_mechanism:
+        issues.append("contains function/value without a specific implementation mechanism")
+    if not has_function:
+        issues.append("contains tools or value without a clear implemented function/process")
+    if not has_value:
+        issues.append("does not explain the solved problem or role-relevant value")
+    if any(term in lower for term in vague_terms):
+        issues.append("uses vague or generic filler wording")
+    if unsupported_metric:
+        issues.append("may invent unsupported metrics")
+    for tool in PROTECTED_UNSUPPORTED_TOOLS:
+        if tool.lower() in lower and tool.lower() not in evidence_text:
+            issues.append(f"mentions unsupported technology: {tool}")
+
+    return {
+        "valid": not issues,
+        "mechanism_specificity": 90 if has_mechanism else 35,
+        "implemented_function_clarity": 90 if has_function else 35,
+        "problem_value_clarity": 90 if has_value else 45,
+        "jd_relevance": 85 if has_role else 55,
+        "evidence_support": 90 if not any("unsupported technology" in issue for issue in issues) else 25,
+        "metric_truthfulness": 40 if unsupported_metric else 100,
+        "issues": issues,
+    }
+
+
+def rewrite_bullet_with_depth(bullet: str, depth_profile: dict) -> str:
+    mechanisms = listish(depth_profile.get("mechanisms", []))
+    functions = listish(depth_profile.get("implemented_functions", []))
+    values = listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", []))
+    if not mechanisms or not functions:
+        return str(bullet or "")
+    mechanism = short_signal(mechanisms[0], 140)
+    function = short_signal(functions[0], 140)
+    value = short_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
+    return f"Implemented {mechanism} for {function}, supporting {value}."
 
 
 def structured_star_facts(source_facts: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -7046,6 +7750,8 @@ def build_compact_bullet_writer_input(
     forbidden_claims: list[str],
     language: str,
     extra_rules: str = "",
+    jd_profile: dict[str, Any] | None = None,
+    tech_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     current_project_facts = build_current_project_compact_facts(
         source_name,
@@ -7055,11 +7761,28 @@ def build_compact_bullet_writer_input(
         forbidden_claims,
         job_description,
     )
+    ontology_jd_profile = (
+        jd_profile
+        if isinstance(jd_profile, dict) and jd_profile.get("detected_technologies") is not None
+        else enrich_jd_profile_with_tech_ontology(jd_requirements_for_prompt(job_description), job_description)
+    )
+    prompt_tech_context = compact_tech_context_entries(
+        tech_context
+        or tech_context_for_texts(
+            job_description,
+            project_text_for_tech_matching(evidence_card),
+            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        ),
+        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+    )
+    depth_profile = build_bullet_depth_profile(evidence_card, role_profile, ontology_jd_profile, prompt_tech_context)
     return {
         "section_type": section_type,
         "source_name": source_name,
-        "compact_jd_requirements": compact_bullet_writer_value(jd_requirements_for_prompt(job_description), 350, 8),
+        "compact_jd_requirements": compact_bullet_writer_value(ontology_jd_profile, 350, 8),
         "role_profile": compact_bullet_writer_value(role_profile, 300, 5),
+        "tech_ontology_context": prompt_tech_context,
+        "bullet_depth_profile": compact_bullet_writer_value(depth_profile, 320, 8),
         "current_project_compact_facts": current_project_facts,
         "current_project_evidence_summary": {
             "evidenceSources": shortest_evidence_sources(listish(evidence_card.get("source_refs", [])) + listish(evidence_card.get("artifacts", [])), 10),
@@ -7079,9 +7802,14 @@ def build_compact_bullet_writer_input(
             "must_return_json": True,
             "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
             "star_required": True,
-            "do_not_invent": ["metrics", "tools", "files", "commits", "dates", "ownership", "deployment", "users", "business impact"],
+            "do_not_invent": ["metrics", "tools", "technologies", "files", "commits", "dates", "ownership", "deployment", "users", "business impact"],
             "style": "concise ATS-friendly bullets with concrete method, workflow value, and evidence-grounded result",
             "extra_rules": truncate_text(extra_rules, provider_safe_text_limit(1200, 500)),
+            "tech_ontology_rule": "Ontology explains terminology only. Use project evidence, allowed claims, and source facts to decide what can be claimed.",
+            "forbidden_unsupported_claims": (
+                listish(ontology_jd_profile.get("forbidden_unsupported_claims", []))
+                + tech_forbidden_claims(prompt_tech_context, MAX_PROMPT_CLAIMS)
+            )[:MAX_PROMPT_CLAIMS],
         },
     }
 
@@ -7111,6 +7839,7 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
     facts = reduced.get("current_project_compact_facts", {})
     evidence_summary = reduced.get("current_project_evidence_summary", {})
     constraints = reduced.get("bullet_constraints", {})
+    depth_profile = reduced.get("bullet_depth_profile", {})
     if isinstance(facts, dict):
         facts["resumeRelevantClaims"] = sorted(
             facts.get("resumeRelevantClaims", []),
@@ -7140,6 +7869,12 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
         trim_list_field(evidence_summary, "safeClaims", 5 if mode == "retry" else 3)
         trim_list_field(evidence_summary, "metricCandidates", 4 if mode == "retry" else 3)
         trim_list_field(evidence_summary, "riskFlags", 5 if mode == "retry" else 4)
+    if isinstance(depth_profile, dict):
+        trim_list_field(depth_profile, "mechanisms", 8 if mode == "retry" else 5)
+        trim_list_field(depth_profile, "implemented_functions", 6 if mode == "retry" else 4)
+        trim_list_field(depth_profile, "problems_solved", 5 if mode == "retry" else 3)
+    if isinstance(reduced.get("tech_ontology_context"), list):
+        reduced["tech_ontology_context"] = reduced["tech_ontology_context"][:6 if mode == "retry" else 4]
     reduced["compact_jd_requirements"] = trim_compact_jd_requirements(
         reduced.get("compact_jd_requirements"),
         8 if mode == "retry" else 6,
@@ -7195,6 +7930,8 @@ Rules:
 - Write only for payload.source_name and payload.section_type.
 - Do not use unrelated projects.
 - For project bullets, follow this prioritization rule: {PROJECT_PRIORITY_INSTRUCTION}
+- Do not merely describe what the project is. For each bullet, explain the implementation mechanism. Prefer bullets that combine a tool or method, a concrete function, and a solved problem or role-relevant value. A strong bullet should read like engineering evidence, not a product summary. Do not invent metrics or unsupported technologies.
+- Use payload.bullet_depth_profile and payload.tech_ontology_context only as compact guidance; ontology explains terminology and does not prove candidate experience.
 - Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, or business impact.
 - Use STAR analysis before final bullets.
 - If a metric/result is unsupported, list it in missing_star_fields and write a conservative qualitative result.
@@ -7230,12 +7967,17 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
     reduction_steps = [
         ("existing_bullets", 4),
         ("existing_resume_snippet.latex_lines", 14),
+        ("tech_ontology_context", 8),
+        ("bullet_depth_profile.mechanisms", 10),
         ("current_project_evidence_summary.safeClaims", 8),
         ("current_project_compact_facts.resumeRelevantClaims", 10),
         ("current_project_compact_facts.metricCandidates", 5),
+        ("bullet_depth_profile.implemented_functions", 8),
+        ("bullet_depth_profile.problems_solved", 6),
         ("current_project_compact_facts.keyModules", 8),
         ("current_project_compact_facts.userContributionSignals", 8),
         ("current_project_evidence_summary.evidenceSources", 7),
+        ("tech_ontology_context", 5),
         ("current_project_compact_facts.resumeRelevantClaims", 7),
         ("current_project_compact_facts.metricCandidates", 3),
         ("current_project_compact_facts.riskFlags", 5),
@@ -7271,6 +8013,48 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             evidence_summary["safeClaims"] = evidence_summary.get("safeClaims", [])[:3]
             evidence_summary["evidenceSources"] = evidence_summary.get("evidenceSources", [])[:5]
 
+    if prompt_size() > max_chars:
+        if isinstance(facts, dict):
+            facts["resumeRelevantClaims"] = facts.get("resumeRelevantClaims", [])[:2]
+            facts["metricCandidates"] = facts.get("metricCandidates", [])[:1]
+            facts["keyModules"] = facts.get("keyModules", [])[:3]
+            facts["userContributionSignals"] = facts.get("userContributionSignals", [])[:3]
+            facts["riskFlags"] = facts.get("riskFlags", [])[:3]
+            facts["technicalStack"] = facts.get("technicalStack", [])[:5]
+            facts["jdRelevance"] = facts.get("jdRelevance", [])[:5]
+            facts["starFacts"] = compact_value_for_prompt(facts.get("starFacts", {}), 160, 2)
+        if isinstance(evidence_summary, dict):
+            evidence_summary["safeClaims"] = evidence_summary.get("safeClaims", [])[:2]
+            evidence_summary["metricCandidates"] = evidence_summary.get("metricCandidates", [])[:1]
+            evidence_summary["evidenceSources"] = evidence_summary.get("evidenceSources", [])[:3]
+            evidence_summary["riskFlags"] = evidence_summary.get("riskFlags", [])[:3]
+        depth_profile = reduced.get("bullet_depth_profile", {})
+        if isinstance(depth_profile, dict):
+            depth_profile["mechanisms"] = depth_profile.get("mechanisms", [])[:4]
+            depth_profile["implemented_functions"] = depth_profile.get("implemented_functions", [])[:3]
+            depth_profile["problems_solved"] = depth_profile.get("problems_solved", [])[:2]
+            depth_profile["role_relevance"] = depth_profile.get("role_relevance", [])[:3]
+            depth_profile["unsupported_metrics"] = depth_profile.get("unsupported_metrics", [])[:2]
+        if isinstance(reduced.get("tech_ontology_context"), list):
+            reduced["tech_ontology_context"] = compact_value_for_prompt(reduced["tech_ontology_context"][:3], 160, 3)
+        reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 180, 3)
+        reduced["role_profile"] = compact_value_for_prompt(reduced.get("role_profile"), 160, 3)
+        reduced["role_lens_priorities"] = compact_value_for_prompt(reduced.get("role_lens_priorities"), 160, 3)
+        if isinstance(constraints, dict):
+            constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 120)
+            constraints["forbidden_unsupported_claims"] = constraints.get("forbidden_unsupported_claims", [])[:3]
+
+    if prompt_size() > max_chars:
+        reduced["tech_ontology_context"] = []
+        if isinstance(reduced.get("bullet_depth_profile"), dict):
+            reduced["bullet_depth_profile"] = {
+                "mechanisms": reduced["bullet_depth_profile"].get("mechanisms", [])[:2],
+                "implemented_functions": reduced["bullet_depth_profile"].get("implemented_functions", [])[:2],
+                "problems_solved": reduced["bullet_depth_profile"].get("problems_solved", [])[:1],
+                "supported_metrics": reduced["bullet_depth_profile"].get("supported_metrics", [])[:1],
+                "metric_rule": "Do not invent metrics.",
+            }
+
     return reduced
 
 
@@ -7293,9 +8077,21 @@ def run_resume_bullet_writer_tool(
     prompt_source_facts = compact_value_for_prompt(source_facts, 1200, 8)
     prompt_evidence = compact_github_evidence_for_prompt(evidence)
     role_profile = classify_role_family(job_description)
-    jd_requirements = jd_requirements_for_prompt(job_description)
+    jd_requirements = enrich_jd_profile_with_tech_ontology(
+        jd_requirements_for_prompt(job_description),
+        job_description,
+    )
     evidence_card = build_project_evidence_card(source_name, section_type, source_facts, prompt_evidence)
     role_lens = apply_role_lens(evidence_card, role_profile)
+    tech_context = compact_tech_context_entries(
+        tech_context_for_texts(
+            job_description,
+            project_text_for_tech_matching(evidence_card),
+            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        ),
+        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+    )
+    depth_profile = build_bullet_depth_profile(evidence_card, role_profile, jd_requirements, tech_context)
     allowed_claims = []
     forbidden_claims = []
     for item in prompt_evidence if isinstance(prompt_evidence, list) else [prompt_evidence]:
@@ -7308,6 +8104,8 @@ def run_resume_bullet_writer_tool(
     for claim in evidence_card.get("allowed_claims", []):
         append_unique(allowed_claims, claim, MAX_PROMPT_CLAIMS)
     for claim in evidence_card.get("forbidden_claims", []):
+        append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
+    for claim in listish(jd_requirements.get("forbidden_unsupported_claims", [])) + tech_forbidden_claims(tech_context, MAX_PROMPT_CLAIMS):
         append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
     prompt = f"""
 {RESUME_BULLET_WRITER_PROMPT}
@@ -7352,6 +8150,12 @@ Project / experience evidence card:
 Role lens priorities:
 {json.dumps(role_lens, ensure_ascii=False, indent=2)}
 
+Tech ontology context:
+{json.dumps(tech_context, ensure_ascii=False, indent=2)}
+
+Bullet depth profile:
+{json.dumps(depth_profile, ensure_ascii=False, indent=2)}
+
 Existing bullets:
 {json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
 
@@ -7370,6 +8174,8 @@ STAR enforcement:
 - evidence_card.inferred_results may be used as conservative qualitative Result evidence from local diff/code
   analysis, but never convert it into verified QPS, P99, latency, cost, accuracy, or percentage claims unless
   data_or_scale or user-confirmed star_facts explicitly supports the number.
+- Tech ontology explains terminology only. It does not prove the candidate knows a tool; project evidence and
+  allowed_claims decide whether a technology can appear in bullets.
 - Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
     compact_payload = None
@@ -7392,6 +8198,8 @@ STAR enforcement:
             forbidden_claims=forbidden_claims,
             language=language,
             extra_rules=extra_rules,
+            jd_profile=jd_requirements,
+            tech_context=tech_context,
         )
         if section_type == "project":
             payload = build_compact_project_input(**common)
@@ -7416,6 +8224,30 @@ STAR enforcement:
     for key in ["star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    depth_validations = []
+    for index, item in enumerate(payload["final_bullets"]):
+        bullet = item.get("bullet") if isinstance(item, dict) else str(item)
+        depth_validation = validate_bullet_depth(str(bullet or ""), evidence_card, depth_profile, role_profile)
+        if not depth_validation.get("valid") and (
+            depth_validation.get("mechanism_specificity", 0) < 60
+            or depth_validation.get("implemented_function_clarity", 0) < 60
+        ):
+            rewritten = rewrite_bullet_with_depth(str(bullet or ""), depth_profile)
+            if rewritten and rewritten != str(bullet or ""):
+                if isinstance(item, dict):
+                    item["bullet"] = rewritten
+                    item["evidence"] = item.get("evidence") or "bullet_depth_profile"
+                else:
+                    payload["final_bullets"][index] = {
+                        "bullet": rewritten,
+                        "evidence": "bullet_depth_profile",
+                        "confidence": "medium",
+                    }
+                depth_validation = validate_bullet_depth(rewritten, evidence_card, depth_profile, role_profile)
+                depth_validation["rewritten_once"] = True
+        current_item = payload["final_bullets"][index]
+        current_bullet = current_item.get("bullet") if isinstance(current_item, dict) else current_item
+        depth_validations.append({"bullet": str(current_bullet or ""), **depth_validation})
     bullet_quality = []
     for item in payload["final_bullets"]:
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
@@ -7442,6 +8274,7 @@ STAR enforcement:
         "required_pattern": validation.get("required_pattern", ""),
         "role_family": role_profile.get("role_family"),
         "bullet_quality": bullet_quality,
+        "bullet_depth": depth_validations,
     }
     quality_issues = []
     unsupported_claims = []
@@ -7449,6 +8282,9 @@ STAR enforcement:
         if not quality.get("is_strong"):
             quality_issues.extend(quality.get("issues", []))
         unsupported_claims.extend(quality.get("unsupported_claims", []))
+    for depth_validation in depth_validations:
+        if not depth_validation.get("valid"):
+            quality_issues.extend(depth_validation.get("issues", []))
     if quality_issues or unsupported_claims:
         payload["bullet_writer_validation"]["accepted"] = False
         payload["bullet_writer_validation"]["issues"].extend(sorted(set(quality_issues)))
@@ -7463,6 +8299,8 @@ STAR enforcement:
     payload["jd_requirements"] = jd_requirements
     payload["evidence_card"] = evidence_card
     payload["role_lens"] = role_lens
+    payload["tech_ontology_context"] = tech_context
+    payload["bullet_depth_profile"] = depth_profile
     return payload
 
 
@@ -7523,6 +8361,7 @@ def build_project_resume_candidate(
                 + "tools/methods, data/storage/workflow logic, testing/debugging/automation/documentation, "
                 + "and target-role relevance. For lower-ranked projects, keep only the strongest job-relevant evidence. "
                 + "The first bullet must explain what the project is and what workflow or problem it addresses. "
+                + job_language_resume_sentence_rule()
                 + f"Ranking context: {json.dumps(ranking_context, ensure_ascii=False)} "
                 + "Return fit, keep_or_replace, and fit_reason if possible."
                 + progress_guidance
@@ -7600,7 +8439,7 @@ SKILL_CATEGORY_KEYWORDS = {
     ],
     "AI / Automation": [
         "RAG",
-        "embedding",
+        "Embedding",
         "embeddings",
         "LLM",
         "OpenAI",
@@ -7633,7 +8472,7 @@ SKILL_ALIASES = {
     "git": "Git/GitHub",
     "git/github": "Git/GitHub",
     "openai api": "OpenAI API",
-    "embeddings": "embedding",
+    "embeddings": "Embedding",
     "maps-reduce": "Map-Reduce",
     "map reduce": "Map-Reduce",
     "shell": "Shell scripting",
@@ -7646,9 +8485,22 @@ SKILL_ALIASES = {
     "ci/cd concepts": "CI/CD",
     "html": "HTML/CSS",
     "css": "HTML/CSS",
-    "rest": "REST APIs",
-    "rest api": "REST APIs",
-    "rest apis": "REST APIs",
+    "rest": "REST API",
+    "rest api": "REST API",
+    "rest apis": "REST API",
+    "gcp": "GCP",
+    "google cloud": "GCP",
+    "google cloud platform": "GCP",
+    "aws ecs": "AWS ECS",
+    "ecs": "AWS ECS",
+    "github actions": "GitHub Actions",
+    "m365": "Microsoft 365",
+    "office 365": "Microsoft 365",
+    "ms project": "MS Project",
+    "microsoft project": "MS Project",
+    "langchain": "LangChain",
+    "langgraph": "LangGraph",
+    "model context protocol": "MCP",
     "android instrumentation tests": "Android instrumentation testing",
     "gradle kotlin dsl": "Gradle Kotlin DSL",
     "java 11": "Java",
@@ -7673,7 +8525,6 @@ LOW_VALUE_SKILL_SECTION_NAMES = {
     "database queries",
     "deepseek",
     "documentation",
-    "embedding",
     "firebase analytics",
     "gemini",
     "codex",
@@ -7718,7 +8569,12 @@ def canonical_skill_name(value: Any) -> str:
         return ""
     normalized = re.sub(r"\s+", " ", text).strip()
     alias = SKILL_ALIASES.get(normalized.lower())
-    return alias or normalized
+    if alias:
+        return alias
+    entry = tech_entry_for_skill(normalized)
+    if entry.get("term"):
+        return str(entry["term"])
+    return normalized
 
 
 def clean_resume_skill_name(value: Any) -> str:
@@ -7726,6 +8582,8 @@ def clean_resume_skill_name(value: Any) -> str:
     name = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", name)
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     if not name:
+        return ""
+    if is_truncated_placeholder_text(name):
         return ""
     lower = name.lower()
     if lower in LOW_VALUE_SKILL_SECTION_NAMES:
@@ -7758,6 +8616,10 @@ def base_skill_category(skill: str) -> str:
                 lower,
             ):
                 return category
+    ontology_entry = tech_entry_for_skill(skill)
+    ontology_category = ontology_base_category(ontology_entry) if ontology_entry else ""
+    if ontology_category:
+        return ontology_category
     return "Tools / Methods"
 
 
@@ -7780,20 +8642,32 @@ ROLE_TECHNICAL_SKILL_CATEGORIES = {
     ],
     "data_analyst": ["Languages & Querying", "Databases", "Data Analysis", "Reporting & Visualization", "Tools & Workflow"],
     "product_business_analyst": ["Analysis & Documentation", "Technical Tools", "Data & Reporting", "Collaboration & Workflow"],
+    "supply_chain_operations": [
+        "Languages & Scripting",
+        "Backend, Data & Inventory Systems",
+        "Tools & Workflow",
+        "Troubleshooting & Documentation",
+    ],
 }
 
 
 CAUTIOUS_SKILL_WORDING = {
     "AWS": "AWS fundamentals",
+    "GCP": "GCP fundamentals",
     "Azure": "Azure fundamentals",
+    "AWS ECS": "AWS ECS concepts",
     "Microsoft 365": "Microsoft 365 familiarity",
     "Docker": "Docker basics",
     "Kubernetes": "Kubernetes concepts",
     "Terraform": "Terraform concepts",
+    "Helm": "Helm concepts",
     "Jenkins": "Jenkins concepts",
+    "ELK": "ELK fundamentals",
     "CI/CD": "CI/CD concepts",
     "PowerShell": "PowerShell fundamentals",
     "Power BI": "Power BI familiarity",
+    "SAP": "SAP familiarity",
+    "Oracle": "Oracle familiarity",
 }
 
 
@@ -7804,6 +8678,18 @@ def skill_category(skill: str, role_family: str = "") -> str:
     base = base_skill_category(skill)
     lower = skill.lower()
     role = role_family or "software_engineering"
+    if role == "supply_chain_operations":
+        if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
+            return "Languages & Scripting"
+        if base in {"Backend / API", "Database / Storage", "Data / Reporting", "AI / Automation"} or any(
+            term in lower for term in ["inventory", "procurement", "supply chain"]
+        ):
+            return "Backend, Data & Inventory Systems"
+        if base in {"Testing / Quality", "Collaboration / Documentation"} or any(
+            term in lower for term in ["troubleshoot", "documentation", "logging", "monitoring"]
+        ):
+            return "Troubleshooting & Documentation"
+        return "Tools & Workflow"
     if role == "it_analyst":
         if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
             return "Languages & Scripting"
@@ -7890,13 +8776,18 @@ def skill_in_text(skill: str, text: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=1)
 def all_known_skill_names() -> list[str]:
     names = []
     for keywords in SKILL_CATEGORY_KEYWORDS.values():
         for keyword in keywords:
-            append_unique(names, canonical_skill_name(keyword), 200)
+            append_unique(names, canonical_skill_name(keyword), 400)
     for canonical in SKILL_ALIASES.values():
-        append_unique(names, canonical, 200)
+        append_unique(names, canonical, 400)
+    for entry in load_tech_ontology():
+        append_unique(names, canonical_skill_name(entry.get("term")), 400)
+        for alias in listish(entry.get("aliases", [])):
+            append_unique(names, canonical_skill_name(alias), 400)
     return sorted(names, key=lambda item: (-len(item), item.lower()))
 
 
@@ -7919,6 +8810,15 @@ def extract_skill_names_from_text(text: Any, limit: int = 80) -> list[str]:
         if skill_in_text(skill, value):
             append_unique(found, canonical_skill_name(skill), limit)
     return found
+
+
+def extract_skill_names_with_ontology(text: Any, limit: int = 80) -> list[str]:
+    found = []
+    for skill in extract_skill_names_from_text(text, limit):
+        append_unique(found, skill, limit)
+    for term in extract_possible_tech_terms(str(text or "")):
+        append_unique(found, canonical_skill_name(term), limit)
+    return found[:limit]
 
 
 def latex_escape_text(value: Any) -> str:
@@ -8009,7 +8909,7 @@ def extract_existing_resume_skills(resume: str) -> list[str]:
     section = find_latex_section(resume, "skills")
     text = section.get("text") if section else resume
     values = []
-    for skill in extract_skill_names_from_text(text, 80):
+    for skill in extract_skill_names_with_ontology(text, 80):
         append_unique(values, clean_resume_skill_name(skill), 80)
     for match in re.findall(r"\\textbf\{([^}]+)\}\s*[:：]\s*([^\n]+)", text):
         for item in re.split(r"[,/|;]", match[1]):
@@ -8072,7 +8972,7 @@ def project_tech_stack_rows_from_context(context: dict[str, Any]) -> list[dict[s
         append_unique(detected, canonical_skill_name(language), 80)
     for skill in detect_languages_and_frameworks_from_files(files, "\n".join(str(part) for part in text_parts)):
         append_unique(detected, canonical_skill_name(skill), 80)
-    for skill in extract_skill_names_from_text("\n".join(files + [str(part) for part in text_parts]), 80):
+    for skill in extract_skill_names_with_ontology("\n".join(files + [str(part) for part in text_parts]), 80):
         append_unique(detected, skill, 80)
     rows = []
     for skill in detected:
@@ -8246,13 +9146,25 @@ def collect_skill_candidates_for_prompt(
     user_memory: dict | None = None,
     project_database: dict | list[dict] | None = None,
     github_evidence: list[dict] | None = None,
+    tech_context: list[dict] | None = None,
 ) -> dict:
     role_profile = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
     role_family = str(role_profile.get("role_family") or jd_profile.get("role_family") or "software_engineering")
     jd_text = json.dumps(jd_profile, ensure_ascii=False)
-    jd_terms = extract_skill_names_from_text(jd_text, 80)
+    detected_context = []
+    for item in listish(tech_context or jd_profile.get("detected_technologies", [])):
+        if isinstance(item, dict):
+            detected_context.append(item)
+    for item in tech_context_for_texts(jd_text, top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES):
+        if isinstance(item, dict) and item.get("term"):
+            if not any(normalize_tech_term(existing.get("term", "")) == normalize_tech_term(item.get("term", "")) for existing in detected_context):
+                detected_context.append(item)
+    detected_context = compact_tech_context_entries(detected_context, MAX_TECH_ONTOLOGY_PROMPT_ENTRIES)
+    jd_terms = extract_skill_names_with_ontology(jd_text, 80)
+    for entry in detected_context:
+        append_unique(jd_terms, canonical_skill_name(entry.get("term")), 80)
     for value in values_for_skill_keys(jd_profile, {"skill", "tool", "platform", "language", "framework", "database"}, 80):
-        for skill in extract_skill_names_from_text(value, 80):
+        for skill in extract_skill_names_with_ontology(value, 80):
             append_unique(jd_terms, skill, 80)
 
     skill_map: dict[str, dict[str, Any]] = {}
@@ -8271,9 +9183,10 @@ def collect_skill_candidates_for_prompt(
         detail = short_signal(evidence_detail or source_label, 220)
         entry = skill_map.get(key)
         if entry is None:
+            ontology_category = ontology_resume_category_for_role(name, role_family, detected_context)
             entry = {
                 "skill": name,
-                "category": skill_category(name, role_family),
+                "category": ontology_category or skill_category(name, role_family),
                 "sources": [],
                 "evidenceSources": [],
                 "evidenceProjects": [],
@@ -8284,6 +9197,16 @@ def collect_skill_candidates_for_prompt(
                 "safeToInclude": False,
                 "score": 0,
             }
+            ontology_entry = tech_entry_for_skill(name, detected_context)
+            if ontology_entry:
+                entry["tech_ontology"] = {
+                    "term": ontology_entry.get("term"),
+                    "safe_resume_phrases": listish(ontology_entry.get("safe_resume_phrases", []))[:MAX_TECH_ONTOLOGY_SAFE_PHRASES],
+                    "weak_evidence_phrases": listish(ontology_entry.get("weak_evidence_phrases", []))[:MAX_TECH_ONTOLOGY_WEAK_PHRASES],
+                    "do_not_claim_without_evidence": listish(ontology_entry.get("do_not_claim_without_evidence", []))[
+                        :MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS
+                    ],
+                }
             skill_map[key] = entry
         append_unique(entry["sources"], source_label, 10)
         append_unique(entry["evidenceSources"], detail, 8)
@@ -8306,7 +9229,7 @@ def collect_skill_candidates_for_prompt(
     for skill in extract_existing_resume_skills(resume_text):
         add_skill(skill, "current_resume", "current resume Technical Skills/history", "high", "resume")
     for value in values_for_skill_keys(current_resume, {"course", "coursework", "class", "education"}, 80):
-        for skill in extract_skill_names_from_text(value, 40):
+        for skill in extract_skill_names_with_ontology(value, 40):
             add_skill(skill, "coursework", value, "medium")
 
     for card in selected_project_cards or []:
@@ -8326,16 +9249,16 @@ def collect_skill_candidates_for_prompt(
             for value in listish(card.get(key, [])):
                 append_unique(direct_values, value, 80)
         for value in direct_values:
-            for skill in extract_skill_names_from_text(value, 40) or [value]:
+            for skill in extract_skill_names_with_ontology(value, 40) or [value]:
                 add_skill(skill, "project_evidence", f"{project_name}: {value}", "high", project_name)
         project_text_parts = []
         for key in ["workflows", "confirmed_features", "methods", "features", "recommended_bullets", "final_bullets"]:
             if key in card:
                 project_text_parts.append(json.dumps(card.get(key), ensure_ascii=False))
-        for skill in extract_skill_names_from_text("\n".join(project_text_parts), 60):
+        for skill in extract_skill_names_with_ontology("\n".join(project_text_parts), 60):
             add_skill(skill, "project_evidence", project_name, "medium", project_name)
         for value in values_for_skill_keys(card, {"course", "coursework", "class"}, 40):
-            for skill in extract_skill_names_from_text(value, 30):
+            for skill in extract_skill_names_with_ontology(value, 30):
                 add_skill(skill, "coursework", value, "medium", project_name)
 
     evidence_items = list(github_evidence or []) + github_evidence_from_project_cards(selected_project_cards or [])
@@ -8351,9 +9274,9 @@ def collect_skill_candidates_for_prompt(
         for value in detect_languages_and_frameworks_from_files(files, json.dumps(item, ensure_ascii=False)):
             append_unique(detected, value, 80)
         for value in detected:
-            for skill in extract_skill_names_from_text(value, 40) or [value]:
+            for skill in extract_skill_names_with_ontology(value, 40) or [value]:
                 add_skill(skill, "github_evidence", f"{project_name}: {value}", "high", project_name)
-        for skill in extract_skill_names_from_text(json.dumps(item.get("diff_signals", []) + item.get("allowed_claims", []), ensure_ascii=False), 60):
+        for skill in extract_skill_names_with_ontology(json.dumps(item.get("diff_signals", []) + item.get("allowed_claims", []), ensure_ascii=False), 60):
             add_skill(skill, "github_evidence", project_name, "medium", project_name)
 
     rows = []
@@ -8375,10 +9298,10 @@ def collect_skill_candidates_for_prompt(
 
     memory = user_memory if isinstance(user_memory, dict) else {}
     for value in values_for_skill_keys(memory, {"skill", "technology", "tech_stack", "tool", "language", "framework", "database"}, 120):
-        for skill in extract_skill_names_from_text(value, 60):
+        for skill in extract_skill_names_with_ontology(value, 60):
             add_skill(skill, "user_memory", value, "medium")
     for value in values_for_skill_keys(memory, {"course", "coursework", "class", "education"}, 80):
-        for skill in extract_skill_names_from_text(value, 40):
+        for skill in extract_skill_names_with_ontology(value, 40):
             add_skill(skill, "coursework", value, "medium")
 
     for skill in read_prior_generated_resume_skill_names():
@@ -8386,7 +9309,7 @@ def collect_skill_candidates_for_prompt(
 
     for entry in skill_map.values():
         sources = set(entry.get("sources", []))
-        support_sources = sources - {"jd_keywords"}
+        support_sources = sources & USER_SPECIFIC_SKILL_SOURCE_LABELS
         has_support = bool(support_sources)
         confidence = str(entry.get("confidence") or "medium")
         safe = has_support and confidence != "low"
@@ -8397,11 +9320,12 @@ def collect_skill_candidates_for_prompt(
                 f"Use as {CAUTIOUS_SKILL_WORDING.get(entry['skill'], entry['skill'])} "
                 "when evidence is weaker or only from memory/coursework."
             )
+            entry["recommended_wording"] = CAUTIOUS_SKILL_WORDING.get(entry["skill"], entry["skill"])
         if entry["skill"] in PROTECTED_UNSUPPORTED_TOOLS and not support_sources:
             entry["safe_to_include"] = False
             entry["safeToInclude"] = False
         if not entry["safe_to_include"]:
-            entry["confidence"] = "low" if sources == {"jd_keywords"} else confidence
+            entry["confidence"] = "low" if not support_sources else confidence
         entry["score"] = max(
             int(entry.get("score", 0)),
             claim_relevance_score(entry["skill"], jd_terms, entry.get("evidenceSources", []), entry["confidence"]),
@@ -8421,23 +9345,41 @@ def collect_skill_candidates_for_prompt(
     unsupported_jd = [
         item["skill"]
         for item in candidates
-        if "jd_keywords" in item.get("sources", []) and not item.get("safe_to_include")
+        if ("jd_keywords" in item.get("sources", []) or item.get("sources", []) == ["tech_ontology"])
+        and not item.get("safe_to_include")
     ]
+    unsupported_details = []
     suggested = []
     confirmations = []
     for skill in unsupported_jd:
         if skill in CAUTIOUS_SKILL_WORDING:
             append_unique(suggested, CAUTIOUS_SKILL_WORDING[skill], 20)
         append_unique(confirmations, f"Have you used {skill} directly in coursework, a project, or a work setting?", 20)
+        ontology_entry = tech_entry_for_skill(skill, detected_context)
+        safe_wording = CAUTIOUS_SKILL_WORDING.get(skill)
+        if not safe_wording and ontology_entry:
+            weak_phrases = listish(ontology_entry.get("weak_evidence_phrases", []))
+            safe_wording = str(weak_phrases[0]) if weak_phrases else ""
+        unsupported_details.append(
+            {
+                "skill": skill,
+                "reason": "Appears in JD or ontology context, but no user-specific evidence found.",
+                "safe_wording_if_confirmed": safe_wording or skill,
+                "ask_user_to_confirm": True,
+            }
+        )
     return {
-        "skill_candidates": candidates,
+        "skill_candidates": candidates[:MAX_SKILL_CANDIDATES_FOR_PROMPT],
         "gap_report": {
             "jd_skills_not_supported": unsupported_jd,
+            "jd_skills_not_supported_details": unsupported_details[:20],
             "suggested_safe_wording": suggested,
             "ask_user_to_confirm": confirmations,
+            "unsafe_keywords_to_avoid": tech_forbidden_claims(detected_context, 20),
         },
         "role_family": role_family,
         "category_schema": ROLE_TECHNICAL_SKILL_CATEGORIES.get(role_family, ROLE_TECHNICAL_SKILL_CATEGORIES["software_engineering"]),
+        "tech_context": detected_context,
     }
 
 
@@ -8455,7 +9397,7 @@ def validate_technical_skills(
     text = skills_section_text(skills_section)
     skill_text = re.sub(r"\\textbf\{[^}]+\}", "", text)
     included_skills = []
-    for skill in extract_skill_names_from_text(skill_text, 120):
+    for skill in extract_skill_names_with_ontology(skill_text, 120):
         append_unique(included_skills, clean_resume_skill_name(skill), 120)
     candidates = skill_candidates.get("skill_candidates", []) if isinstance(skill_candidates, dict) else []
     candidate_map = {canonical_skill_name(item.get("skill")).lower(): item for item in candidates if isinstance(item, dict)}
@@ -8463,7 +9405,13 @@ def validate_technical_skills(
     wording_adjustments = []
     for skill in included_skills:
         candidate = candidate_map.get(canonical_skill_name(skill).lower())
-        if not candidate or not candidate.get("safe_to_include") or set(candidate.get("sources", [])) == {"jd_keywords"}:
+        candidate_sources = set(candidate.get("sources", [])) if candidate else set()
+        if (
+            not candidate
+            or not candidate.get("safe_to_include")
+            or not (candidate_sources & USER_SPECIFIC_SKILL_SOURCE_LABELS)
+            or candidate_sources.issubset(TECH_ONTOLOGY_NON_EVIDENCE_SOURCES)
+        ):
             append_unique(unsupported, skill, 40)
             continue
         display = cautious_skill_wording(candidate)
@@ -8505,16 +9453,40 @@ def validate_technical_skills(
     jd_only_count = sum(
         1
         for skill in included_skills
-        if set(candidate_map.get(canonical_skill_name(skill).lower(), {}).get("sources", [])) == {"jd_keywords"}
+        if set(candidate_map.get(canonical_skill_name(skill).lower(), {}).get("sources", [])).issubset(
+            TECH_ONTOLOGY_NON_EVIDENCE_SOURCES
+        )
     )
     if jd_only_count:
         notes.append("One or more skills appear to be JD-only and should move to the gap report.")
+
+    gap_report = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("safe_to_include"):
+            continue
+        sources = set(candidate.get("sources", []))
+        if not sources or sources & USER_SPECIFIC_SKILL_SOURCE_LABELS:
+            continue
+        skill = candidate.get("skill")
+        if not skill:
+            continue
+        gap_report.append(
+            {
+                "skill": skill,
+                "reason": "Appears in JD or ontology context, but no user evidence found.",
+                "safe_wording_if_confirmed": candidate.get("recommended_wording")
+                or CAUTIOUS_SKILL_WORDING.get(skill)
+                or skill,
+                "ask_user_to_confirm": True,
+            }
+        )
 
     return {
         "valid": not unsupported and not category_notes and jd_only_count == 0,
         "unsupported_skills": unsupported,
         "omitted_relevant_known_skills": omitted,
         "wording_adjustments": wording_adjustments,
+        "gap_report": gap_report[:20],
         "notes": notes,
     }
 
@@ -8548,6 +9520,26 @@ def jd_skill_requirements(job_description: str) -> dict[str, list[str]]:
             for skill in SKILL_CATEGORY_KEYWORDS.get(category, []):
                 if skill_in_text(skill, text):
                     append_unique(result[output_key], canonical_skill_name(skill), 12)
+    for entry in tech_context_for_texts(text, top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES):
+        term = canonical_skill_name(entry.get("term"))
+        if not term:
+            continue
+        base = ontology_base_category(entry)
+        if base == "Languages":
+            append_unique(result["languages"], term, 12)
+        elif base in {"Backend / API", "Frontend / UI"}:
+            append_unique(result["frameworks"], term, 12)
+        elif base == "Cloud / DevOps / Infrastructure":
+            append_unique(result["cloudInfra"], term, 12)
+            append_unique(result["devops"], term, 12)
+        elif base == "Database / Storage":
+            append_unique(result["databases"], term, 12)
+        elif base == "Testing / Quality":
+            append_unique(result["testing"], term, 12)
+        elif base == "AI / Automation":
+            append_unique(result["aiMl"], term, 12)
+        elif base == "Data / Reporting":
+            append_unique(result["automation"], term, 12)
     for skill in jd_requirements_for_prompt(text).get("soft_skills", []):
         append_unique(result["softSkills"], skill, 12)
     return result
@@ -8589,16 +9581,12 @@ def build_project_skill_evidence(
         for skill in compact_facts.get("technicalStack", []) + listish(project.get("tools", [])):
             add_candidate_skill(skill_map, skill, project_name, evidence_sources, jd_terms, "high")
         for signal in compact_facts.get("userContributionSignals", []):
-            for category_keywords in SKILL_CATEGORY_KEYWORDS.values():
-                for skill in category_keywords:
-                    if skill.lower() in str(signal).lower():
-                        add_candidate_skill(skill_map, skill, project_name, evidence_sources + [signal], jd_terms, "medium")
+            for skill in extract_skill_names_with_ontology(signal, 40):
+                add_candidate_skill(skill_map, skill, project_name, evidence_sources + [signal], jd_terms, "medium")
         for bullet in candidate_bullets:
             bullet_text = bullet.get("bullet") if isinstance(bullet, dict) else str(bullet)
-            for category_keywords in SKILL_CATEGORY_KEYWORDS.values():
-                for skill in category_keywords:
-                    if skill.lower() in str(bullet_text).lower():
-                        add_candidate_skill(skill_map, skill, project_name, evidence_sources + [bullet_text], jd_terms, "high")
+            for skill in extract_skill_names_with_ontology(bullet_text, 40):
+                add_candidate_skill(skill_map, skill, project_name, evidence_sources + [bullet_text], jd_terms, "high")
         project_evidence.append(
             {
                 "projectName": project_name,
@@ -8630,10 +9618,14 @@ def build_compact_skills_input(
         "target_role": jd_core_for_prompt(job_description),
         "role_profile": role_profile,
     }
+    jd_profile = enrich_jd_profile_with_tech_ontology(jd_profile, job_description)
+    tech_context = compact_tech_context_entries(jd_profile.get("detected_technologies", []), MAX_TECH_ONTOLOGY_PROMPT_ENTRIES)
     jd_terms = []
     for values in jd_requirements.values():
         for value in values:
             append_unique(jd_terms, value, 40)
+    for entry in tech_context:
+        append_unique(jd_terms, entry.get("term"), 40)
     existing_skills = extract_existing_resume_skills(resume)
     project_skill_evidence, candidate_skills = build_project_skill_evidence(project_memory, project_candidates, jd_terms)
     selected_project_cards = project_list_from_memory(project_memory) + [candidate for candidate in project_candidates if isinstance(candidate, dict)]
@@ -8645,6 +9637,7 @@ def build_compact_skills_input(
         user_memory=read_user_memory_for_skills(),
         project_database=project_database,
         github_evidence=github_evidence_from_project_cards(project_candidates),
+        tech_context=tech_context,
     )
     broad_candidate_skills = skill_candidate_payload.get("skill_candidates", [])
     legacy_skill_map = {item["skill"].lower(): item for item in candidate_skills if isinstance(item, dict) and item.get("skill")}
@@ -8668,10 +9661,11 @@ def build_compact_skills_input(
     )
     return {
         "compactJdSkillRequirements": jd_requirements,
-        "candidateSkills": candidate_skills[:48],
-        "skill_candidates": broad_candidate_skills[:80],
+        "candidateSkills": candidate_skills[:MAX_SKILL_CANDIDATES_FOR_PROMPT],
+        "skill_candidates": broad_candidate_skills[:MAX_SKILL_CANDIDATES_FOR_PROMPT],
         "skillCandidateSources": skill_candidate_payload,
         "gap_report": skill_candidate_payload.get("gap_report", {}),
+        "techOntologyContext": tech_context,
         "existingResumeSkills": existing_skills[:48],
         "projectSkillEvidence": project_skill_evidence[:8],
         "projectDatabaseSkillEvidence": project_database[:48],
@@ -8693,6 +9687,7 @@ def build_compact_skills_input(
             "Do not include low-relevance skills just to fill space.",
             "Merge aliases such as SQLite/better-sqlite3 and React/React.js.",
             "Move unsupported JD-only skills into gap_report instead of the Technical Skills section.",
+            "Tech ontology explains terminology but does not prove the candidate knows a technology.",
         ],
     }
 
@@ -8711,8 +9706,9 @@ Return ONLY valid JSON with exactly these keys:
   "risks": array of strings
 
 Rules:
-- Generate the Technical Skills section using the JD, selected resume evidence, current resume skills, user memory, and known project technology stack. Do not limit the skills section only to technologies mentioned in the final project bullets. Include skills that are truthful, relevant, and supported by at least one source. Do not add unsupported JD-only skills. Use cautious wording such as "fundamentals", "familiarity", or "concepts" when evidence is weaker.
-- Use only compactJdSkillRequirements, candidateSkills, skill_candidates, existingResumeSkills, projectSkillEvidence, projectDatabaseSkillEvidence, and gap_report.
+- Generate the Technical Skills section using the JD, selected resume evidence, current resume skills, user memory, known project technology stack, GitHub evidence summaries, project database rows, and tech ontology context. Do not limit the skills section only to technologies mentioned in the final project bullets. Include skills that are truthful, relevant, and supported by at least one user-specific source. Do not add unsupported JD-only or ontology-only skills. Use cautious wording such as "fundamentals", "familiarity", or "concepts" when evidence is weaker.
+- Tech ontology explains what a technology is; it does not prove the candidate knows that technology.
+- Use only compactJdSkillRequirements, candidateSkills, skill_candidates, existingResumeSkills, projectSkillEvidence, projectDatabaseSkillEvidence, techOntologyContext, and gap_report.
 - Every added or emphasized skill must appear in candidateSkills or skill_candidates with evidenceSources and safe_to_include=true.
 - Do not invent tools, frameworks, platforms, databases, languages, certifications, or proficiency levels.
 - Merge duplicate or alias skills.
@@ -8749,11 +9745,15 @@ def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: 
             reduced["candidateSkills"] = reduced["candidateSkills"][:limit]
         if isinstance(reduced.get("skill_candidates"), list):
             reduced["skill_candidates"] = reduced["skill_candidates"][:limit]
+        if isinstance(reduced.get("skillCandidateSources"), dict) and isinstance(reduced["skillCandidateSources"].get("skill_candidates"), list):
+            reduced["skillCandidateSources"]["skill_candidates"] = reduced["skillCandidateSources"]["skill_candidates"][:limit]
     for limit in [6, 4]:
         if prompt_size() <= max_chars:
             break
         if isinstance(reduced.get("projectSkillEvidence"), list):
             reduced["projectSkillEvidence"] = reduced["projectSkillEvidence"][:limit]
+        if isinstance(reduced.get("techOntologyContext"), list):
+            reduced["techOntologyContext"] = reduced["techOntologyContext"][:limit]
     if prompt_size() > max_chars and isinstance(reduced.get("existingResumeSkills"), list):
         reduced["existingResumeSkills"] = reduced["existingResumeSkills"][:24]
     if prompt_size() > max_chars and isinstance(reduced.get("projectDatabaseSkillEvidence"), list):
@@ -8763,6 +9763,17 @@ def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: 
             if isinstance(skill, dict):
                 skill["evidenceSources"] = shortest_evidence_sources(skill.get("evidenceSources", []), 2)
                 skill["evidenceProjects"] = skill.get("evidenceProjects", [])[:2]
+                if isinstance(skill.get("tech_ontology"), dict):
+                    skill["tech_ontology"] = compact_value_for_prompt(skill["tech_ontology"], 120, 2)
+        source_candidates = []
+        if isinstance(reduced.get("skillCandidateSources"), dict):
+            source_candidates = list(reduced["skillCandidateSources"].get("skill_candidates", []))
+        for skill in source_candidates:
+            if isinstance(skill, dict):
+                skill["evidenceSources"] = shortest_evidence_sources(skill.get("evidenceSources", []), 2)
+                skill["evidenceProjects"] = skill.get("evidenceProjects", [])[:2]
+                if isinstance(skill.get("tech_ontology"), dict):
+                    skill["tech_ontology"] = compact_value_for_prompt(skill["tech_ontology"], 120, 2)
     return reduced
 
 
@@ -8845,7 +9856,9 @@ def render_technical_skills_section(selected_candidates: list[dict[str, Any]], c
         category = str(candidate.get("category") or "Tools & Workflow")
         grouped.setdefault(category, [])
         skill_name = clean_skill_display_name(cautious_skill_wording(candidate))
-        append_unique(grouped[category], skill_name, 12)
+        if is_truncated_placeholder_text(skill_name):
+            continue
+        append_resume_output_unique(grouped[category], skill_name, 12)
     ordered_categories = [category for category in category_schema if category in grouped]
     ordered_categories.extend(category for category in grouped if category not in ordered_categories)
     skill_lines = []
@@ -8988,6 +10001,7 @@ def build_experience_resume_candidate(
             "invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership. "
             "Return experience_strategy, entry_recommendations, bullets_to_emphasize, bullets_to_deemphasize, "
             "and unsupported_claims_to_avoid if possible."
+            + job_language_resume_sentence_rule()
             + progress_guidance
         ),
     )
@@ -9238,6 +10252,7 @@ Rules:
 - Use only the job description, original resume, Project Memory, staged project candidates,
   staged Skills candidate, and staged Experience candidate.
 - The summary must be concise, factual, and aligned to the target job.
+- If the saved job description is Chinese, the summary must be a fluent Chinese paragraph/sentence while preserving technical names.
 - Do not invent years of experience, job titles, domains, achievements, metrics, seniority, or technologies.
 - Do not overclaim ownership or production impact unless supported by the staged candidates or original resume.
 - If the original resume has no Summary/Profile section, recommend whether to add one only if it improves ATS/relevance.
@@ -9376,6 +10391,8 @@ Loop step:
 - Preserve the STAR grounding from the staged candidate. Do not add metrics, ownership level,
   scale, or results that are not present in star_analysis, final_bullets, user guidance, or evidence.
 - Reject generic stack-only wording such as "used X to develop Y"; keep action + module + technical method + supported result/value.
+- Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
+  Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
 - Project selection allowed: {payload["allow_project_selection"]}
 - If project selection is not allowed, keep the existing resume project list and only update factual wording.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
@@ -9453,9 +10470,12 @@ Rules:
 - For Project and Experience bullet wording, use only ReAct bullet writer candidates already present in the staged data.
 - Preserve STAR grounding. Do not add unsupported business scale, ownership level, before/after metrics,
   users, latency, QPS, cost, accuracy, or production claims during the merge.
+- Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
+  Do not simplify strong bullets into vague descriptions. Do not add unsupported metrics.
 - For Experience bullets, keep the user's personal contribution explicit and supported.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Entire Experience entry removal allowed: {payload["allow_experience_removal"]}
+- {job_language_resume_sentence_rule() or "Preserve the output language required above for every user-facing resume sentence."}
 - Return only LaTeX code with no Markdown fences and no analysis text.
 
 Job description:
@@ -9603,6 +10623,8 @@ Rules:
 - Lower-ranked project bullets should be compact and only keep the most job-relevant factual claim.
 - Reduce lower-ranked project bullets first when one-page constraints require trimming.
 - Do not create new bullet wording outside the selected candidates' final_bullets / recommended_bullets.
+- Preserve mechanism-rich bullets from selected candidates. Keep concrete tools, implementation mechanisms,
+  and problem/value language. Do not simplify strong bullets into vague project descriptions.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Preserve LaTeX validity and existing section style.
 - Return only LaTeX code with no Markdown fences and no analysis text.
@@ -9685,6 +10707,8 @@ def build_resume_gap_report(
     for tool in PROTECTED_UNSUPPORTED_TOOLS:
         if tool.lower() in json.dumps(jd_requirements, ensure_ascii=False).lower() and tool.lower() not in evidence_text:
             append_unique(unsafe_keywords, tool, 15)
+    for claim in listish(jd_requirements.get("forbidden_unsupported_claims", [])):
+        append_unique(unsafe_keywords, claim, 20)
     return {
         "missing_evidence": missing_evidence,
         "weak_sections": weak_sections,
@@ -9760,7 +10784,10 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     application_hint = resolve_saved_application_hint(job_description)
     progress_guidance = agent_progress_guidance_text(body.agent_progress_messages)
     role_profile = classify_role_family(job_description)
-    jd_requirements = jd_requirements_for_prompt(job_description)
+    jd_requirements = enrich_jd_profile_with_tech_ontology(
+        jd_requirements_for_prompt(job_description),
+        job_description,
+    )
     resume_constraints = default_resume_constraints()
     selected_projects, project_ranking = select_staged_projects_with_ranking(
         job_description,
@@ -9837,8 +10864,10 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         project_ranking,
         resume_constraints,
     )
+    answer = normalize_latex_for_resume_output(answer)
     if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    validate_tailored_resume_language_quality_or_raise(answer)
     project_section_validation = validate_project_section_allocation(answer, project_ranking, resume_constraints)
     blocking_project_issues = [
         issue for issue in project_section_validation.get("issues", [])
@@ -10845,8 +11874,10 @@ Project Memory, read first and use as the primary project source:
     )
     application_hint = resolve_saved_application_hint(job_description)
     answer = run_agent_task(prompt)
+    answer = normalize_latex_for_resume_output(answer)
     if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    validate_tailored_resume_language_quality_or_raise(answer)
     agent.save_tailored_resume(answer, company=application_hint["company"], role=application_hint["role"])
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
     response: dict[str, Any] = {
