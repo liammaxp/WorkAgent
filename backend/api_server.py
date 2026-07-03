@@ -345,13 +345,16 @@ MAX_PROMPT_SIGNAL_CHARS = 240
 MAX_PROMPT_FILE_SUMMARY_CHARS = 500
 MAX_PROMPT_EVIDENCE_CHARS = 9000
 MAX_TECH_ONTOLOGY_PROMPT_ENTRIES = 10
+MAX_TECH_ONTOLOGY_BULLET_ENTRIES = 8
 MAX_TECH_ONTOLOGY_ENTRY_CHARS = 800
 MAX_TECH_ONTOLOGY_SAFE_PHRASES = 5
 MAX_TECH_ONTOLOGY_WEAK_PHRASES = 3
 MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS = 5
 MAX_SKILL_CANDIDATES_FOR_PROMPT = 40
 MAX_BULLET_DEPTH_MECHANISMS = 12
+MAX_BULLET_DEPTH_FUNCTIONS = 10
 MAX_BULLET_DEPTH_PROBLEMS = 8
+MAX_BULLET_DEPTH_ROLE_SIGNALS = 8
 PROXY_SAFE_MAX_INPUT_CHARS = 25000
 PROXY_SAFE_HARD_INPUT_CHARS = 35000
 OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
@@ -2822,6 +2825,52 @@ def safe_model_call(
         compact_input_chars = estimate_input_size(final_prompt)
         use_compact_input = True
 
+    if should_use_proxy_safe_mode(decision) and compact_builder:
+        current_chars = estimate_input_size(final_prompt)
+        if current_chars > soft_limit:
+            if caller == "run_resume_bullet_writer_tool":
+                preflight_targets = [
+                    BULLET_WRITER_RETRY_COMPACT_CHARS,
+                    BULLET_WRITER_EMERGENCY_COMPACT_CHARS,
+                    8000,
+                ]
+            elif caller == "build_summary_resume_candidate":
+                preflight_targets = [12000, 9000, 7000]
+            else:
+                preflight_targets = [
+                    min(18000, int(soft_limit * 0.75)),
+                    min(12000, int(soft_limit * 0.5)),
+                    8000,
+                ]
+            seen_targets: set[int] = set()
+            for index, target_chars in enumerate(preflight_targets):
+                target_chars = max(4000, int(target_chars))
+                if target_chars in seen_targets:
+                    continue
+                seen_targets.add(target_chars)
+                if current_chars <= soft_limit:
+                    break
+                retry_mode = "emergency" if index == len(preflight_targets) - 1 or target_chars <= 10000 else "retry"
+                compact_result = invoke_safe_builder(
+                    compact_builder,
+                    decision=decision,
+                    soft_limit=soft_limit,
+                    hard_limit=hard_limit,
+                    max_chars=target_chars,
+                    caller=caller,
+                    compact_payload=compact_payload,
+                    retry_mode=retry_mode,
+                    retry_target_chars=target_chars,
+                )
+                next_prompt, next_payload = safe_builder_prompt(compact_result)
+                next_chars = estimate_input_size(next_prompt)
+                if next_chars < current_chars or next_chars <= soft_limit:
+                    final_prompt = next_prompt
+                    compact_payload = next_payload
+                    compact_input_chars = next_chars
+                    current_chars = next_chars
+                    use_compact_input = True
+
     final_input_chars = estimate_input_size(final_prompt)
     print(
         "safe_model_call: "
@@ -4632,6 +4681,7 @@ def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "role_lens": compact_value_for_prompt(candidate.get("role_lens", {}), 700, 8),
         "tech_ontology_context": compact_value_for_prompt(candidate.get("tech_ontology_context", []), 500, 5),
         "bullet_depth_profile": compact_value_for_prompt(candidate.get("bullet_depth_profile", {}), 700, 8),
+        "bullet_depth_validation": compact_value_for_prompt(candidate.get("bullet_depth_validation", {}), 260, 5),
         "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
         "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
         "validation": validation_for_prompt(candidate.get("bullet_writer_validation"), candidate_id=candidate_id, project=str(project_name or "")),
@@ -5473,7 +5523,7 @@ def merge_retry_payload_for_prompt(original_payload: dict[str, Any]) -> dict[str
             "Do not add AWS, Kubernetes, Terraform, Jenkins, Docker, or cloud claims unless allowed_claims explicitly support them.",
             PROJECT_PRIORITY_INSTRUCTION,
             "Do not re-add omitted projects or expand lower-ranked projects beyond their target bullet budget.",
-            "Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language. Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.",
+            "Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language. Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies. Preserve project ranking, project order, and bullet budgets. When trimming for one-page length, cut weaker or lower-ranked project bullets before removing important mechanism details from the top-ranked project.",
         ],
         "length_budget": {
             "original_bullet_count": target_block.get("original_bullet_count", 0),
@@ -5501,7 +5551,8 @@ Prefer the candidate wording that best matches the JD while remaining evidence-g
 For Projects-section merges: {PROJECT_PRIORITY_INSTRUCTION}
 Preserve selected project order, keep omitted projects out, and reduce lower-ranked project bullets first when space is limited.
 Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
-Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
+Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies.
+Preserve project ranking, project order, and bullet budgets. When trimming for one-page length, cut weaker or lower-ranked project bullets before removing important mechanism details from the top-ranked project.
 Keep the section/project length close to the original budget.
 Return only the merged LaTeX block or section. Do not include Markdown fences or explanation.
 
@@ -5544,6 +5595,7 @@ def compact_merge_candidate(candidate: Any, max_string_chars: int = 420, max_lis
         "forbidden_claims",
         "tech_ontology_context",
         "bullet_depth_profile",
+        "bullet_depth_validation",
         "validation",
         "risks",
     ]
@@ -7214,7 +7266,7 @@ def preserve_resume_snippet_lines(text: Any, source_name: str, max_lines: int = 
             score += 2
         scored.append((score, index, line))
     kept_indexes = sorted(index for score, index, _ in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_lines])
-    return "\n".join(lines[index] for index in kept_indexes)
+    return "\n".join(truncate_text(lines[index], 360) for index in kept_indexes)
 
 
 def compact_jd_terms(job_description: str) -> list[str]:
@@ -7472,6 +7524,253 @@ def project_text_for_tech_matching(evidence_card: dict[str, Any]) -> str:
     )
 
 
+ROLE_DEPTH_EMPHASIS = {
+    "software_engineering": [
+        "api",
+        "data model",
+        "validation",
+        "backend",
+        "frontend",
+        "integration",
+        "testing",
+        "build",
+        "maintainability",
+        "git",
+    ],
+    "it_analyst": [
+        "troubleshooting",
+        "documentation",
+        "scripting",
+        "support workflow",
+        "configuration",
+        "application support",
+        "process organization",
+        "requirements analysis",
+    ],
+    "infrastructure_devops": [
+        "setup automation",
+        "environment configuration",
+        "ci/cd",
+        "containerization",
+        "logging",
+        "monitoring",
+        "reliability",
+        "deployment workflow",
+    ],
+    "data_analyst": [
+        "sql",
+        "data import",
+        "validation",
+        "reporting",
+        "querying",
+        "structured records",
+        "analysis workflow",
+    ],
+    "product_business_analyst": [
+        "requirements analysis",
+        "process mapping",
+        "stakeholder needs",
+        "documentation",
+        "workflow design",
+        "user-facing value",
+    ],
+    "supply_chain_operations": [
+        "search",
+        "lookup",
+        "inventory records",
+        "update workflows",
+        "data accuracy",
+        "troubleshooting",
+        "documentation",
+        "technical coordination",
+        "process reliability",
+    ],
+}
+
+
+SAFE_QUALITATIVE_VALUES = [
+    "supporting repeatable setup",
+    "improving troubleshooting visibility",
+    "keeping project facts traceable",
+    "reducing unsupported claims",
+    "improving data accuracy",
+    "making workflows easier to maintain and extend",
+    "supporting persistent application state",
+    "organizing repeated preparation workflows",
+    "reducing manual review complexity",
+    "supporting clearer documentation and process tracking",
+]
+
+
+METRIC_CLAIM_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*%|\$\s?\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*x\b|"
+    r"\b\d[\d,]*\s*(?:users?|customers?|requests?|qps|rps|ms|milliseconds?|seconds?|hours?|days?|dollars?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+METRIC_CONCEPT_TERMS = [
+    "latency",
+    "response time",
+    "accuracy rate",
+    "accuracy improvement",
+    "adoption",
+    "production scale",
+    "cost savings",
+    "revenue",
+    "uptime",
+    "throughput",
+    "qps",
+    "p99",
+]
+
+
+def role_family_from_profiles(role_profile: dict[str, Any], jd_profile: dict[str, Any] | None = None) -> str:
+    if isinstance(role_profile, dict) and role_profile.get("role_family"):
+        return str(role_profile.get("role_family"))
+    if isinstance(jd_profile, dict):
+        nested = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
+        return str(nested.get("role_family") or jd_profile.get("role_family") or "software_engineering")
+    return "software_engineering"
+
+
+def role_depth_terms(role_profile: dict[str, Any], jd_profile: dict[str, Any] | None = None) -> list[str]:
+    family = role_family_from_profiles(role_profile, jd_profile)
+    terms = []
+    for item in ROLE_DEPTH_EMPHASIS.get(family, ROLE_DEPTH_EMPHASIS["software_engineering"]):
+        append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    for key in ["high_priority_keywords", "role_focus"]:
+        for item in listish(role_profile.get(key) if isinstance(role_profile, dict) else []):
+            append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    if isinstance(jd_profile, dict):
+        for key in ["evidence_types_to_emphasize", "responsibilities", "tools_platforms", "must_have_skills"]:
+            for item in listish(jd_profile.get(key, [])):
+                append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    return terms[:MAX_BULLET_DEPTH_ROLE_SIGNALS]
+
+
+def evidence_text_for_depth(evidence_card: dict[str, Any], depth_profile: dict | None = None) -> str:
+    return json.dumps(
+        {
+            "evidence": evidence_card or {},
+            "depth": depth_profile or {},
+        },
+        ensure_ascii=False,
+    ).lower()
+
+
+def evidence_has_any(text: str, *needles: str) -> bool:
+    lower = str(text or "").lower()
+    return any(needle and needle.lower() in lower for needle in needles)
+
+
+def append_if_signal(items: list[str], evidence_text: str, phrase: str, *needles: str, limit: int = MAX_BULLET_DEPTH_MECHANISMS) -> None:
+    if evidence_has_any(evidence_text, *needles):
+        append_limited_unique(items, phrase, limit, 150)
+
+
+def append_if_all(items: list[str], evidence_text: str, phrase: str, *needles: str, limit: int = MAX_BULLET_DEPTH_MECHANISMS) -> None:
+    lower = str(evidence_text or "").lower()
+    if needles and all(needle.lower() in lower for needle in needles if needle):
+        append_limited_unique(items, phrase, limit, 150)
+
+
+def metric_support_text(evidence_card: dict[str, Any], depth_profile: dict) -> str:
+    return json.dumps(
+        {
+            "supported_metrics": listish(depth_profile.get("supported_metrics", [])),
+            "data_or_scale": listish(evidence_card.get("data_or_scale", [])),
+            "metrics": listish(evidence_card.get("metrics", [])),
+            "allowed_claims": listish(depth_profile.get("allowed_claims", [])),
+        },
+        ensure_ascii=False,
+    ).lower()
+
+
+def metric_like_claims(bullet: str) -> list[str]:
+    text = str(bullet or "")
+    claims = [match.group(0) for match in METRIC_CLAIM_RE.finditer(text)]
+    lower = text.lower()
+    for term in METRIC_CONCEPT_TERMS:
+        if term in lower:
+            append_limited_unique(claims, term, 12, 80)
+    return claims
+
+
+def qualitative_metric_replacement(depth_profile: dict) -> str:
+    for value in listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])):
+        text = short_signal(value, 140)
+        if text:
+            return text
+    return SAFE_QUALITATIVE_VALUES[0]
+
+
+def remove_unsupported_metric_phrases(bullet: str, qualitative_value: str) -> str:
+    text = str(bullet or "")
+    text = METRIC_CLAIM_RE.sub("", text)
+    text = re.sub(
+        r"\b(?:latency|response[- ]time|accuracy|adoption|production scale|cost savings|revenue|uptime|throughput|qps|p99)\b"
+        r"(?:\s+(?:improvement|reduction|increase|gain|impact|rate))?",
+        "workflow",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b(?:by|from|to|with|through)\s*(?=,|\.|;|$)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(?:reduced|cut|decreased|improved|boosted|increased|optimized)\b", "Supported", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;")
+    if not text:
+        text = "Implemented evidence-grounded workflow logic"
+    if qualitative_value and qualitative_value.lower() not in text.lower():
+        connector = ", " if re.match(r"^\w+ing\b", qualitative_value, flags=re.IGNORECASE) else ", supporting "
+        text = f"{text}{connector}{qualitative_value}"
+    return text.rstrip(".") + "."
+
+
+def validate_metric_support(
+    bullet: str,
+    evidence_card: dict,
+    depth_profile: dict,
+) -> dict:
+    """
+    Detect metric-like claims and verify that they are supported by evidence.
+    Remove or rewrite unsupported metrics.
+    """
+
+    claims = metric_like_claims(bullet)
+    if not claims:
+        return {
+            "valid": True,
+            "metric_claims": [],
+            "unsupported_metrics": [],
+            "rewritten_bullet": str(bullet or ""),
+            "notes": [],
+        }
+    support = metric_support_text(evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
+    unsupported = []
+    for claim in claims:
+        normalized = str(claim or "").lower().strip()
+        if not normalized:
+            continue
+        if normalized not in support:
+            append_limited_unique(unsupported, claim, 12, 80)
+    if not unsupported:
+        return {
+            "valid": True,
+            "metric_claims": claims,
+            "unsupported_metrics": [],
+            "rewritten_bullet": str(bullet or ""),
+            "notes": [],
+        }
+    rewritten = remove_unsupported_metric_phrases(str(bullet or ""), qualitative_metric_replacement(depth_profile))
+    return {
+        "valid": False,
+        "metric_claims": claims,
+        "unsupported_metrics": unsupported,
+        "rewritten_bullet": rewritten,
+        "notes": ["Unsupported metric-like claim rewritten as qualitative value."],
+    }
+
+
 def build_bullet_depth_profile(
     evidence_card: dict,
     role_profile: dict,
@@ -7479,7 +7778,9 @@ def build_bullet_depth_profile(
     tech_context: list[dict] | None = None,
 ) -> dict:
     """
-    Identify resume-usable technical depth signals.
+    Build a compact technical depth profile for one project or experience.
+    Use project evidence, role profile, JD profile, and Tech Ontology context.
+    Do not invent unsupported technologies or metrics.
     """
 
     card = evidence_card if isinstance(evidence_card, dict) else {}
@@ -7488,50 +7789,96 @@ def build_bullet_depth_profile(
     implemented_functions: list[str] = []
     problems_solved: list[str] = []
     role_relevance: list[str] = []
-    unsupported_metrics: list[str] = ["percentage improvement", "latency reduction", "accuracy improvement"]
+    unsupported_metrics: list[str] = [
+        "percentage improvement",
+        "latency reduction",
+        "accuracy improvement",
+        "user adoption count",
+        "production scale",
+        "cost savings",
+        "revenue impact",
+        "uptime",
+        "response-time improvement",
+    ]
+    allowed_claims: list[str] = []
+    forbidden_claims: list[str] = []
 
-    for entry in tech_context or []:
+    for entry in (tech_context or [])[:MAX_TECH_ONTOLOGY_BULLET_ENTRIES]:
         term = str(entry.get("term") or "")
-        if term and term.lower() in evidence_text:
+        if term and evidence_has_any(evidence_text, term):
             for phrase in listish(entry.get("safe_resume_phrases", []))[:3]:
                 append_limited_unique(mechanisms, phrase, MAX_BULLET_DEPTH_MECHANISMS, 140)
-    for value in listish(card.get("technologies", [])) + listish(card.get("methods", [])):
-        lower = str(value).lower()
-        if any(term in lower for term in ["api", "route", "endpoint", "backend", "fastapi", "flask"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["sqlite", "sql", "mongodb", "postgres", "mysql", "firestore", "database"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["retrieval", "chroma", "embedding", "semantic", "rag", "vector"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["validation", "schema", "lookup", "matching", "ranking", "filter"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["script", "powershell", "bash", "automation", "setup"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["test", "debug", "logging", "error", "retry"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        else:
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+            for claim in listish(entry.get("do_not_claim_without_evidence", []))[:MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS]:
+                append_limited_unique(forbidden_claims, claim, 10, 160)
+
+    append_if_signal(mechanisms, evidence_text, "FastAPI backend route handling", "fastapi")
+    append_if_all(mechanisms, evidence_text, "React/Vite workflow screens", "react", "vite")
+    append_if_signal(mechanisms, evidence_text, "React frontend workflow screens", "react")
+    append_if_signal(mechanisms, evidence_text, "Vite frontend build workflow", "vite")
+    append_if_signal(mechanisms, evidence_text, "SQLite-backed application tracking", "sqlite")
+    append_if_signal(mechanisms, evidence_text, "Chroma retrieval", "chroma")
+    append_if_signal(mechanisms, evidence_text, "Project Memory factual storage", "project memory", "project_memory")
+    append_if_signal(mechanisms, evidence_text, "GitHub evidence separation", "github evidence", "github context")
+    append_if_all(mechanisms, evidence_text, "prompt compression", "prompt", "compact")
+    append_if_signal(mechanisms, evidence_text, "allowed/forbidden claim validation", "allowed_claim", "forbidden_claim", "unsupported claim")
+    append_if_signal(mechanisms, evidence_text, "error handling and logging", "error", "logging", "exception")
+    append_if_signal(mechanisms, evidence_text, "PowerShell setup scripts", "powershell", ".ps1")
+    append_if_signal(mechanisms, evidence_text, "local setup scripts", "setup script", "local setup")
+
+    append_if_signal(mechanisms, evidence_text, "MongoDB-backed storage", "mongodb")
+    append_if_signal(mechanisms, evidence_text, "PyMongo queries", "pymongo")
+    append_if_signal(mechanisms, evidence_text, "data import workflow", "import")
+    append_if_signal(mechanisms, evidence_text, "pagination", "pagination", "paginated")
+    append_if_signal(mechanisms, evidence_text, "category browsing", "category")
+    append_if_signal(mechanisms, evidence_text, "discount lookup", "discount")
+    append_if_all(mechanisms, evidence_text, "item update workflow", "update", "item")
+    append_if_all(mechanisms, evidence_text, "required-field validation", "required", "field")
+    append_if_all(mechanisms, evidence_text, "unique item ID validation", "unique", "item id")
+    append_if_all(mechanisms, evidence_text, "duplicate-name selection", "duplicate", "name")
+    append_if_all(mechanisms, evidence_text, "menu-driven CLI integration", "menu", "cli")
+
+    append_if_signal(mechanisms, evidence_text, "Firebase Firestore-backed records", "firestore", "firebase firestore")
+    append_if_signal(mechanisms, evidence_text, "Firebase Auth sign-in workflows", "firebase auth")
+    append_if_signal(mechanisms, evidence_text, "Firebase Messaging notification workflows", "firebase messaging", "fcm")
+
+    direct_mechanism_values = (
+        listish(card.get("technologies", []))
+        + listish(card.get("methods", []))
+        + listish(card.get("testing_signals", []))
+        + listish(card.get("debugging_signals", []))
+        + listish(card.get("automation_signals", []))
+    )
+    for value in direct_mechanism_values:
+        append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
 
     for value in listish(card.get("features", [])) + listish(card.get("methods", [])):
-        append_limited_unique(implemented_functions, value, 12, 140)
+        append_limited_unique(implemented_functions, value, MAX_BULLET_DEPTH_FUNCTIONS, 140)
     for value in listish(card.get("business_or_user_value", [])) + listish(card.get("inferred_results", [])):
         append_limited_unique(problems_solved, value, MAX_BULLET_DEPTH_PROBLEMS, 160)
-    for value in listish(role_profile.get("high_priority_keywords", [])) + listish(role_profile.get("role_focus", [])):
-        if str(value).lower() in evidence_text or len(role_relevance) < 4:
-            append_limited_unique(role_relevance, value, 10, 80)
+    for value in role_depth_terms(role_profile, jd_profile):
+        if str(value).lower() in evidence_text or len(role_relevance) < 5:
+            append_limited_unique(role_relevance, value, MAX_BULLET_DEPTH_ROLE_SIGNALS, 90)
 
     supported_metrics = []
-    for value in listish(card.get("data_or_scale", [])):
+    for value in listish(card.get("data_or_scale", [])) + listish(card.get("metrics", [])) + listish(card.get("real_metrics", [])):
         append_limited_unique(supported_metrics, value, 6, 140)
+    for claim in listish(card.get("allowed_claims", [])):
+        append_limited_unique(allowed_claims, claim, 12, 180)
+    for claim in listish(card.get("forbidden_claims", [])) + listish(jd_profile.get("forbidden_unsupported_claims", []) if isinstance(jd_profile, dict) else []):
+        append_limited_unique(forbidden_claims, claim, 10, 180)
+    for mechanism in mechanisms[:8]:
+        append_limited_unique(allowed_claims, f"Implemented {mechanism}", 12, 180)
 
     return {
-        "project_name": card.get("name", ""),
+        "project_name": card.get("name") or card.get("project_name") or card.get("source_name") or "",
         "mechanisms": mechanisms[:MAX_BULLET_DEPTH_MECHANISMS],
-        "implemented_functions": implemented_functions[:12],
+        "implemented_functions": implemented_functions[:MAX_BULLET_DEPTH_FUNCTIONS],
         "problems_solved": problems_solved[:MAX_BULLET_DEPTH_PROBLEMS],
-        "role_relevance": role_relevance[:10],
+        "role_relevance": role_relevance[:MAX_BULLET_DEPTH_ROLE_SIGNALS],
         "supported_metrics": supported_metrics,
         "unsupported_metrics": unsupported_metrics,
+        "allowed_claims": allowed_claims[:12],
+        "forbidden_claims": forbidden_claims[:10],
         "metric_rule": "Never include percentage, latency, accuracy, user, scale, or cost metrics unless supported_metrics contains them.",
     }
 
@@ -7541,26 +7888,46 @@ def validate_bullet_depth(
     evidence_card: dict,
     depth_profile: dict,
     role_profile: dict,
+    jd_profile: dict | None = None,
+    previous_bullets: list[str] | None = None,
 ) -> dict:
     """
-    Validate whether a bullet is technically substantial and evidence-grounded.
+    Validate whether a bullet is technically substantial, specific, role-relevant,
+    and evidence-grounded.
     """
 
     text = str(bullet or "")
     lower = text.lower()
-    evidence_text = json.dumps(evidence_card or {}, ensure_ascii=False).lower()
+    evidence_text = evidence_text_for_depth(evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
     mechanism_terms = [str(item).lower() for item in listish(depth_profile.get("mechanisms", []))]
     function_terms = [str(item).lower() for item in listish(depth_profile.get("implemented_functions", []))]
     value_terms = [str(item).lower() for item in listish(depth_profile.get("problems_solved", []))]
-    role_terms = [str(item).lower() for item in listish(depth_profile.get("role_relevance", [])) + listish(role_profile.get("high_priority_keywords", []))]
+    role_terms = [
+        str(item).lower()
+        for item in listish(depth_profile.get("role_relevance", []))
+        + role_depth_terms(role_profile if isinstance(role_profile, dict) else {}, jd_profile)
+    ]
     has_mechanism = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in mechanism_terms)
     has_function = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in function_terms)
-    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "track", "traceable", "accuracy", "repeatable", "maintain"])
+    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "track", "traceable", "accuracy", "repeatable", "maintain", "organize", "persistent"])
     if not has_value:
         has_value = any(term and any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3]) for term in value_terms)
     has_role = not role_terms or any(term and term in lower for term in role_terms)
-    unsupported_metric = bool(re.search(r"\b\d+%|\$\d+|\b\d+x\b|\b\d+\s*(?:users|qps|ms|seconds|hours)\b", lower)) and not depth_profile.get("supported_metrics")
-    vague_terms = ["various", "multiple", "improved", "helped", "worked on", "responsible for", "used technology", "developed system"]
+    metric_validation = validate_metric_support(text, evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
+    vague_terms = [
+        "various",
+        "multiple",
+        "improved",
+        "helped",
+        "worked on",
+        "contributed to",
+        "built a system",
+        "developed features",
+        "used technologies",
+        "used technology",
+        "enhanced functionality",
+        "responsible for",
+    ]
     issues = []
     if not has_mechanism:
         issues.append("contains function/value without a specific implementation mechanism")
@@ -7568,36 +7935,91 @@ def validate_bullet_depth(
         issues.append("contains tools or value without a clear implemented function/process")
     if not has_value:
         issues.append("does not explain the solved problem or role-relevant value")
-    if any(term in lower for term in vague_terms):
+    if any(term in lower for term in vague_terms) and (not has_mechanism or not has_function):
         issues.append("uses vague or generic filler wording")
-    if unsupported_metric:
+    if not metric_validation.get("valid"):
         issues.append("may invent unsupported metrics")
+    unsupported_claims = []
     for tool in PROTECTED_UNSUPPORTED_TOOLS:
         if tool.lower() in lower and tool.lower() not in evidence_text:
+            append_limited_unique(unsupported_claims, tool, 20, 80)
             issues.append(f"mentions unsupported technology: {tool}")
+    for claim in listish(depth_profile.get("forbidden_claims", [])):
+        claim_text = str(claim or "").strip().lower()
+        if len(claim_text) >= 10 and claim_text in lower:
+            append_limited_unique(unsupported_claims, claim, 20, 140)
+            issues.append("uses forbidden unsupported claim")
+    normalized_current = normalize_match_text(text)
+    for previous in previous_bullets or []:
+        if normalized_current and normalized_current == normalize_match_text(previous):
+            issues.append("duplicates another bullet")
+            break
+    if re.search(r"\b(?:ai-powered|robust|seamless|comprehensive|innovative|powerful)\b", lower) and not has_mechanism:
+        issues.append("sounds like generic AI filler")
 
-    return {
-        "valid": not issues,
+    element_count = sum([has_mechanism, has_function, bool(metric_validation.get("valid")), has_value, has_role])
+    scores = {
         "mechanism_specificity": 90 if has_mechanism else 35,
         "implemented_function_clarity": 90 if has_function else 35,
         "problem_value_clarity": 90 if has_value else 45,
         "jd_relevance": 85 if has_role else 55,
-        "evidence_support": 90 if not any("unsupported technology" in issue for issue in issues) else 25,
-        "metric_truthfulness": 40 if unsupported_metric else 100,
+        "evidence_support": 95 if not unsupported_claims else 25,
+        "metric_truthfulness": 100 if metric_validation.get("valid") else 40,
+    }
+    if element_count < 3:
+        issues.append("does not include at least 3 of mechanism, function, metric/value, role relevance, and evidence support")
+    suggested_fix = None
+    if issues:
+        suggested_fix = "Rewrite with action verb + supported mechanism/tool + implemented function/process + solved problem/value."
+    return {
+        "is_strong": not issues,
+        "valid": not issues,
         "issues": issues,
+        "scores": scores,
+        "suggested_fix": suggested_fix,
+        "unsupported_claims": unsupported_claims + listish(metric_validation.get("unsupported_metrics", [])),
+        "metric_validation": metric_validation,
+        **scores,
     }
 
 
-def rewrite_bullet_with_depth(bullet: str, depth_profile: dict) -> str:
+def rewrite_bullet_mechanism_first(
+    bullet: str,
+    depth_profile: dict,
+    role_profile: dict,
+    jd_profile: dict,
+) -> str:
+    """
+    Rewrite weak feature-description bullets into mechanism-first bullets.
+    Do not invent unsupported claims.
+    """
+
     mechanisms = listish(depth_profile.get("mechanisms", []))
     functions = listish(depth_profile.get("implemented_functions", []))
     values = listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", []))
     if not mechanisms or not functions:
-        return str(bullet or "")
+        metric_validation = validate_metric_support(bullet, {}, depth_profile)
+        return str(metric_validation.get("rewritten_bullet") or bullet or "")
     mechanism = short_signal(mechanisms[0], 140)
-    function = short_signal(functions[0], 140)
+    function_values = []
+    for item in functions:
+        append_limited_unique(function_values, item, 3, 90)
+    function = ", ".join(function_values[:3]) or short_signal(functions[0], 140)
     value = short_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
-    return f"Implemented {mechanism} for {function}, supporting {value}."
+    role_terms = role_depth_terms(role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+    role_suffix = ""
+    if role_terms:
+        role_suffix = f" for {short_signal(role_terms[0], 80)}"
+    action = "Built"
+    if evidence_has_any(mechanism, "validation", "lookup", "query", "retrieval", "routing", "authentication"):
+        action = "Implemented"
+    rewritten = f"{action} {mechanism} for {function}, supporting {value}{role_suffix}."
+    metric_validation = validate_metric_support(rewritten, {}, depth_profile)
+    return str(metric_validation.get("rewritten_bullet") or rewritten)
+
+
+def rewrite_bullet_with_depth(bullet: str, depth_profile: dict) -> str:
+    return rewrite_bullet_mechanism_first(bullet, depth_profile, {}, {})
 
 
 def structured_star_facts(source_facts: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -7771,9 +8193,9 @@ def build_compact_bullet_writer_input(
         or tech_context_for_texts(
             job_description,
             project_text_for_tech_matching(evidence_card),
-            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+            top_k=MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
         ),
-        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
     )
     depth_profile = build_bullet_depth_profile(evidence_card, role_profile, ontology_jd_profile, prompt_tech_context)
     return {
@@ -7798,7 +8220,7 @@ def build_compact_bullet_writer_input(
         "existing_bullets": compact_bullet_writer_value(existing_bullets, 280, 5),
         "bullet_constraints": {
             "language": language,
-            "output_language_instruction": output_language_instruction(language),
+            "output_language_instruction": truncate_text(output_language_instruction(language), 500),
             "must_return_json": True,
             "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
             "star_required": True,
@@ -7884,7 +8306,8 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
     snippet = reduced.get("existing_resume_snippet")
     if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
         lines = [line for line in snippet["latex"].splitlines() if line.strip()]
-        snippet["latex"] = "\n".join(lines[:8 if mode == "retry" else 4])
+        line_chars = 320 if mode == "retry" else 220
+        snippet["latex"] = "\n".join(truncate_text(line, line_chars) for line in lines[:8 if mode == "retry" else 4])
     if isinstance(constraints, dict):
         constraints["retry_mode"] = mode
         constraints["max_final_bullets"] = 5 if mode == "retry" else 4
@@ -7932,6 +8355,8 @@ Rules:
 - For project bullets, follow this prioritization rule: {PROJECT_PRIORITY_INSTRUCTION}
 - Do not merely describe what the project is. For each bullet, explain the implementation mechanism. Prefer bullets that combine a tool or method, a concrete function, and a solved problem or role-relevant value. A strong bullet should read like engineering evidence, not a product summary. Do not invent metrics or unsupported technologies.
 - Use payload.bullet_depth_profile and payload.tech_ontology_context only as compact guidance; ontology explains terminology and does not prove candidate experience.
+- Prioritize bullets that include at least 3 of these 5 elements: concrete technical mechanism/tool, implemented function/process, technical/workflow problem solved, user/business/engineering value, and target-role relevance.
+- Use payload.bullet_depth_profile.role_relevance to shift emphasis by role; do not write every project in the same style.
 - Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, or business impact.
 - Use STAR analysis before final bullets.
 - If a metric/result is unsupported, list it in missing_star_fields and write a conservative qualitative result.
@@ -7969,6 +8394,8 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
         ("existing_resume_snippet.latex_lines", 14),
         ("tech_ontology_context", 8),
         ("bullet_depth_profile.mechanisms", 10),
+        ("bullet_depth_profile.allowed_claims", 10),
+        ("bullet_depth_profile.forbidden_claims", 8),
         ("current_project_evidence_summary.safeClaims", 8),
         ("current_project_compact_facts.resumeRelevantClaims", 10),
         ("current_project_compact_facts.metricCandidates", 5),
@@ -7991,7 +8418,7 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             snippet = reduced.get("existing_resume_snippet", {})
             if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
                 lines = [line for line in snippet["latex"].splitlines() if line.strip()]
-                snippet["latex"] = "\n".join(lines[:limit])
+                snippet["latex"] = "\n".join(truncate_text(line, 280) for line in lines[:limit])
             continue
         parent = reduced
         parts = path.split(".")
@@ -8035,6 +8462,8 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             depth_profile["problems_solved"] = depth_profile.get("problems_solved", [])[:2]
             depth_profile["role_relevance"] = depth_profile.get("role_relevance", [])[:3]
             depth_profile["unsupported_metrics"] = depth_profile.get("unsupported_metrics", [])[:2]
+            depth_profile["allowed_claims"] = depth_profile.get("allowed_claims", [])[:5]
+            depth_profile["forbidden_claims"] = depth_profile.get("forbidden_claims", [])[:5]
         if isinstance(reduced.get("tech_ontology_context"), list):
             reduced["tech_ontology_context"] = compact_value_for_prompt(reduced["tech_ontology_context"][:3], 160, 3)
         reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 180, 3)
@@ -8052,8 +8481,125 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
                 "implemented_functions": reduced["bullet_depth_profile"].get("implemented_functions", [])[:2],
                 "problems_solved": reduced["bullet_depth_profile"].get("problems_solved", [])[:1],
                 "supported_metrics": reduced["bullet_depth_profile"].get("supported_metrics", [])[:1],
+                "allowed_claims": reduced["bullet_depth_profile"].get("allowed_claims", [])[:2],
+                "forbidden_claims": reduced["bullet_depth_profile"].get("forbidden_claims", [])[:2],
                 "metric_rule": "Do not invent metrics.",
             }
+
+    if prompt_size() > max_chars:
+        snippet = reduced.get("existing_resume_snippet", {})
+        if isinstance(snippet, dict):
+            snippet["latex"] = truncate_text(snippet.get("latex"), 600)
+        if isinstance(constraints, dict):
+            constraints["output_language_instruction"] = truncate_text(constraints.get("output_language_instruction"), 220)
+            constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 90)
+            constraints["do_not_invent"] = ["metrics", "tools", "deployment", "users", "business impact"]
+            constraints["forbidden_unsupported_claims"] = constraints.get("forbidden_unsupported_claims", [])[:2]
+        if isinstance(facts, dict):
+            facts["projectSummary"] = short_signal(facts.get("projectSummary"), 220)
+            facts["resumeRelevantClaims"] = compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 90, 2)
+            facts["metricCandidates"] = compact_value_for_prompt(facts.get("metricCandidates", []), 90, 1)
+            facts["starFacts"] = compact_value_for_prompt(facts.get("starFacts", {}), 80, 1)
+        if isinstance(evidence_summary, dict):
+            evidence_summary["safeClaims"] = compact_value_for_prompt(evidence_summary.get("safeClaims", []), 90, 2)
+            evidence_summary["evidenceSources"] = shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 2)
+            evidence_summary["keyModules"] = shortest_evidence_sources(evidence_summary.get("keyModules", []), 2)
+            evidence_summary["riskFlags"] = shortest_evidence_sources(evidence_summary.get("riskFlags", []), 2)
+        reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 90, 2)
+        reduced["role_profile"] = compact_value_for_prompt(reduced.get("role_profile"), 90, 2)
+        reduced["role_lens_priorities"] = compact_value_for_prompt(reduced.get("role_lens_priorities"), 90, 2)
+        reduced["existing_bullets"] = compact_value_for_prompt(reduced.get("existing_bullets", []), 100, 1)
+
+    if prompt_size() > max_chars:
+        facts = reduced.get("current_project_compact_facts", {}) if isinstance(reduced.get("current_project_compact_facts"), dict) else {}
+        evidence_summary = reduced.get("current_project_evidence_summary", {}) if isinstance(reduced.get("current_project_evidence_summary"), dict) else {}
+        depth_profile = reduced.get("bullet_depth_profile", {}) if isinstance(reduced.get("bullet_depth_profile"), dict) else {}
+        constraints = reduced.get("bullet_constraints", {}) if isinstance(reduced.get("bullet_constraints"), dict) else {}
+        reduced = {
+            "section_type": reduced.get("section_type"),
+            "source_name": reduced.get("source_name"),
+            "compact_jd_requirements": compact_value_for_prompt(reduced.get("compact_jd_requirements"), 70, 1),
+            "role_profile": compact_value_for_prompt(reduced.get("role_profile"), 70, 1),
+            "tech_ontology_context": [],
+            "bullet_depth_profile": {
+                "mechanisms": depth_profile.get("mechanisms", [])[:2],
+                "implemented_functions": depth_profile.get("implemented_functions", [])[:2],
+                "problems_solved": depth_profile.get("problems_solved", [])[:1],
+                "role_relevance": depth_profile.get("role_relevance", [])[:1],
+                "supported_metrics": depth_profile.get("supported_metrics", [])[:1],
+                "allowed_claims": depth_profile.get("allowed_claims", [])[:1],
+                "forbidden_claims": depth_profile.get("forbidden_claims", [])[:1],
+                "metric_rule": "Do not invent metrics.",
+            },
+            "current_project_compact_facts": {
+                "projectName": facts.get("projectName"),
+                "projectSummary": short_signal(facts.get("projectSummary"), 160),
+                "technicalStack": facts.get("technicalStack", [])[:4],
+                "keyModules": facts.get("keyModules", [])[:3],
+                "userContributionSignals": facts.get("userContributionSignals", [])[:3],
+                "resumeRelevantClaims": compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 80, 1),
+                "metricCandidates": compact_value_for_prompt(facts.get("metricCandidates", []), 80, 1),
+                "riskFlags": facts.get("riskFlags", [])[:2],
+            },
+            "current_project_evidence_summary": {
+                "evidenceSources": shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 2),
+                "technologies": evidence_summary.get("technologies", [])[:4],
+                "keyModules": evidence_summary.get("keyModules", [])[:2],
+                "safeClaims": compact_value_for_prompt(evidence_summary.get("safeClaims", []), 80, 1),
+                "riskFlags": evidence_summary.get("riskFlags", [])[:2],
+            },
+            "role_lens_priorities": compact_value_for_prompt(reduced.get("role_lens_priorities"), 70, 1),
+            "relevant_star_facts": {},
+            "existing_resume_snippet": {
+                "scope": "resume_excerpt",
+                "section_name": "Project-section" if reduced.get("section_type") == "project" else "Experience-section",
+                "block_hint": reduced.get("source_name"),
+                "latex": truncate_text((reduced.get("existing_resume_snippet") or {}).get("latex"), 320)
+                if isinstance(reduced.get("existing_resume_snippet"), dict)
+                else "",
+            },
+            "existing_bullets": compact_value_for_prompt(reduced.get("existing_bullets", []), 80, 1),
+            "bullet_constraints": {
+                "language": constraints.get("language"),
+                "output_language_instruction": truncate_text(constraints.get("output_language_instruction"), 160),
+                "must_return_json": True,
+                "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
+                "do_not_invent": ["metrics", "tools", "deployment", "users", "business impact"],
+                "style": "mechanism-first evidence-grounded bullets",
+                "extra_rules": short_signal(constraints.get("extra_rules"), 60),
+                "tech_ontology_rule": "Ontology is terminology only; evidence controls claims.",
+                "forbidden_unsupported_claims": constraints.get("forbidden_unsupported_claims", [])[:1],
+            },
+        }
+
+    if prompt_size() > max_chars:
+        facts = reduced.get("current_project_compact_facts", {}) if isinstance(reduced.get("current_project_compact_facts"), dict) else {}
+        evidence_summary = reduced.get("current_project_evidence_summary", {}) if isinstance(reduced.get("current_project_evidence_summary"), dict) else {}
+        reduced["compact_jd_requirements"] = {}
+        reduced["role_profile"] = compact_value_for_prompt(reduced.get("role_profile"), 50, 1)
+        reduced["role_lens_priorities"] = {}
+        reduced["existing_bullets"] = []
+        reduced["relevant_star_facts"] = {}
+        if isinstance(reduced.get("existing_resume_snippet"), dict):
+            reduced["existing_resume_snippet"]["latex"] = truncate_text(reduced["existing_resume_snippet"].get("latex"), 160)
+        if isinstance(facts, dict):
+            facts["projectSummary"] = short_signal(facts.get("projectSummary"), 90)
+            facts["keyModules"] = facts.get("keyModules", [])[:2]
+            facts["userContributionSignals"] = facts.get("userContributionSignals", [])[:2]
+            facts["resumeRelevantClaims"] = compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 50, 1)
+            facts["metricCandidates"] = []
+            facts["riskFlags"] = facts.get("riskFlags", [])[:1]
+        if isinstance(evidence_summary, dict):
+            evidence_summary["evidenceSources"] = shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 1)
+            evidence_summary["keyModules"] = evidence_summary.get("keyModules", [])[:1]
+            evidence_summary["safeClaims"] = compact_value_for_prompt(evidence_summary.get("safeClaims", []), 50, 1)
+            evidence_summary["riskFlags"] = evidence_summary.get("riskFlags", [])[:1]
+        if isinstance(reduced.get("bullet_constraints"), dict):
+            reduced["bullet_constraints"]["output_language_instruction"] = truncate_text(
+                reduced["bullet_constraints"].get("output_language_instruction"),
+                80,
+            )
+            reduced["bullet_constraints"]["required_keys"] = ["section_type", "source_name", "final_bullets", "risks"]
 
     return reduced
 
@@ -8087,9 +8633,9 @@ def run_resume_bullet_writer_tool(
         tech_context_for_texts(
             job_description,
             project_text_for_tech_matching(evidence_card),
-            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+            top_k=MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
         ),
-        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
     )
     depth_profile = build_bullet_depth_profile(evidence_card, role_profile, jd_requirements, tech_context)
     allowed_claims = []
@@ -8176,6 +8722,11 @@ STAR enforcement:
   data_or_scale or user-confirmed star_facts explicitly supports the number.
 - Tech ontology explains terminology only. It does not prove the candidate knows a tool; project evidence and
   allowed_claims decide whether a technology can appear in bullets.
+- Prioritize bullets that include at least 3 of these 5 elements: concrete technical mechanism/tool,
+  implemented function/process, technical/workflow problem solved, user/business/engineering value,
+  and target-role relevance.
+- Use the bullet_depth_profile role_relevance signals to change emphasis for software engineering, IT analyst,
+  DevOps, data/analytics, business/product analyst, and inventory/operations roles.
 - Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
     compact_payload = None
@@ -8225,14 +8776,50 @@ STAR enforcement:
         if not isinstance(payload.get(key), list):
             payload[key] = []
     depth_validations = []
+    previous_depth_bullets = []
+    depth_debug = {
+        "project": source_name,
+        "rewritten_bullets": 0,
+        "weak_bullets_detected": 0,
+        "unsupported_metrics_removed": 0,
+        "unsupported_technologies_removed": 0,
+    }
     for index, item in enumerate(payload["final_bullets"]):
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
-        depth_validation = validate_bullet_depth(str(bullet or ""), evidence_card, depth_profile, role_profile)
-        if not depth_validation.get("valid") and (
-            depth_validation.get("mechanism_specificity", 0) < 60
-            or depth_validation.get("implemented_function_clarity", 0) < 60
-        ):
-            rewritten = rewrite_bullet_with_depth(str(bullet or ""), depth_profile)
+        current_bullet = str(bullet or "")
+        metric_validation = validate_metric_support(current_bullet, evidence_card, depth_profile)
+        if not metric_validation.get("valid"):
+            current_bullet = str(metric_validation.get("rewritten_bullet") or current_bullet)
+            depth_debug["unsupported_metrics_removed"] += len(metric_validation.get("unsupported_metrics", []))
+            if isinstance(item, dict):
+                item["bullet"] = current_bullet
+                item["evidence"] = item.get("evidence") or "metric_support_validation"
+            else:
+                payload["final_bullets"][index] = {
+                    "bullet": current_bullet,
+                    "evidence": "metric_support_validation",
+                    "confidence": "medium",
+                }
+        before_depth_validation = validate_bullet_depth(
+            current_bullet,
+            evidence_card,
+            depth_profile,
+            role_profile,
+            jd_requirements,
+            previous_depth_bullets,
+        )
+        depth_validation = before_depth_validation
+        if not before_depth_validation.get("is_strong"):
+            depth_debug["weak_bullets_detected"] += 1
+        should_rewrite = not before_depth_validation.get("is_strong") and (
+            before_depth_validation.get("mechanism_specificity", 0) < 70
+            or before_depth_validation.get("implemented_function_clarity", 0) < 70
+            or before_depth_validation.get("problem_value_clarity", 0) < 70
+            or before_depth_validation.get("metric_truthfulness", 100) < 100
+            or before_depth_validation.get("evidence_support", 100) < 70
+        )
+        if should_rewrite:
+            rewritten = rewrite_bullet_mechanism_first(current_bullet, depth_profile, role_profile, jd_requirements)
             if rewritten and rewritten != str(bullet or ""):
                 if isinstance(item, dict):
                     item["bullet"] = rewritten
@@ -8243,11 +8830,28 @@ STAR enforcement:
                         "evidence": "bullet_depth_profile",
                         "confidence": "medium",
                     }
-                depth_validation = validate_bullet_depth(rewritten, evidence_card, depth_profile, role_profile)
+                depth_debug["rewritten_bullets"] += 1
+                after_depth_validation = validate_bullet_depth(
+                    rewritten,
+                    evidence_card,
+                    depth_profile,
+                    role_profile,
+                    jd_requirements,
+                    previous_depth_bullets,
+                )
+                before_unsupported = set(before_depth_validation.get("unsupported_claims", []))
+                after_unsupported = set(after_depth_validation.get("unsupported_claims", []))
+                depth_debug["unsupported_technologies_removed"] += len(
+                    [claim for claim in before_unsupported - after_unsupported if claim in PROTECTED_UNSUPPORTED_TOOLS]
+                )
+                depth_validation = after_depth_validation
                 depth_validation["rewritten_once"] = True
+                depth_validation["pre_rewrite_issues"] = before_depth_validation.get("issues", [])
         current_item = payload["final_bullets"][index]
         current_bullet = current_item.get("bullet") if isinstance(current_item, dict) else current_item
         depth_validations.append({"bullet": str(current_bullet or ""), **depth_validation})
+        if str(current_bullet or "").strip():
+            previous_depth_bullets.append(str(current_bullet or ""))
     bullet_quality = []
     for item in payload["final_bullets"]:
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
@@ -8275,6 +8879,7 @@ STAR enforcement:
         "role_family": role_profile.get("role_family"),
         "bullet_quality": bullet_quality,
         "bullet_depth": depth_validations,
+        "bullet_depth_validation": depth_debug,
     }
     quality_issues = []
     unsupported_claims = []
@@ -8301,6 +8906,7 @@ STAR enforcement:
     payload["role_lens"] = role_lens
     payload["tech_ontology_context"] = tech_context
     payload["bullet_depth_profile"] = depth_profile
+    payload["bullet_depth_validation"] = depth_debug
     return payload
 
 
@@ -10392,7 +10998,9 @@ Loop step:
   scale, or results that are not present in star_analysis, final_bullets, user guidance, or evidence.
 - Reject generic stack-only wording such as "used X to develop Y"; keep action + module + technical method + supported result/value.
 - Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
-  Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
+  Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies.
+  Preserve project ranking, project order, and bullet budgets. When trimming for one-page length, cut weaker or
+  lower-ranked project bullets before removing important mechanism details from the top-ranked project.
 - Project selection allowed: {payload["allow_project_selection"]}
 - If project selection is not allowed, keep the existing resume project list and only update factual wording.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
@@ -10624,7 +11232,9 @@ Rules:
 - Reduce lower-ranked project bullets first when one-page constraints require trimming.
 - Do not create new bullet wording outside the selected candidates' final_bullets / recommended_bullets.
 - Preserve mechanism-rich bullets from selected candidates. Keep concrete tools, implementation mechanisms,
-  and problem/value language. Do not simplify strong bullets into vague project descriptions.
+  and problem/value language. Do not simplify strong bullets back into vague project descriptions.
+  Do not add unsupported metrics or unsupported technologies. Preserve project ranking, project order, and bullet budgets.
+  When trimming for one-page length, cut weaker or lower-ranked project bullets before removing important mechanism details from the top-ranked project.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Preserve LaTeX validity and existing section style.
 - Return only LaTeX code with no Markdown fences and no analysis text.
