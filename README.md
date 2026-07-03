@@ -16,7 +16,10 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory. The tailored Projects section now prefers 2 projects for a one-page resume, allows 3 only when the third is job-critical, and gives higher-ranked projects more bullet space.
 - Let the agent tailor Project and Experience bullets through a stricter ReAct bullet writer that rejects stack-only, CRUD-only, UI-control-only, or broad-module-only wording unless the bullet names a concrete implementation method, substantive workflow capability, and value.
 - Let the agent tailor Experience bullets for the job description by reordering, rewriting, or removing weak and redundant bullets while preserving factual meaning. Removing an entire Experience entry requires explicit user approval.
-- Return a staged resume-tailoring summary with role profile, extracted JD requirements, and a gap report that highlights missing or weak evidence and unsupported keywords to avoid.
+- Preserve the base resume's compact Technical Skills LaTeX style and reject generated skills sections that use visible bullets, placeholders, generic filler, or unsupported sentence fragments.
+- Return a staged resume-tailoring summary with role profile, extracted JD requirements, project ranking, project-section validation, and a gap report that highlights missing or weak evidence and unsupported keywords to avoid.
+- Run long agent work as cancellable background tasks with status, messages, result retrieval, and live guidance capture for reruns.
+- Check whether Project Memory has enough STAR evidence for resume tailoring and save missing project facts before generation.
 - Update Chroma-backed vector memory from resume material, with similarity checks before insert or update.
 - Delete a specific durable-memory fact through Agent Chat; project deletion is synchronized across Chroma profile memory and Project Memory.
 - Attach JPG, PNG, GIF, or WebP images in Agent Chat for supported vision models to inspect and act on.
@@ -234,10 +237,19 @@ Main FastAPI endpoints:
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
+- `POST /api/agent/progress-guidance`
+- `POST /api/agent/cancel`
+- `POST /api/agent-tasks/start`
+- `GET /api/agent-tasks/{task_id}/status`
+- `POST /api/agent-tasks/{task_id}/message`
+- `POST /api/agent-tasks/{task_id}/cancel`
+- `GET /api/agent-tasks/{task_id}/result`
 - `POST /api/chat/session`
 - `POST /api/job-description`
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
+- `POST /api/resume/star-check`
+- `POST /api/resume/star-fact`
 - `POST /api/resume/update-memory`
 - `POST /api/resume/pdf-to-latex`
 - `POST /api/resume/tailored/pdf`
@@ -270,11 +282,15 @@ Agent Chat image requests use data URLs:
 
 `POST /api/agent/ask` accepts up to 4 images per request and validates that each image is JPG, PNG, GIF, or WebP and no larger than 10 MB.
 
+`POST /api/agent/cancel` cancels an in-flight agent request by `agent_task_id`. The `/api/agent-tasks/*` endpoints start background agent work, poll stage/status messages, append user guidance while the task is active, cancel the task, and fetch the final result after completion.
+
 `GET /api/status` includes `file_metadata` timestamps for local working files. The frontend uses those timestamps to avoid showing stale generated resume, cover letter, and interview prep outputs from before the current app session.
 
 `GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions. Output history lists readable file names rather than timestamps and omits reserved current-working files. When analysis, tailored resume, cover letter, or interview prep generation produces unchanged content for the same company and role, WorkAgent reuses the matching history file instead of creating a duplicate numbered version.
 
-`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. The staged tailoring path also returns `role_profile`, `jd_requirements`, and `gap_report` so the UI can show role classification, extracted requirements, missing evidence, weak bullet candidates, and unsafe unsupported keywords. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. The staged tailoring path also returns `role_profile`, `jd_requirements`, `project_ranking`, `project_section_validation`, and `gap_report` so the UI can show role classification, extracted requirements, selected/omitted projects, one-page allocation checks, missing evidence, weak bullet candidates, and unsafe unsupported keywords. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+
+`POST /api/resume/star-check` reviews Project Memory and staged project candidates for missing STAR facts before tailoring. `POST /api/resume/star-fact` saves a user-provided project fact so later resume generation can stay evidence-grounded instead of inventing unsupported claims.
 
 `POST /api/resume/pdf-to-latex` converts an uploaded PDF resume into editable LaTeX and saves it as the base resume. `POST /api/resume/tailored/pdf` compiles the current tailored LaTeX resume into a PDF output file. PDF export now guards `glyphtounicode`/`pdfgentounicode` commands for engine compatibility and tries PDF-oriented LaTeX commands first when the resume requests those settings.
 
@@ -500,7 +516,7 @@ Production frontend output is written to `outputs/frontend/`.
 
 ## Current Limitations
 
-- Generation tasks are synchronous; there is no streaming output or cancellation yet.
+- Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
 - GitHub evidence is still displayed mostly as JSON rather than a polished visual report.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
@@ -508,7 +524,7 @@ Production frontend output is written to `outputs/frontend/`.
 ## Roadmap
 
 - Expand the Agent Chat application-material flow to include job analysis and interview prep.
-- Add task queues, progress updates, cancellation, and WebSocket/SSE streaming.
+- Add persistent task queues and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
 - Add application dashboards, statistics, batch actions, and richer search.
 - Add document preview and DOCX export.
@@ -739,10 +755,19 @@ background/prompt.example.txt
 - `GET /api/prompt`
 - `PUT /api/prompt`
 - `POST /api/agent/ask`
+- `POST /api/agent/progress-guidance`
+- `POST /api/agent/cancel`
+- `POST /api/agent-tasks/start`
+- `GET /api/agent-tasks/{task_id}/status`
+- `POST /api/agent-tasks/{task_id}/message`
+- `POST /api/agent-tasks/{task_id}/cancel`
+- `GET /api/agent-tasks/{task_id}/result`
 - `POST /api/chat/session`
 - `POST /api/job-description`
 - `POST /api/job-description/analyze`
 - `POST /api/resume/tailor`
+- `POST /api/resume/star-check`
+- `POST /api/resume/star-fact`
 - `POST /api/resume/update-memory`
 - `POST /api/resume/pdf-to-latex`
 - `POST /api/resume/tailored/pdf`

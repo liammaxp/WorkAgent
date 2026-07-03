@@ -863,6 +863,102 @@ def project_headings_without_bullets(latex):
     return missing
 
 
+def latex_document_body(latex):
+    begin_marker = "\\begin{document}"
+    end_marker = "\\end{document}"
+    begin_index = latex.find(begin_marker)
+    body_start = begin_index + len(begin_marker) if begin_index != -1 else 0
+    end_index = latex.find(end_marker, body_start)
+    body_end = end_index if end_index != -1 else len(latex)
+    return latex[body_start:body_end], body_start
+
+
+def latex_structure_issues(latex):
+    body, body_start = latex_document_body(latex)
+    token_pattern = re.compile(
+        r"\\begin\{(?P<begin>itemize|enumerate)\}"
+        r"|\\end\{(?P<end>itemize|enumerate)\}"
+        r"|\\(?P<resume>resume(?:SubHeadingList|ItemList)(?:Start|End))\b"
+    )
+    stack = []
+    issues = []
+
+    for match in token_pattern.finditer(body):
+        token = match.group(0)
+        line = latex.count("\n", 0, body_start + match.start()) + 1
+        begin_env = match.group("begin")
+        end_env = match.group("end")
+        resume_command = match.group("resume")
+
+        if begin_env:
+            stack.append((begin_env, token, line))
+            continue
+        if resume_command and resume_command.endswith("Start"):
+            stack.append(("itemize", token, line))
+            continue
+
+        expected_env = end_env or "itemize"
+        if not stack:
+            issues.append(f"Line {line}: {token} closes without a matching list start.")
+            continue
+
+        open_env, open_token, open_line = stack[-1]
+        if open_env != expected_env:
+            issues.append(
+                f"Line {line}: {token} closes {expected_env}, but line {open_line} opened {open_token}."
+            )
+            continue
+
+        stack.pop()
+
+    for _open_env, open_token, open_line in stack:
+        issues.append(f"Line {open_line}: {open_token} is missing a matching list end.")
+
+    return issues
+
+
+def latex_placeholder_issues(latex):
+    issues = []
+    if re.search(r"\[\s*truncated\s*\]|\.\.\.\s*\[\s*truncated\s*\]", latex, flags=re.IGNORECASE):
+        issues.append("Resume LaTeX contains truncated placeholder text.")
+    return issues
+
+
+def latex_section_text(latex, section_name):
+    normalized_target = re.sub(r"[\s/_-]+", "", str(section_name or "").lower())
+    matches = list(re.finditer(r"\\section\{([^}]+)\}", latex))
+    for index, match in enumerate(matches):
+        normalized_name = re.sub(r"[\s/_-]+", "", match.group(1).lower())
+        if normalized_target not in normalized_name and normalized_name not in {normalized_target, "technicalskills"}:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(latex)
+        return latex[match.start() : end]
+    return ""
+
+
+def technical_skills_section_issues(latex):
+    section = latex_section_text(latex, "skills")
+    if not section:
+        return []
+
+    issues = []
+    compact_itemize = re.search(
+        r"\\begin\{itemize\}\s*\[[^\]]*label\s*=\s*\{\}[^\]]*\]",
+        section,
+    )
+    if not compact_itemize:
+        issues.append("Technical Skills must use the compact no-bullet itemize style with label={}.")
+    if "\\small" not in section:
+        issues.append("Technical Skills must keep the same small-font style as the base resume.")
+    if len(re.findall(r"\\item\b", section)) > 1:
+        issues.append("Technical Skills must be one compact item, not one visible bullet per category.")
+    if re.search(r"\.\.\.|\btruncated\b|more items", section, flags=re.IGNORECASE):
+        issues.append("Technical Skills contains truncated placeholder text.")
+    if any(marker in section for marker in ["求职", "申请工作区", "使用 Python"]):
+        issues.append("Technical Skills contains sentence fragments instead of skill names.")
+    return issues
+
+
 def looks_like_complete_latex_resume(content):
     latex = extract_latex_document(content)
     if not latex:
@@ -870,9 +966,40 @@ def looks_like_complete_latex_resume(content):
     required_markers = ["\\documentclass", "\\begin{document}", "\\end{document}", "\\section"]
     if any(marker not in latex for marker in required_markers):
         return False
+    if latex_structure_issues(latex):
+        return False
+    if latex_placeholder_issues(latex):
+        return False
     if project_headings_without_bullets(latex):
         return False
+    if technical_skills_section_issues(latex):
+        return False
     return True
+
+
+def latex_resume_validation_issues(content):
+    latex = extract_latex_document(content)
+    if not latex:
+        return ["No LaTeX resume code found."]
+
+    issues = []
+    required_markers = ["\\documentclass", "\\begin{document}", "\\end{document}", "\\section"]
+    missing_markers = [marker for marker in required_markers if marker not in latex]
+    if missing_markers:
+        issues.append("Missing required LaTeX markers: " + ", ".join(missing_markers) + ".")
+    issues.extend(latex_structure_issues(latex))
+    issues.extend(latex_placeholder_issues(latex))
+
+    missing_project_bullets = project_headings_without_bullets(latex)
+    if missing_project_bullets:
+        issues.append(
+            "Project heading without resume bullets: "
+            + ", ".join(missing_project_bullets)
+            + "."
+        )
+
+    issues.extend(technical_skills_section_issues(latex))
+    return issues
 
 
 def is_likely_resume_edit_request(text):
@@ -1547,12 +1674,21 @@ def save_tailored_resume(content, company="", role=""):
     latex = extract_latex_document(content)
     if not latex:
         raise ValueError("No LaTeX resume code found. Refusing to write tailored_resume.txt.")
+    structure_issues = latex_structure_issues(latex)
+    if structure_issues:
+        raise ValueError("Invalid LaTeX list structure: " + " ".join(structure_issues))
+    placeholder_issues = latex_placeholder_issues(latex)
+    if placeholder_issues:
+        raise ValueError("Invalid LaTeX resume content: " + " ".join(placeholder_issues))
     missing_project_bullets = project_headings_without_bullets(latex)
     if missing_project_bullets:
         raise ValueError(
             "Project heading without resume bullets: "
             + ", ".join(missing_project_bullets)
         )
+    skill_issues = technical_skills_section_issues(latex)
+    if skill_issues:
+        raise ValueError("Invalid Technical Skills section: " + " ".join(skill_issues))
     if not looks_like_complete_latex_resume(latex):
         raise ValueError("Expected complete LaTeX resume code before saving tailored_resume.txt.")
 
@@ -3055,6 +3191,7 @@ Do not write resume bullets directly from retrieved GitHub evidence. Use Project
 Mandatory bullet-writing tool rule: whenever the user asks to write, rewrite, tailor, generate, or modify Project-section bullets or Experience-section bullets, you must call write_resume_bullets before showing final bullet wording or before saving a modified resume. Use its ReAct fields to explain privately in the tool call why each bullet can be written, why it belongs in the project or experience, what business capability it shows, and what technical capability it shows. Prefer Used / Implemented / Automated / Debugged, but allow natural sentence structure instead of forcing every bullet into the same "to" template. Final bullets must combine a concrete technical method, a substantive logic/workflow/business capability, and a result or value. The technical method must explain how the work was implemented, such as retrieval/ranking logic, parsing, schema validation, state comparison, caching, retry/fallback handling, chunked processing, orchestration, or root-cause debugging. The implemented feature/problem should be substantive, such as reducing monotonous resume generation, selecting relevant projects, validating supported claims, recovering from context-window overflow, or preserving factual evidence; a technology stack, button, page, CRUD flow, or broad module alone is not enough.
 When approved GitHub context includes file_changes or diff_analysis, use commit messages, changed files, patches, and patch signals only as supporting evidence for facts already represented in Project Memory.
 When tailoring a resume, compare the current resume projects with factual projects from project_memory.json. If the user allows project selection, you may remove weaker current projects, update existing project bullets, or add a better-matching Project Memory project. Prefer a one-page resume: the Projects section should normally keep 2 projects, may keep 3 only when the third project is clearly job-critical, and must not keep more than 3. Rank projects strongest-to-weakest and give higher-ranked projects more bullets than lower-ranked projects, usually about 3 bullets for rank 1, 2 bullets for rank 2, and 1 concise bullet for an optional rank 3 project. Project Memory rag_refs are candidates for Chroma evidence lookup, not permission to invent claims.
+When tailoring Technical Skills, preserve the base resume's compact no-bullet LaTeX style: use \\begin{{itemize}}[leftmargin=0.15in, label={{}}], \\small{{...}}, and one \\item containing inline \\textbf{{Category:}} skill lists separated by \\\\ line breaks. Do not use visible bullets or one \\item per category. Include only concise supported skill names; never include sentence fragments, "...", "[truncated]", "more items", or generic filler such as API, automation, validation, requirements, reporting, or documentation by itself.
 When tailoring resume Experience entries, you may reorder factual bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. Preserve each existing Experience entry unless the user explicitly allows removing an entire entry. Never invent or change employers, roles, dates, responsibilities, technologies, or metrics.
 When saving an artifact is useful, call the matching save tool.
 If the user asks for a modified resume, generate only complete LaTeX code with no Markdown fences and no analysis text.
