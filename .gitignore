@@ -1,5 +1,33 @@
-information/.env
+# Environment and secrets
+.env
 .env.*
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kdbx
+*.age
+*.asc
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+secrets.*
+*.secrets.*
+credentials.*
+*.credentials.*
+passwords.*
+*.passwords.*
+tokens.*
+*.tokens.*
+service-account*.json
+google-credentials*.json
+*service-account*.json
+*credentials*.json
+
+information/.env
 
 information/github_accounts.txt
 information/job_description.txt
@@ -19,6 +47,8 @@ information/project_compact_facts.json
 information/resume_candidate_checkpoints.json
 information/*.sqlite3
 information/*.db
+information/*.pdf
+information/*.docx
 
 background/prompt.txt
 background/function_background.txt
@@ -34,6 +64,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyde/
+tmp/
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
