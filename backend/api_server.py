@@ -105,8 +105,10 @@ Compare the projects currently listed in resume.txt with the factual projects av
 Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
 update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
 If WorkAgent is relevant to the saved job description, treat it as a high-priority project because Project Memory
-identifies it as a local AI job application workspace connecting job analysis, tailored resumes, cover letters,
-interview preparation, memory, GitHub evidence, model configuration, and application tracking.
+identifies it as a complex local job-search system, but do not use one fixed WorkAgent description. Select the
+project angle that best fits the role family and JD evidence: agent-style workflow, backend APIs, evidence
+retrieval, validation loops, prompt compression, retry handling, support/process automation, or structured
+operations workflow when those claims are supported.
 Prefer a one-page resume. The Projects section should look intentionally prioritized. Prefer 2 projects,
 use 3 only when the third adds distinct job-relevant evidence, and never include more than 3. Allocate
 more bullets to the highest-ranked project. If there are 2 projects, the first project should usually have
@@ -164,6 +166,11 @@ Resume Bullet Writing Rules:
   Guided, or Prioritized when the evidence supports coordination, teamwork, debugging, delivery,
   communication, or deadline-driven work.
 - Technology names should support the story, not become the whole story.
+- Do not use a single fixed description for a complex project. Select the project angle that best fits the target role.
+  Preserve the project's high-value mechanisms when evidence supports them. For WorkAgent-like systems, do not reduce
+  the project to only a local workspace; consider whether the role calls for emphasizing agent-style workflow,
+  backend APIs, evidence retrieval, validation loops, prompt compression, retry handling, or support/process
+  automation. Use only evidence-supported claims.
 - The Projects section should look intentionally prioritized. Prefer 2 projects, use 3 only when the third
   adds distinct job-relevant evidence, and never include more than 3.
 - Allocate more bullets to the highest-ranked project. If there are 2 projects, the first project should
@@ -261,6 +268,11 @@ Rules:
 - Prefer concrete methods such as algorithms, retrieval/ranking logic, parsing, schema validation,
   state comparison, cache invalidation, chunked processing, retry/fallback handling, data flow
   orchestration, or debugging/root-cause isolation when supported by evidence.
+- Do not use a single fixed description for a complex project. Select the project angle that best fits the target role.
+  Preserve the project's high-value mechanisms when evidence supports them. For WorkAgent-like systems, do not reduce
+  the project to only a local workspace; consider whether the role calls for emphasizing agent-style workflow,
+  backend APIs, evidence retrieval, validation loops, prompt compression, retry handling, or support/process
+  automation. Use only evidence-supported claims.
 - Each bullet should include at least 3 of these 5 elements: concrete method/tool, implemented
   function/process, technical or process challenge, user/business/engineering value, and role-relevant keyword.
 - Use the provided role profile, JD requirements, evidence card, role lens, allowed claims, and forbidden claims;
@@ -395,7 +407,7 @@ TECHNICAL_SKILLS_POLICY = {
         "Skills can be broader than final project bullets but cannot be broader than truthful user background.",
         "Every included skill needs at least one user-specific source.",
         "Block JD-only and ontology-only skills from Technical Skills; move them to gap_report.",
-        "Block ontology category labels and generic standalone labels such as Backend, Frontend, Embedding, API, automation, requirements, reporting, and validation.",
+        "Block ontology category labels and generic practice/activity labels such as Backend, Frontend, Embedding, API, automation, debugging, testing, documentation, requirements, reporting, and validation.",
         "Use vector search or semantic retrieval instead of standalone Embedding when retrieval evidence supports it.",
         "Use cautious wording for medium-confidence skills.",
         "Do not prioritize Cursor unless strongly role-relevant and evidence-backed.",
@@ -408,6 +420,8 @@ BULLET_DEPTH_POLICY = {
         "Prefer action verb + technical mechanism/tool + implemented function/process + solved problem/value.",
         "Top-ranked projects receive richer mechanism detail.",
         "Lower-ranked projects keep only their strongest role-relevant mechanisms.",
+        "Select a role-appropriate project angle instead of using one fixed project description.",
+        "Preserve evidence-supported high-value mechanisms for top-ranked complex projects.",
         "Do not invent metrics; rewrite unsupported metric-like claims as qualitative value.",
         "Do not flatten mechanism-rich bullets into product summaries.",
     ],
@@ -427,6 +441,9 @@ FINAL_MERGE_POLICY = {
     "policy_id": "final_merge_policy_v1",
     "authority": "Final merge is an editor, not a new writer.",
     "must_preserve": [
+        "selected project angle",
+        "high-value mechanisms",
+        "compact project modules",
         "project ranking",
         "project order",
         "bullet budgets",
@@ -444,6 +461,7 @@ FINAL_MERGE_POLICY = {
         "add JD-only or ontology-only skills",
         "add unsupported tools or metrics",
         "flatten strong bullets into vague descriptions",
+        "rewrite mechanism-rich bullets into generic product summaries",
         "normalize varied Experience verbs back to Implemented",
     ],
     "may": ["remove duplication", "lightly shorten wording", "fix grammar", "preserve LaTeX structure", "enforce one-page constraints"],
@@ -485,10 +503,10 @@ PROMPT_STAGE_INVENTORY = [
     {
         "function": "run_resume_bullet_writer_tool / build_compact_bullet_writer_prompt",
         "purpose": "Write Project or Experience bullets from compact evidence.",
-        "inputs": ["evidence_card", "depth_profile", "role/JD profile", "policy payload"],
+        "inputs": ["evidence_card", "depth_profile", "project_angle_profile", "compact modules", "role/JD profile", "policy payload"],
         "output_contract": "bullet writer JSON with final_bullets and validation",
         "writes_content": True,
-        "major_rules": ["STAR grounding", "bullet depth", "metric safety", "experience verb diversity"],
+        "major_rules": ["STAR grounding", "role-aware project angle", "bullet depth", "metric safety", "experience verb diversity"],
     },
     {
         "function": "build_summary_resume_candidate / build_compact_summary_prompt",
@@ -515,12 +533,12 @@ PROMPT_STAGE_INVENTORY = [
         "major_rules": ["no raw diffs/source files", "retain claims/ranking/budgets/policies"],
     },
     {
-        "function": "validate_project_section_allocation / validate_technical_skills / validate_bullet_depth",
+        "function": "validate_project_section_allocation / validate_project_value_preservation / validate_technical_skills / validate_bullet_depth",
         "purpose": "Validate post-generation policies and trigger deterministic repair where possible.",
         "inputs": ["merged LaTeX", "ranking", "skills candidates", "evidence cards"],
         "output_contract": "validation dicts with issues and suggested fixes",
         "writes_content": False,
-        "major_rules": ["project order/budgets", "skills evidence gating", "unsupported metrics/tools", "mechanism preservation"],
+        "major_rules": ["project order/budgets", "selected project angle", "skills evidence gating", "unsupported metrics/tools", "mechanism preservation"],
     },
 ]
 PROMPT_RULE_AUDIT = [
@@ -568,6 +586,9 @@ MAX_BULLET_DEPTH_MECHANISMS = 12
 MAX_BULLET_DEPTH_FUNCTIONS = 10
 MAX_BULLET_DEPTH_PROBLEMS = 8
 MAX_BULLET_DEPTH_ROLE_SIGNALS = 8
+MAX_PROJECT_MODULES = 10
+MAX_PROJECT_HIGH_VALUE_MECHANISMS = 12
+MAX_PROJECT_ANGLE_CANDIDATES = 4
 PROXY_SAFE_MAX_INPUT_CHARS = 25000
 PROXY_SAFE_HARD_INPUT_CHARS = 35000
 OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
@@ -4602,6 +4623,91 @@ def append_resume_output_unique(items: list[str], value: Any, limit: int, max_ch
         items.append(text)
 
 
+def clean_resume_signal(value: Any, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> str:
+    text = short_signal(value, max_chars)
+    if not text:
+        return ""
+    text = TRUNCATED_PLACEHOLDER_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:-")
+    return text
+
+
+def append_clean_resume_signal_unique(
+    items: list[str],
+    value: Any,
+    limit: int,
+    max_chars: int = MAX_PROMPT_SIGNAL_CHARS,
+) -> None:
+    text = clean_resume_signal(value, max_chars)
+    if text and text not in items and len(items) < limit:
+        items.append(text)
+
+
+RESUME_BULLET_SIMILARITY_STOPWORDS = {
+    "across",
+    "application",
+    "applications",
+    "built",
+    "data",
+    "debugged",
+    "generated",
+    "implemented",
+    "improved",
+    "keep",
+    "local",
+    "logic",
+    "multiple",
+    "project",
+    "projects",
+    "records",
+    "resume",
+    "support",
+    "supported",
+    "supporting",
+    "system",
+    "used",
+    "workflow",
+    "workflows",
+}
+
+
+def resume_bullet_keywords(value: Any) -> set[str]:
+    return {
+        word.lower()
+        for word in re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,}\b", str(value or ""))
+        if word.lower() not in RESUME_BULLET_SIMILARITY_STOPWORDS
+    }
+
+
+def resume_bullets_are_similar(left: Any, right: Any) -> bool:
+    left_text = str(left or "")
+    right_text = str(right or "")
+    if normalize_match_text(left_text) == normalize_match_text(right_text):
+        return True
+    left_keywords = resume_bullet_keywords(left_text)
+    right_keywords = resume_bullet_keywords(right_text)
+    if not left_keywords or not right_keywords:
+        return False
+    common = left_keywords & right_keywords
+    return len(common) >= 5 and len(common) / max(1, min(len(left_keywords), len(right_keywords))) >= 0.35
+
+
+def append_resume_budget_bullet_unique(
+    items: list[str],
+    value: Any,
+    limit: int,
+    max_chars: int = MAX_PROMPT_SIGNAL_CHARS,
+) -> None:
+    text = short_signal(value, max_chars)
+    if is_truncated_placeholder_text(text):
+        return
+    if not text or len(items) >= limit:
+        return
+    if any(resume_bullets_are_similar(text, existing) for existing in items):
+        return
+    items.append(text)
+
+
 def classify_prompt_signal_priority(signal: str) -> int:
     text = signal.lower()
     high_priority_keywords = [
@@ -4930,6 +5036,10 @@ def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "role_lens": compact_value_for_prompt(candidate.get("role_lens", {}), 700, 8),
         "tech_ontology_context": compact_value_for_prompt(candidate.get("tech_ontology_context", []), 500, 5),
         "bullet_depth_profile": compact_value_for_prompt(candidate.get("bullet_depth_profile", {}), 700, 8),
+        "project_angle_profile": compact_value_for_prompt(candidate.get("project_angle_profile", {}), 700, 8),
+        "project_modules": compact_value_for_prompt(candidate.get("project_modules", []), 500, MAX_PROJECT_MODULES),
+        "role_angle_bullet_candidates": compact_value_for_prompt(candidate.get("role_angle_bullet_candidates", []), 500, 8),
+        "project_value_validation": compact_value_for_prompt(candidate.get("project_value_validation", {}), 360, 6),
         "bullet_depth_validation": compact_value_for_prompt(candidate.get("bullet_depth_validation", {}), 260, 5),
         "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
         "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
@@ -5801,7 +5911,7 @@ Preserve valid LaTeX. Do not invent technologies, impact metrics, deployment, ow
 Prefer the candidate wording that best matches the JD while remaining evidence-grounded.
 For Projects-section merges, preserve project_ranking order and bullet budgets from payload.prompt_policies.project/final_merge.
 Keep omitted projects out, preserve Technical Skills evidence gating, preserve Experience verb diversity, and preserve mechanism-rich bullets.
-For WorkAgent, preserve supported evidence/persistence mechanisms such as FastAPI/React, SQLite, Chroma, Project Memory, GitHub evidence, generated output history, allowed/forbidden claim boundaries, and compact evidence handling. For Furniture Search and Inventory, preserve supported MongoDB/PyMongo search, category loading/browsing, price sorting, pagination, required-field/unique-ID validation, database insertion/update logic, shared utilities, and menu-driven CLI workflow.
+Do not flatten complex project value. Preserve the selected project angle, high-value mechanisms, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic product summaries.
 Keep the section/project length close to the original budget.
 Return only the merged LaTeX block or section. Do not include Markdown fences or explanation.
 
@@ -6446,6 +6556,11 @@ def rank_projects_for_resume(
             + resume_value * 0.10
         )
         focus_areas = project_focus_areas(card, role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+        angle_profile = build_project_angle_profile(card, role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+        angle_score = 0
+        if isinstance(angle_profile.get("available_angles"), list) and angle_profile["available_angles"]:
+            angle_score = int(angle_profile["available_angles"][0].get("fit_score") or 0)
+            total_score = bounded_score(total_score + max(0, angle_score - 55) * 0.08)
         scored_projects.append(
             {
                 "project_card": card,
@@ -6460,6 +6575,8 @@ def rank_projects_for_resume(
                 "resume_value_score": resume_value,
                 "confidence_score": confidence_score,
                 "total_score": total_score,
+                "selected_angle": angle_profile.get("selected_angle"),
+                "project_angle_profile": compact_value_for_prompt(angle_profile, 500, 6),
                 "matched_jd_terms": jd_hits[:8],
                 "matched_role_terms": role_hits[:8],
                 "focus_areas": focus_areas,
@@ -6528,6 +6645,8 @@ def rank_projects_for_resume(
                 "resume_value_score": item["resume_value_score"],
                 "confidence_score": item["confidence_score"],
                 "total_score": item["total_score"],
+                "selected_angle": item.get("selected_angle"),
+                "project_angle_profile": item.get("project_angle_profile", {}),
                 "reason_selected": (
                     "Strong JD fit with supported evidence"
                     if item["matched_jd_terms"]
@@ -6618,6 +6737,17 @@ def attach_candidate_claims_to_project_ranking(
                 entry["allowed_claims"] = candidate.get("allowed_claims", [])[:MAX_PROMPT_CLAIMS]
                 entry["forbidden_claims"] = candidate.get("forbidden_claims", [])[:MAX_PROMPT_CLAIMS]
                 entry["candidate_bullet_count"] = len(candidate.get("recommended_bullets") or candidate.get("final_bullets") or [])
+                entry["selected_angle"] = (candidate.get("project_angle_profile") or {}).get("selected_angle") if isinstance(candidate.get("project_angle_profile"), dict) else entry.get("selected_angle")
+                entry["project_angle_profile"] = compact_value_for_prompt(candidate.get("project_angle_profile", entry.get("project_angle_profile", {})), 500, 6)
+                entry["project_modules"] = compact_value_for_prompt(candidate.get("project_modules", []), 360, MAX_PROJECT_MODULES)
+                entry["high_value_mechanisms"] = compact_value_for_prompt(
+                    (candidate.get("project_angle_profile") or {}).get("high_value_mechanisms", [])
+                    if isinstance(candidate.get("project_angle_profile"), dict)
+                    else [],
+                    300,
+                    MAX_PROJECT_HIGH_VALUE_MECHANISMS,
+                )
+                entry["project_value_validation"] = compact_value_for_prompt(candidate.get("project_value_validation", {}), 260, 5)
                 break
     return ranking
 
@@ -6693,29 +6823,6 @@ def mechanism_group_hits(block: str, groups: list[tuple[str, list[str]]]) -> tup
         else:
             missing.append(label)
     return hits, missing
-
-
-FURNITURE_MECHANISM_GROUPS = [
-    ("MongoDB/PyMongo storage or queries", ["mongodb", "pymongo"]),
-    ("pagination or paginated CLI results", ["pagination", "paginated"]),
-    ("category loading or browsing", ["category", "browse", "browsing"]),
-    ("sorting or price/discount filtering", ["sort", "price", "discount"]),
-    ("required-field or unique-ID validation", ["required", "unique", "validation", "item id"]),
-    ("menu-driven CLI workflow", ["menu", "cli", "command line"]),
-    ("database insertion/update utilities", ["insert", "update", "database util", "pagination util"]),
-]
-
-
-WORKAGENT_MECHANISM_GROUPS = [
-    ("FastAPI backend APIs", ["fastapi", "api"]),
-    ("React/Vite frontend workflows", ["react", "vite"]),
-    ("SQLite-backed application tracking", ["sqlite"]),
-    ("Chroma/vector retrieval", ["chroma", "vector", "retrieval"]),
-    ("Project Memory factual storage", ["project memory"]),
-    ("GitHub evidence separation", ["github evidence", "github context"]),
-    ("allowed/forbidden claim boundaries", ["allowed", "forbidden", "unsupported claim"]),
-    ("prompt compression or compact evidence handling", ["prompt compression", "compact evidence", "compact payload"]),
-]
 
 
 def validate_project_section_allocation(
@@ -6830,27 +6937,36 @@ def validate_project_section_allocation(
             issues.append("The highest-ranked project does not receive the strongest or most detailed treatment.")
             suggested_fixes.append("Move detail back to rank #1 and trim lower-ranked projects first.")
 
-    for heading, block in block_by_heading.items():
-        if project_name_contains(heading, "workagent"):
-            rank = rank_by_heading.get(heading, 0)
-            budget = budget_by_heading.get(heading, project_bullet_budget(rank or 1, len(selected) or 1))
-            count = bullet_counts.get(heading, 0)
-            hits, missing = mechanism_group_hits(block, WORKAGENT_MECHANISM_GROUPS)
-            workagent_depth_expected = any(
-                term in block.lower()
-                for term in ["fastapi", "react", "vite", "chroma", "github", "allowed", "forbidden", "prompt compression", "compact evidence"]
-            )
-            if rank == 1 and count < min(4, max(1, budget)):
-                issues.append("WorkAgent is top-ranked but has too few bullets for its supported mechanism depth.")
-                suggested_fixes.append("Restore WorkAgent to about 4 bullets before trimming lower-ranked project detail.")
-            if rank == 1 and workagent_depth_expected and len(hits) < 4:
-                issues.append("WorkAgent lost key evidence/persistence mechanisms: " + ", ".join(missing[:4]))
-                suggested_fixes.append("Preserve WorkAgent mechanisms such as FastAPI/React, SQLite, Chroma, Project Memory, GitHub evidence, and claim validation when supported.")
-        if project_name_contains(heading, "furniture"):
-            hits, missing = mechanism_group_hits(block, FURNITURE_MECHANISM_GROUPS)
-            if len(hits) < 4:
-                issues.append("Furniture project lost concrete inventory/search mechanisms: " + ", ".join(missing[:4]))
-                suggested_fixes.append("Restore Furniture mechanisms such as MongoDB/PyMongo, pagination, category browsing/loading, validation, CLI menu integration, and database update utilities when supported.")
+    value_preservation: dict[str, Any] = {}
+    for entry in selected:
+        heading = next((name for name in headings if project_labels_match(entry.get("project_name"), name)), "")
+        if not heading:
+            continue
+        block = block_by_heading.get(heading, "")
+        rank = rank_by_heading.get(heading, int(entry.get("rank") or 0))
+        budget = budget_by_heading.get(heading, project_bullet_budget(rank or 1, len(selected) or 1))
+        angle_profile = entry.get("project_angle_profile") if isinstance(entry.get("project_angle_profile"), dict) else {}
+        if entry.get("selected_angle") and not angle_profile.get("selected_angle"):
+            angle_profile = {**angle_profile, "selected_angle": entry.get("selected_angle")}
+        if entry.get("high_value_mechanisms") and not angle_profile.get("high_value_mechanisms"):
+            angle_profile = {**angle_profile, "high_value_mechanisms": entry.get("high_value_mechanisms")}
+        if entry.get("project_modules") and not angle_profile.get("project_modules"):
+            angle_profile = {**angle_profile, "project_modules": entry.get("project_modules")}
+        project_card = {
+            "project_id": entry.get("project_id"),
+            "project_name": entry.get("project_name"),
+            "project_rank": rank,
+            "project_modules": entry.get("project_modules", []),
+        }
+        if entry.get("forbidden_claims"):
+            project_card["evidence_card"] = {"forbidden_claims": entry.get("forbidden_claims", [])}
+        bullets = [latex_fragment_plain_text(item) for item in latex_resume_item_texts(block)]
+        preservation = validate_project_value_preservation(bullets, project_card, angle_profile, budget)
+        value_preservation[heading] = preservation
+        if not preservation.get("valid") and (rank in {1, 2} or preservation.get("high_mechanism_depth")):
+            issue_text = "; ".join(preservation.get("issues", [])[:3])
+            issues.append(f"{heading} lost selected project-angle value: {issue_text}")
+            suggested_fixes.extend(preservation.get("suggested_fixes", [])[:3])
 
     unsupported_claims = []
     for entry in selected:
@@ -6874,6 +6990,7 @@ def validate_project_section_allocation(
         "top_project_has_strongest_detail": top_has_strongest_detail,
         "omitted_projects_readded": omitted_readded,
         "unsupported_claims": unsupported_claims,
+        "value_preservation": value_preservation,
         "suggested_fixes": suggested_fixes,
     }
 
@@ -7058,7 +7175,7 @@ def candidate_bullet_texts(candidate: dict[str, Any] | None) -> list[str]:
         text = item.get("bullet") if isinstance(item, dict) else item
         if is_truncated_placeholder_text(text):
             continue
-        append_resume_output_unique(bullets, text, 12)
+        append_resume_budget_bullet_unique(bullets, text, 12)
     return bullets
 
 
@@ -7077,6 +7194,57 @@ def sentence_join(items: list[str]) -> str:
     return ", ".join(values[:-1]) + f", and {values[-1]}"
 
 
+def clean_signal_list(values: Any, limit: int, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> list[str]:
+    cleaned: list[str] = []
+    for item in listish(values):
+        append_clean_resume_signal_unique(cleaned, item, limit, max_chars)
+    return cleaned[:limit]
+
+
+def normalize_resume_bullet_sentence(value: Any) -> str:
+    text = clean_resume_signal(value, 360)
+    if not text:
+        return ""
+    return text.rstrip(".") + "."
+
+
+def analysis_bullet_candidates(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+    evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
+    depth_profile = candidate.get("bullet_depth_profile") if isinstance(candidate.get("bullet_depth_profile"), dict) else {}
+    variants: list[str] = []
+    for item in candidate.get("star_analysis", []) if isinstance(candidate.get("star_analysis"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        action = clean_resume_signal(item.get("action"), 300)
+        if not action:
+            continue
+        metric_validation = validate_metric_support(action, evidence_card, depth_profile)
+        append_resume_output_unique(
+            variants,
+            normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or action),
+            limit,
+            360,
+        )
+    for item in candidate.get("react_analysis", []) if isinstance(candidate.get("react_analysis"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        technical = clean_resume_signal(item.get("technical_capability"), 170)
+        business = clean_resume_signal(item.get("business_capability"), 150)
+        if not technical or not business:
+            continue
+        bullet = f"Implemented {technical} to support {business[0].lower() + business[1:] if business else business}."
+        metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+        append_resume_output_unique(
+            variants,
+            normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or bullet),
+            limit,
+            360,
+        )
+    return variants[:limit]
+
+
 def depth_profile_bullet_candidates(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
     if not isinstance(candidate, dict):
         return []
@@ -7084,22 +7252,22 @@ def depth_profile_bullet_candidates(candidate: dict[str, Any] | None, limit: int
     evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
     role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
     jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
-    mechanisms = [short_signal(item, 140) for item in listish(depth_profile.get("mechanisms", [])) if short_signal(item, 140)]
-    functions = [short_signal(item, 120) for item in listish(depth_profile.get("implemented_functions", [])) if short_signal(item, 120)]
-    values = [
-        short_signal(item, 140)
-        for item in listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", []))
-        if short_signal(item, 140)
-    ]
+    mechanisms = clean_signal_list(depth_profile.get("mechanisms", []), 8, 140)
+    functions = clean_signal_list(depth_profile.get("implemented_functions", []), 8, 120)
+    values = clean_signal_list(
+        listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])),
+        8,
+        140,
+    )
     if not mechanisms:
         for item in listish(evidence_card.get("technologies", [])) + listish(evidence_card.get("methods", [])):
-            append_resume_output_unique(mechanisms, item, 6, 120)
+            append_clean_resume_signal_unique(mechanisms, item, 6, 120)
     if not functions:
         for item in listish(evidence_card.get("features", [])) + listish(evidence_card.get("methods", [])):
-            append_resume_output_unique(functions, item, 8, 120)
+            append_clean_resume_signal_unique(functions, item, 8, 120)
     if not values:
         for item in listish(evidence_card.get("business_or_user_value", [])) + listish(evidence_card.get("inferred_results", [])):
-            append_resume_output_unique(values, item, 6, 140)
+            append_clean_resume_signal_unique(values, item, 6, 140)
     if not mechanisms or not functions:
         return []
 
@@ -7147,8 +7315,21 @@ def candidate_bullet_texts_for_budget(
     if needs_padding and any(has_chinese_text(bullet) for bullet in bullets):
         needs_padding = False
     if needs_padding:
-        for bullet in depth_profile_bullet_candidates(candidate, target + 3):
-            append_resume_output_unique(bullets, bullet, target, 360)
+        fallback_bullets = (
+            analysis_bullet_candidates(candidate, target + 3)
+            + role_angle_candidate_bullet_texts(candidate, target + 3)
+            + depth_profile_bullet_candidates(candidate, target + 3)
+        )
+        if rank == 1 and len(bullets) <= 1 and fallback_bullets:
+            merged: list[str] = []
+            append_resume_budget_bullet_unique(merged, fallback_bullets[0], target, 360)
+            for bullet in bullets:
+                append_resume_budget_bullet_unique(merged, bullet, target, 360)
+            for bullet in fallback_bullets[1:]:
+                append_resume_budget_bullet_unique(merged, bullet, target, 360)
+            bullets = merged
+        for bullet in fallback_bullets:
+            append_resume_budget_bullet_unique(bullets, bullet, target, 360)
             if len(bullets) >= target:
                 break
     return bullets[:target]
@@ -7184,6 +7365,95 @@ def ensure_project_candidate_bullet_budget(
     if rank == 1 and len(rebuilt) > len(existing if isinstance(existing, list) else []):
         validation = {**validation, "budget_padding_added": len(rebuilt) - len(existing if isinstance(existing, list) else [])}
         candidate["bullet_depth_validation"] = validation
+    candidate = repair_project_value_preservation_once(candidate, budget, rank, total_projects)
+    return candidate
+
+
+def repair_project_value_preservation_once(
+    candidate: dict[str, Any],
+    budget: int,
+    rank: int,
+    total_projects: int,
+) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return candidate
+    role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
+    jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
+    project_card = project_card_from_candidate(candidate)
+    if rank:
+        project_card["project_rank"] = rank
+    angle_profile = candidate.get("project_angle_profile") if isinstance(candidate.get("project_angle_profile"), dict) else {}
+    if not angle_profile:
+        angle_profile = build_project_angle_profile(
+            project_card,
+            role_profile,
+            jd_profile,
+            candidate.get("tech_ontology_context") if isinstance(candidate.get("tech_ontology_context"), list) else None,
+        )
+    angle_profile["project_rank"] = rank
+    if candidate.get("project_modules") and not angle_profile.get("project_modules"):
+        angle_profile["project_modules"] = candidate.get("project_modules")
+    candidate["project_angle_profile"] = angle_profile
+    if angle_profile.get("project_modules") and not candidate.get("project_modules"):
+        candidate["project_modules"] = angle_profile.get("project_modules")
+
+    bullets = candidate_bullet_texts(candidate)
+    validation = validate_project_value_preservation(bullets, project_card, angle_profile, budget)
+    candidate["project_value_validation"] = validation
+    if validation.get("valid"):
+        return candidate
+    if rank not in {1, 2} or not validation.get("high_mechanism_depth"):
+        return candidate
+    if bullets and any(has_chinese_text(bullet) for bullet in bullets):
+        validation["repair_skipped"] = "Chinese bullets present; avoid deterministic English rewrite."
+        candidate["project_value_validation"] = validation
+        return candidate
+
+    target = int(budget or len(bullets) or 3)
+    if rank > 1 and total_projects > 1:
+        target = min(target, max(1, project_bullet_budget(1, total_projects) - 1))
+    suggestions = [
+        item.get("bullet")
+        for item in generate_role_angle_bullet_candidates(project_card, angle_profile, role_profile, jd_profile, target)
+        if isinstance(item, dict)
+    ]
+    if not suggestions:
+        return candidate
+
+    merged: list[str] = []
+    for bullet in suggestions[:2]:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    for bullet in bullets:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    for bullet in suggestions[2:]:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    if not merged:
+        return candidate
+
+    existing = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+    existing_map = {}
+    for item in existing if isinstance(existing, list) else []:
+        text = item.get("bullet") if isinstance(item, dict) else item
+        if text:
+            existing_map[normalize_match_text(str(text))] = item
+    rebuilt = []
+    for bullet in merged[:target]:
+        source_item = existing_map.get(normalize_match_text(bullet))
+        if isinstance(source_item, dict):
+            rebuilt.append({**source_item, "bullet": bullet})
+        else:
+            rebuilt.append({"bullet": bullet, "evidence": "project_angle_profile", "confidence": "medium"})
+    candidate["recommended_bullets"] = rebuilt
+    candidate["final_bullets"] = rebuilt
+    after_validation = validate_project_value_preservation(
+        [item.get("bullet", "") for item in rebuilt],
+        project_card,
+        angle_profile,
+        budget,
+    )
+    after_validation["rewritten_once"] = True
+    after_validation["pre_rewrite_issues"] = validation.get("issues", [])
+    candidate["project_value_validation"] = after_validation
     return candidate
 
 
@@ -8132,6 +8402,682 @@ def append_if_all(items: list[str], evidence_text: str, phrase: str, *needles: s
         append_limited_unique(items, phrase, limit, 150)
 
 
+PROJECT_MODULE_RULES: list[dict[str, Any]] = [
+    {
+        "module": "interface_layer",
+        "label": "interface layer",
+        "terms": ["react", "vite", "frontend", "screen", "ui", "page", "cli", "menu", "command line"],
+        "focus": ["React/Vite workflows", "CLI integration", "menu-driven workflow"],
+    },
+    {
+        "module": "backend_api_layer",
+        "label": "backend/API layer",
+        "terms": ["fastapi", "api", "route", "endpoint", "backend", "server"],
+        "focus": ["FastAPI backend APIs", "backend route handling", "API workflow"],
+    },
+    {
+        "module": "persistence_layer",
+        "label": "persistence layer",
+        "terms": ["sqlite", "database", "storage", "file storage", "project memory", "application tracking", "mongodb", "pymongo", "firestore"],
+        "focus": ["SQLite persistence", "database-backed records", "Project Memory", "local file storage"],
+    },
+    {
+        "module": "retrieval_search_layer",
+        "label": "retrieval/search layer",
+        "terms": ["chroma", "vector", "retrieval", "search", "lookup", "query", "filter", "sort", "pagination", "category"],
+        "focus": ["Chroma retrieval", "evidence retrieval", "database queries", "pagination", "sorting/filtering", "category browsing"],
+    },
+    {
+        "module": "validation_layer",
+        "label": "validation layer",
+        "terms": ["validation", "validate", "allowed", "forbidden", "unsupported claim", "required field", "unique", "duplicate"],
+        "focus": ["validation loop", "allowed/forbidden claim boundaries", "validation checks", "duplicate handling"],
+    },
+    {
+        "module": "automation_layer",
+        "label": "automation layer",
+        "terms": ["automation", "automated", "agent", "workflow", "orchestration", "candidate generation", "job parsing", "project ranking"],
+        "focus": ["agent-style workflow", "automation workflow", "tool-oriented orchestration", "candidate generation", "project ranking"],
+    },
+    {
+        "module": "testing_debugging_layer",
+        "label": "testing/debugging layer",
+        "terms": ["test", "testing", "debug", "troubleshoot", "error", "logging"],
+        "focus": ["testing/debugging layer", "troubleshooting visibility", "error handling"],
+    },
+    {
+        "module": "documentation_support_layer",
+        "label": "documentation/support layer",
+        "terms": ["documentation", "readme", "support", "setup", "configuration"],
+        "focus": ["documentation", "repeatable setup", "configuration workflow", "support workflow"],
+    },
+    {
+        "module": "merge_orchestration_layer",
+        "label": "merge/orchestration layer",
+        "terms": ["merge", "final merge", "section merge", "orchestration", "pipeline", "stage", "multi-stage"],
+        "focus": ["final merge", "section merge workflow", "multi-stage workflow", "tool-oriented orchestration"],
+    },
+    {
+        "module": "configuration_layer",
+        "label": "configuration layer",
+        "terms": ["config", "configuration", "model provider", "provider config", "api key", "environment", "setup"],
+        "focus": ["model provider configuration", "configuration management", "repeatable setup"],
+    },
+    {
+        "module": "reliability_layer",
+        "label": "reliability layer",
+        "terms": ["retry", "fallback", "context", "timeout", "cancel", "shutdown", "recovery"],
+        "focus": ["context-window retry", "retry/fallback logic", "reliability layer", "recovery path"],
+    },
+]
+
+
+PROJECT_HIGH_VALUE_MECHANISM_RULES: list[dict[str, Any]] = [
+    {"label": "agent-style workflow", "any": ["agent-style", "agent workflow", "agentic"], "all": []},
+    {"label": "agent-style workflow", "any": [], "all": ["agent", "workflow"]},
+    {"label": "tool-oriented orchestration", "any": ["tool-oriented", "tool orchestration", "orchestration"], "all": []},
+    {"label": "job parsing", "any": ["job parsing", "job-description parsing", "jd parsing", "job analysis"], "all": []},
+    {"label": "project ranking", "any": ["project ranking", "project-ranking", "rank_projects"], "all": []},
+    {"label": "candidate generation", "any": ["candidate generation"], "all": []},
+    {"label": "candidate generation", "any": [], "all": ["candidate", "generation"]},
+    {"label": "validation loop", "any": ["validation loop", "claim validation", "validation"], "all": []},
+    {"label": "final merge", "any": ["final merge", "section merge", "merge workflow"], "all": []},
+    {"label": "Tech Ontology usage", "any": ["tech ontology", "ontology"], "all": []},
+    {"label": "prompt compression", "any": ["prompt compression", "compact payload", "compact evidence"], "all": []},
+    {"label": "prompt compression", "any": [], "all": ["prompt", "compression"]},
+    {"label": "context-window retry", "any": ["context-window retry", "context retry"], "all": []},
+    {"label": "context-window retry", "any": [], "all": ["context", "retry"]},
+    {"label": "model provider configuration", "any": ["model provider", "provider config"], "all": []},
+    {"label": "Project Memory", "any": ["project memory", "project_memory"], "all": []},
+    {"label": "GitHub evidence", "any": ["github evidence", "github context"], "all": []},
+    {"label": "allowed/forbidden claim boundaries", "any": ["unsupported claim"], "all": []},
+    {"label": "allowed/forbidden claim boundaries", "any": [], "all": ["allowed", "forbidden"]},
+    {"label": "data import", "any": ["data import"], "all": ["import", "data"]},
+    {"label": "database queries", "any": ["database query", "database queries", "pymongo", "sql query"], "all": []},
+    {"label": "pagination", "any": ["pagination", "paginated"], "all": []},
+    {"label": "category browsing", "any": ["category browsing", "category loading"], "all": ["category", "browse"]},
+    {"label": "sorting/filtering", "any": ["sorting", "filtering", "price-descending"], "all": []},
+    {"label": "update workflow", "any": ["update workflow"], "all": ["update", "workflow"]},
+    {"label": "validation checks", "any": ["required-field validation", "unique id validation", "validation checks"], "all": []},
+    {"label": "duplicate handling", "any": ["duplicate handling", "duplicate-name"], "all": ["duplicate"]},
+    {"label": "CLI integration", "any": ["cli integration", "menu-driven cli", "command line"], "all": []},
+]
+
+
+PROJECT_ANGLE_RULES: list[dict[str, Any]] = [
+    {
+        "angle": "ai_agent_automation",
+        "use_when_roles": ["ai_engineer", "automation_engineer", "software_engineering", "developer_tools", "infrastructure_devops"],
+        "role_terms": ["ai", "llm", "agent", "automation", "developer tools", "devtools", "tooling", "workflow"],
+        "evidence_terms": [
+            "agent", "orchestration", "retrieval", "candidate generation", "validation", "prompt",
+            "context", "retry", "model provider", "allowed", "forbidden",
+        ],
+        "focus": [
+            "agent-style workflow", "tool-oriented orchestration", "evidence retrieval",
+            "candidate generation", "validation loop", "prompt compression", "context-window retry",
+        ],
+    },
+    {
+        "angle": "backend_workflow_system",
+        "use_when_roles": ["software_engineering", "backend_engineering", "developer_tools"],
+        "role_terms": ["backend", "api", "software", "developer", "fastapi", "database", "workflow"],
+        "evidence_terms": [
+            "fastapi", "api", "react", "vite", "sqlite", "chroma", "database", "configuration",
+            "merge", "backend", "route", "endpoint",
+        ],
+        "focus": [
+            "FastAPI backend APIs", "React/Vite workflows", "SQLite persistence", "Chroma retrieval",
+            "configuration management", "section merge workflow", "backend modularity",
+        ],
+    },
+    {
+        "angle": "it_support_process_automation",
+        "use_when_roles": ["it_analyst", "technology_analyst", "technical_support", "infrastructure_devops"],
+        "role_terms": ["it", "support", "technical support", "troubleshoot", "documentation", "configuration", "setup", "automation"],
+        "evidence_terms": ["automation", "troubleshoot", "debug", "documentation", "configuration", "setup", "support", "logging"],
+        "focus": [
+            "automation workflow", "troubleshooting visibility", "documentation",
+            "configuration workflow", "repeatable setup", "support workflow",
+        ],
+    },
+    {
+        "angle": "operations_validation_workflow",
+        "use_when_roles": [
+            "technical_solutions", "operations", "data_analyst", "business_analyst",
+            "product_business_analyst", "supply_chain_operations",
+        ],
+        "role_terms": ["operations", "solutions", "data", "business analyst", "records", "process", "validation", "review"],
+        "evidence_terms": [
+            "records", "evidence", "validation", "database", "review", "update", "workflow",
+            "tracking", "pagination", "category", "filter", "sort",
+        ],
+        "focus": [
+            "structured records", "evidence tracking", "validation boundaries", "process consistency",
+            "repeatable workflow", "database-backed workflow", "review and update workflows",
+        ],
+    },
+]
+
+
+def evidence_term_present(text: str, term: Any) -> bool:
+    lower = str(text or "").lower()
+    needle = str(term or "").strip().lower()
+    if not needle:
+        return False
+    if re.fullmatch(r"[a-z0-9+#./-]{2,4}", needle):
+        return bool(re.search(rf"(?<![a-z0-9+#./-]){re.escape(needle)}(?![a-z0-9+#./-])", lower))
+    return needle in lower
+
+
+def evidence_terms_present(text: str, terms: list[Any] | tuple[Any, ...]) -> bool:
+    return any(evidence_term_present(text, term) for term in terms)
+
+
+def project_rule_matches(text: str, rule: dict[str, Any]) -> bool:
+    any_terms = listish(rule.get("any", []))
+    all_terms = listish(rule.get("all", []))
+    if any_terms and evidence_terms_present(text, any_terms):
+        return True
+    if all_terms and all(evidence_term_present(text, term) for term in all_terms):
+        return True
+    return not any_terms and not all_terms
+
+
+def project_role_aliases(role_profile: dict[str, Any], jd_profile: dict[str, Any]) -> list[str]:
+    aliases: list[str] = []
+    for family in [role_profile.get("role_family")] + listish(role_profile.get("secondary_role_families", [])):
+        append_limited_unique(aliases, family, 12, 80)
+    profile_text = json.dumps(
+        {
+            "role_profile": compact_value_for_prompt(role_profile, 260, 8),
+            "jd_profile": compact_value_for_prompt(jd_profile, 360, 8),
+        },
+        ensure_ascii=False,
+    ).lower()
+    alias_rules = [
+        ("ai_engineer", ["ai", "llm", "machine learning", "agent", "prompt"]),
+        ("automation_engineer", ["automation", "automated", "workflow automation", "scripting"]),
+        ("developer_tools", ["developer tools", "devtools", "tooling", "internal tools"]),
+        ("backend_engineering", ["backend", "api", "server", "fastapi"]),
+        ("technology_analyst", ["technology analyst", "systems analyst", "technical analyst"]),
+        ("technical_support", ["technical support", "service desk", "application support", "troubleshoot"]),
+        ("technical_solutions", ["technical solutions", "solution engineer", "solutions analyst"]),
+        ("operations", ["operations", "process", "workflow", "records", "inventory"]),
+        ("business_analyst", ["business analyst", "requirements", "stakeholder"]),
+    ]
+    for alias, terms in alias_rules:
+        if evidence_terms_present(profile_text, terms):
+            append_limited_unique(aliases, alias, 12, 80)
+    return aliases[:12]
+
+
+def project_evidence_signal_values(
+    project_card: dict[str, Any],
+    tech_context: list[dict[str, Any]] | None = None,
+    limit: int = 100,
+) -> list[str]:
+    keys = [
+        "tech_stack", "tools", "workflows", "confirmed_features", "features", "methods",
+        "artifacts", "allowed_claims", "forbidden_claims", "business_or_user_value",
+        "inferred_results", "testing_signals", "debugging_signals", "documentation_signals",
+        "automation_signals", "keyModules", "userContributionSignals", "resumeRelevantClaims",
+        "technicalStack", "projectSummary", "recent_changes", "star_facts",
+    ]
+    values: list[str] = []
+    for key in keys:
+        for item in project_card_values(project_card, [key], limit):
+            append_limited_unique(values, item, limit, 220)
+    depth_profile = project_card.get("bullet_depth_profile") if isinstance(project_card.get("bullet_depth_profile"), dict) else {}
+    for key in ["mechanisms", "implemented_functions", "problems_solved", "role_relevance"]:
+        for item in listish(depth_profile.get(key, [])):
+            append_limited_unique(values, item, limit, 220)
+    for entry in tech_context or []:
+        if not isinstance(entry, dict):
+            continue
+        append_limited_unique(values, entry.get("term"), limit, 120)
+        for phrase in listish(entry.get("safe_resume_phrases", [])):
+            append_limited_unique(values, phrase, limit, 160)
+    return values[:limit]
+
+
+def project_signals_matching_terms(
+    project_card: dict[str, Any],
+    terms: list[Any],
+    limit: int = 6,
+) -> list[str]:
+    matches: list[str] = []
+    for value in project_evidence_signal_values(project_card, limit=100):
+        if evidence_terms_present(value, terms):
+            append_limited_unique(matches, value, limit, 170)
+    return matches[:limit]
+
+
+def extract_project_modules(
+    project_card: dict,
+    role_profile: dict | None = None,
+    jd_profile: dict | None = None,
+    tech_context: list[dict] | None = None,
+) -> list[dict]:
+    card = project_card if isinstance(project_card, dict) else {}
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, tech_context, 80)).lower()
+    if tech_context:
+        evidence_text += " " + json.dumps(compact_value_for_prompt(tech_context, 300, 8), ensure_ascii=False).lower()
+    role_terms = role_depth_terms(role_profile or {}, jd_profile or {})
+    modules: list[dict[str, Any]] = []
+    for rule in PROJECT_MODULE_RULES:
+        terms = listish(rule.get("terms", []))
+        matched_terms = [str(term) for term in terms if evidence_term_present(evidence_text, term)]
+        if not matched_terms:
+            continue
+        evidence = project_signals_matching_terms(card, terms, 5)
+        mechanisms: list[str] = []
+        for focus in listish(rule.get("focus", [])):
+            append_limited_unique(mechanisms, focus, 4, 140)
+        role_hits = [term for term in role_terms if evidence_term_present(evidence_text, term)]
+        score = bounded_score(24 + len(matched_terms) * 7 + len(evidence) * 4 + len(role_hits) * 5)
+        modules.append(
+            {
+                "module": rule.get("module"),
+                "label": rule.get("label"),
+                "score": score,
+                "matched_terms": matched_terms[:6],
+                "evidence": (evidence or matched_terms)[:5],
+                "mechanisms": mechanisms[:4],
+                "role_relevance": role_hits[:3],
+            }
+        )
+    modules.sort(key=lambda item: (-int(item.get("score", 0)), str(item.get("module") or "")))
+    return modules[:MAX_PROJECT_MODULES]
+
+
+def project_high_value_mechanisms(
+    project_card: dict[str, Any],
+    modules: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    card = project_card if isinstance(project_card, dict) else {}
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, limit=80)).lower()
+    mechanisms: list[str] = []
+    for rule in PROJECT_HIGH_VALUE_MECHANISM_RULES:
+        if project_rule_matches(evidence_text, rule):
+            append_limited_unique(mechanisms, rule.get("label"), MAX_PROJECT_HIGH_VALUE_MECHANISMS, 120)
+    for module in modules or []:
+        if not isinstance(module, dict):
+            continue
+        for mechanism in listish(module.get("mechanisms", [])):
+            append_limited_unique(mechanisms, mechanism, MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    for mechanism in listish(depth_profile.get("mechanisms", [])):
+        if evidence_terms_present(mechanism, ["workflow", "retrieval", "validation", "retry", "ranking", "merge", "query", "pagination", "configuration", "debug"]):
+            append_limited_unique(mechanisms, mechanism, MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    return mechanisms[:MAX_PROJECT_HIGH_VALUE_MECHANISMS]
+
+
+def angle_focus_from_evidence(
+    rule: dict[str, Any],
+    project_card: dict[str, Any],
+    modules: list[dict[str, Any]],
+    high_value_mechanisms: list[str],
+) -> list[str]:
+    focus: list[str] = []
+    evidence_text = project_card_signal_text(project_card)
+    evidence_terms = listish(rule.get("evidence_terms", []))
+    for item in listish(rule.get("focus", [])):
+        item_text = str(item)
+        if any(normalize_match_text(item_text) == normalize_match_text(mechanism) for mechanism in high_value_mechanisms):
+            append_limited_unique(focus, item, 8, 130)
+        elif evidence_terms_present(evidence_text, [item]) or evidence_terms_present(evidence_text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", item_text)):
+            append_limited_unique(focus, item, 8, 130)
+    for mechanism in high_value_mechanisms:
+        if evidence_terms_present(mechanism, evidence_terms + listish(rule.get("focus", []))):
+            append_limited_unique(focus, mechanism, 8, 130)
+    for module in modules:
+        module_text = json.dumps(compact_value_for_prompt(module, 180, 5), ensure_ascii=False).lower()
+        if evidence_terms_present(module_text, evidence_terms):
+            for mechanism in listish(module.get("mechanisms", [])):
+                append_limited_unique(focus, mechanism, 8, 130)
+    if not focus:
+        for signal in project_signals_matching_terms(project_card, evidence_terms, 4):
+            append_limited_unique(focus, signal, 8, 130)
+    return focus[:8]
+
+
+def build_project_angle_profile(
+    project_card: dict,
+    role_profile: dict,
+    jd_profile: dict,
+    tech_context: list[dict] | None = None,
+) -> dict:
+    card = project_card if isinstance(project_card, dict) else {}
+    modules = extract_project_modules(card, role_profile, jd_profile, tech_context)
+    high_value = project_high_value_mechanisms(card, modules)
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, tech_context, 80)).lower()
+    role_text = json.dumps(
+        {
+            "role_profile": compact_value_for_prompt(role_profile or {}, 260, 8),
+            "jd_profile": compact_value_for_prompt(jd_profile or {}, 360, 8),
+        },
+        ensure_ascii=False,
+    ).lower()
+    aliases = project_role_aliases(role_profile or {}, jd_profile or {})
+    available: list[dict[str, Any]] = []
+    for rule in PROJECT_ANGLE_RULES:
+        evidence_terms = listish(rule.get("evidence_terms", []))
+        role_terms = listish(rule.get("role_terms", []))
+        role_hits = [term for term in role_terms if evidence_term_present(role_text, term)]
+        evidence_hits = [term for term in evidence_terms if evidence_term_present(evidence_text, term)]
+        focus = angle_focus_from_evidence(rule, card, modules, high_value)
+        role_match = any(alias in listish(rule.get("use_when_roles", [])) for alias in aliases)
+        module_hits = [
+            module
+            for module in modules
+            if evidence_terms_present(json.dumps(module, ensure_ascii=False).lower(), evidence_terms)
+        ]
+        score = bounded_score(
+            28
+            + (28 if role_match else 0)
+            + min(18, len(role_hits) * 5)
+            + min(24, len(evidence_hits) * 4)
+            + min(22, len(focus) * 5)
+            + min(12, len(module_hits) * 4)
+        )
+        if not focus and not evidence_hits:
+            score = bounded_score(score - 24)
+        if score < 35 and not focus:
+            continue
+        available.append(
+            {
+                "angle": rule.get("angle"),
+                "fit_score": score,
+                "focus": focus[:8],
+                "use_when_roles": listish(rule.get("use_when_roles", []))[:6],
+            }
+        )
+    if not available:
+        fallback_focus = high_value[:6] or [
+            clean_resume_signal(value, 130)
+            for value in project_evidence_signal_values(card, tech_context, 6)
+            if clean_resume_signal(value, 130)
+        ][:4]
+        available.append(
+            {
+                "angle": "implementation_workflow",
+                "fit_score": 55 if fallback_focus else 40,
+                "focus": fallback_focus,
+                "use_when_roles": aliases[:4] or ["software_engineering"],
+            }
+        )
+    available.sort(key=lambda item: (-int(item.get("fit_score", 0)), str(item.get("angle") or "")))
+    available = available[:MAX_PROJECT_ANGLE_CANDIDATES]
+    selected = available[0]
+    reason_focus = selected.get("focus", [])[:3] or high_value[:3]
+    reason_role = [
+        alias.replace("_", " ")
+        for alias in aliases
+        if alias in listish(selected.get("use_when_roles", []))
+    ][:2]
+    if not reason_role:
+        reason_role = [str(role_profile.get("role_family") or "target role").replace("_", " ")]
+    reason = (
+        "Selected because the JD/profile emphasizes "
+        + sentence_join(reason_role)
+        + (" and project evidence supports " + sentence_join(reason_focus) if reason_focus else ".")
+    )
+    if not reason.endswith("."):
+        reason += "."
+    return {
+        "project_name": project_display_name(card) if card else "",
+        "available_angles": available,
+        "selected_angle": selected.get("angle"),
+        "selected_focus": selected.get("focus", [])[:8],
+        "high_value_mechanisms": high_value[:MAX_PROJECT_HIGH_VALUE_MECHANISMS],
+        "project_modules": modules[:MAX_PROJECT_MODULES],
+        "role_families_considered": aliases[:8],
+        "reason": reason,
+    }
+
+
+def bullet_budget_from_extra_rules(extra_rules: Any) -> int:
+    match = re.search(r'"bullet_budget"\s*:\s*(\d+)', str(extra_rules or ""))
+    return int(match.group(1)) if match else 0
+
+
+def project_card_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    return {
+        "project_id": candidate.get("project_id"),
+        "project_name": candidate.get("project_name") or candidate.get("source_name"),
+        "evidence_card": candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {},
+        "role_lens": candidate.get("role_lens") if isinstance(candidate.get("role_lens"), dict) else {},
+        "bullet_depth_profile": candidate.get("bullet_depth_profile") if isinstance(candidate.get("bullet_depth_profile"), dict) else {},
+        "current_project_compact_facts": candidate.get("current_project_compact_facts") if isinstance(candidate.get("current_project_compact_facts"), dict) else {},
+        "project_modules": candidate.get("project_modules") if isinstance(candidate.get("project_modules"), list) else [],
+        "project_rank": candidate.get("project_rank"),
+    }
+
+
+def generate_role_angle_bullet_candidates(
+    project_card: dict,
+    angle_profile: dict,
+    role_profile: dict,
+    jd_profile: dict,
+    bullet_budget: int,
+) -> list[dict]:
+    card = project_card if isinstance(project_card, dict) else {}
+    profile = angle_profile if isinstance(angle_profile, dict) else build_project_angle_profile(card, role_profile, jd_profile)
+    modules = profile.get("project_modules") if isinstance(profile.get("project_modules"), list) else extract_project_modules(card, role_profile, jd_profile)
+    high_value = listish(profile.get("high_value_mechanisms", []))
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    evidence_card = card.get("evidence_card") if isinstance(card.get("evidence_card"), dict) else {}
+    module_evidence: list[Any] = []
+    for module in modules:
+        if isinstance(module, dict):
+            module_evidence.extend(listish(module.get("evidence", [])))
+    functions = clean_signal_list(
+        listish(depth_profile.get("implemented_functions", []))
+        + module_evidence
+        + project_card_values(card, ["features", "methods", "confirmed_features", "keyModules"], 30),
+        12,
+        130,
+    )
+    values = clean_signal_list(
+        listish(depth_profile.get("problems_solved", []))
+        + listish(depth_profile.get("role_relevance", []))
+        + project_card_values(card, ["business_or_user_value", "inferred_results", "projectSummary"], 20),
+        10,
+        140,
+    )
+    if not values:
+        values = ["supporting a traceable and repeatable workflow"]
+    selected_angle = str(profile.get("selected_angle") or "")
+    available = listish(profile.get("available_angles", []))
+    available.sort(key=lambda item: (0 if isinstance(item, dict) and item.get("angle") == selected_angle else 1, -int(item.get("fit_score", 0)) if isinstance(item, dict) else 0))
+    limit = max(1, int(bullet_budget or 3)) + 3
+    candidates: list[dict[str, Any]] = []
+    verb_by_angle = {
+        "ai_agent_automation": "Automated",
+        "backend_workflow_system": "Implemented",
+        "it_support_process_automation": "Organized",
+        "operations_validation_workflow": "Validated",
+        "implementation_workflow": "Built",
+    }
+    for angle in available[:MAX_PROJECT_ANGLE_CANDIDATES]:
+        if not isinstance(angle, dict):
+            continue
+        angle_name = str(angle.get("angle") or "")
+        focus_items = clean_signal_list(listish(angle.get("focus", [])) + high_value, 10, 130)
+        verb = verb_by_angle.get(angle_name, "Implemented")
+        for index, mechanism in enumerate(focus_items):
+            function = functions[index % len(functions)] if functions else mechanism
+            value = values[index % len(values)] if values else "supporting a traceable workflow"
+            bullet = normalize_resume_bullet_sentence(
+                f"{verb} {mechanism} for {function}, supporting {value}"
+            )
+            metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+            bullet = normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or bullet)
+            if unsupported_claims_in_project_block(bullet, listish(depth_profile.get("forbidden_claims", [])) + listish(evidence_card.get("forbidden_claims", []))):
+                continue
+            if not bullet:
+                continue
+            candidates.append(
+                {
+                    "angle": angle_name,
+                    "bullet": bullet,
+                    "evidence": "project_angle_profile",
+                    "confidence": "medium",
+                    "supported_mechanism": mechanism,
+                    "implemented_function": function,
+                    "value": value,
+                }
+            )
+            if len(candidates) >= limit:
+                return candidates[:limit]
+    return candidates[:limit]
+
+
+def role_angle_candidate_bullet_texts(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+    role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
+    jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
+    project_card = project_card_from_candidate(candidate)
+    angle_profile = candidate.get("project_angle_profile") if isinstance(candidate.get("project_angle_profile"), dict) else {}
+    if not angle_profile:
+        angle_profile = build_project_angle_profile(project_card, role_profile, jd_profile, candidate.get("tech_ontology_context") if isinstance(candidate.get("tech_ontology_context"), list) else None)
+    budget = int(candidate.get("bullet_budget") or max(1, limit - 3))
+    bullets: list[str] = []
+    for item in generate_role_angle_bullet_candidates(project_card, angle_profile, role_profile, jd_profile, budget):
+        append_resume_budget_bullet_unique(bullets, item.get("bullet"), limit, 360)
+    return bullets[:limit]
+
+
+def validate_project_value_preservation(
+    project_bullets: list[str],
+    project_card: dict,
+    angle_profile: dict,
+    bullet_budget: int,
+) -> dict:
+    bullets = [clean_resume_signal(bullet, 420) for bullet in project_bullets if clean_resume_signal(bullet, 420)]
+    text = " ".join(bullets).lower()
+    card = project_card if isinstance(project_card, dict) else {}
+    profile = angle_profile if isinstance(angle_profile, dict) else {}
+    modules = profile.get("project_modules") if isinstance(profile.get("project_modules"), list) else extract_project_modules(card)
+    high_value = clean_signal_list(profile.get("high_value_mechanisms", []), MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    selected_focus = clean_signal_list(profile.get("selected_focus", []), 8, 140)
+    selected_angle = str(profile.get("selected_angle") or "")
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    evidence_card = card.get("evidence_card") if isinstance(card.get("evidence_card"), dict) else {}
+    if (
+        not selected_angle
+        and not selected_focus
+        and not high_value
+        and not modules
+        and not listish(depth_profile.get("mechanisms", []))
+    ):
+        return {
+            "valid": True,
+            "selected_angle": "",
+            "selected_angle_reflected": True,
+            "high_value_mechanism_hits": [],
+            "function_hits": [],
+            "bullet_count": len(bullets),
+            "bullet_budget": bullet_budget,
+            "high_mechanism_depth": False,
+            "issues": [],
+            "unsupported_claims": [],
+            "unsupported_metrics": [],
+            "suggested_fixes": [],
+        }
+    module_mechanisms: list[Any] = []
+    module_evidence: list[Any] = []
+    for module in modules:
+        if isinstance(module, dict):
+            module_mechanisms.extend(listish(module.get("mechanisms", [])))
+            module_evidence.extend(listish(module.get("evidence", [])))
+    mechanism_terms = clean_signal_list(
+        selected_focus
+        + high_value
+        + listish(depth_profile.get("mechanisms", []))
+        + module_mechanisms,
+        18,
+        140,
+    )
+    function_terms = clean_signal_list(
+        listish(depth_profile.get("implemented_functions", []))
+        + module_evidence,
+        18,
+        140,
+    )
+    value_terms = clean_signal_list(
+        listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])),
+        12,
+        140,
+    )
+    mechanism_hits = [term for term in mechanism_terms if evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])]
+    function_hits = [term for term in function_terms if evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])]
+    value_hit = any(word in text for word in ["reduce", "improve", "preserve", "prevent", "support", "traceable", "repeatable", "maintain", "organize", "consistent", "reliable"]) or any(
+        evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])
+        for term in value_terms
+    )
+    rank = int(card.get("project_rank") or profile.get("project_rank") or 0)
+    high_depth = len(high_value) >= 4 or len(modules) >= 4 or len(mechanism_terms) >= 6
+    issues: list[str] = []
+    suggested_fixes: list[str] = []
+    if selected_angle and selected_focus and not any(focus in mechanism_hits for focus in selected_focus):
+        issues.append(f"Selected project angle `{selected_angle}` is not reflected in bullets.")
+        suggested_fixes.append("Rewrite one bullet around the selected project angle and supported focus terms.")
+    if high_depth and rank in {1, 2} and not mechanism_hits:
+        issues.append("Top-ranked complex project lost evidence-supported high-value mechanisms.")
+        suggested_fixes.append("Restore at least one high-value mechanism from the selected angle profile.")
+    if high_depth and rank == 1 and bullet_budget and len(bullets) < min(4, bullet_budget):
+        issues.append("Top-ranked complex project receives too few bullets for its mechanism depth.")
+        suggested_fixes.append("Use the project bullet budget before trimming lower-ranked project details.")
+    if bullets and len(mechanism_hits) == 0 and any(word in text for word in ["project", "workspace", "application", "system"]):
+        issues.append("Project is described as a product rather than a system of mechanisms.")
+        suggested_fixes.append("Name the implementation mechanism, function/process, and workflow value.")
+    weak_bullets = []
+    for bullet in bullets:
+        lower = bullet.lower()
+        has_mechanism = any(evidence_terms_present(lower, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term]) for term in mechanism_terms)
+        has_function = any(evidence_terms_present(lower, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term]) for term in function_terms)
+        bullet_has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "traceable", "repeatable", "maintain", "organize", "consistent", "reliable"])
+        if sum([has_mechanism, has_function, bullet_has_value or value_hit]) < 2:
+            weak_bullets.append(bullet)
+    if bullets and len(weak_bullets) == len(bullets):
+        issues.append("Bullets do not consistently include mechanism + function + value.")
+        suggested_fixes.append("Rewrite using action verb + supported mechanism/tool + implemented function/process + value.")
+    unsupported_claims = unsupported_claims_in_project_block(
+        " ".join(bullets),
+        listish(depth_profile.get("forbidden_claims", [])) + listish(evidence_card.get("forbidden_claims", [])),
+    )
+    if unsupported_claims:
+        issues.append("Project bullets include unsupported or forbidden claims: " + ", ".join(unsupported_claims[:6]))
+        suggested_fixes.append("Remove unsupported claim terms or replace them with allowed evidence-backed wording.")
+    metric_issues: list[str] = []
+    for bullet in bullets:
+        metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+        if not metric_validation.get("valid"):
+            metric_issues.extend(metric_validation.get("unsupported_metrics", []))
+    if metric_issues:
+        issues.append("Project bullets may invent unsupported metrics: " + ", ".join(sorted(set(metric_issues))[:6]))
+        suggested_fixes.append("Rewrite metric-like claims as conservative qualitative value unless supported metrics exist.")
+    return {
+        "valid": not issues,
+        "selected_angle": selected_angle,
+        "selected_angle_reflected": bool(not selected_focus or mechanism_hits),
+        "high_value_mechanism_hits": mechanism_hits[:8],
+        "function_hits": function_hits[:8],
+        "bullet_count": len(bullets),
+        "bullet_budget": bullet_budget,
+        "high_mechanism_depth": high_depth,
+        "issues": issues,
+        "unsupported_claims": unsupported_claims,
+        "unsupported_metrics": sorted(set(metric_issues)),
+        "suggested_fixes": suggested_fixes,
+    }
+
+
 def metric_support_text(evidence_card: dict[str, Any], depth_profile: dict) -> str:
     return json.dumps(
         {
@@ -8274,9 +9220,19 @@ def build_bullet_depth_profile(
     append_if_signal(mechanisms, evidence_text, "Vite frontend build workflow", "vite")
     append_if_signal(mechanisms, evidence_text, "SQLite-backed application tracking", "sqlite")
     append_if_signal(mechanisms, evidence_text, "Chroma retrieval", "chroma")
+    append_if_all(mechanisms, evidence_text, "agent-style workflow stages", "agent", "workflow")
+    append_if_signal(mechanisms, evidence_text, "tool-oriented orchestration", "orchestration", "tool orchestration")
+    append_if_signal(mechanisms, evidence_text, "job parsing", "job parsing", "job analysis", "job-description parsing")
+    append_if_signal(mechanisms, evidence_text, "project ranking", "project ranking", "rank_projects")
+    append_if_signal(mechanisms, evidence_text, "candidate generation", "candidate generation")
+    append_if_signal(mechanisms, evidence_text, "validation loop", "validation loop", "claim validation")
+    append_if_signal(mechanisms, evidence_text, "final merge workflow", "final merge", "section merge")
+    append_if_signal(mechanisms, evidence_text, "Tech Ontology usage", "tech ontology", "ontology")
     append_if_signal(mechanisms, evidence_text, "Project Memory factual storage", "project memory", "project_memory")
     append_if_signal(mechanisms, evidence_text, "GitHub evidence separation", "github evidence", "github context")
     append_if_all(mechanisms, evidence_text, "prompt compression", "prompt", "compact")
+    append_if_all(mechanisms, evidence_text, "context-window retry", "context", "retry")
+    append_if_signal(mechanisms, evidence_text, "model provider configuration", "model provider", "provider config")
     append_if_signal(mechanisms, evidence_text, "allowed/forbidden claim validation", "allowed_claim", "forbidden_claim", "unsupported claim")
     append_if_signal(mechanisms, evidence_text, "error handling and logging", "error", "logging", "exception")
     append_if_signal(mechanisms, evidence_text, "PowerShell setup scripts", "powershell", ".ps1")
@@ -8285,10 +9241,12 @@ def build_bullet_depth_profile(
     append_if_signal(mechanisms, evidence_text, "MongoDB-backed storage", "mongodb")
     append_if_signal(mechanisms, evidence_text, "PyMongo queries", "pymongo")
     append_if_signal(mechanisms, evidence_text, "data import workflow", "import")
+    append_if_signal(mechanisms, evidence_text, "database queries", "database query", "query")
     append_if_signal(mechanisms, evidence_text, "pagination", "pagination", "paginated")
     append_if_signal(mechanisms, evidence_text, "category browsing", "category")
     append_if_all(mechanisms, evidence_text, "dynamic category loading", "category", "load")
     append_if_all(mechanisms, evidence_text, "price-descending sorting", "price", "sort")
+    append_if_signal(mechanisms, evidence_text, "sorting/filtering", "filter", "sort")
     append_if_signal(mechanisms, evidence_text, "discount lookup", "discount")
     append_if_all(mechanisms, evidence_text, "item update workflow", "update", "item")
     append_if_signal(mechanisms, evidence_text, "database insertion logic", "insert", "insertion")
@@ -8462,16 +9420,16 @@ def rewrite_bullet_mechanism_first(
     if not mechanisms or not functions:
         metric_validation = validate_metric_support(bullet, {}, depth_profile)
         return str(metric_validation.get("rewritten_bullet") or bullet or "")
-    mechanism = short_signal(mechanisms[0], 140)
+    mechanism = clean_resume_signal(mechanisms[0], 140)
     function_values = []
     for item in functions:
-        append_limited_unique(function_values, item, 3, 90)
-    function = ", ".join(function_values[:3]) or short_signal(functions[0], 140)
-    value = short_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
+        append_clean_resume_signal_unique(function_values, item, 3, 90)
+    function = ", ".join(function_values[:3]) or clean_resume_signal(functions[0], 140)
+    value = clean_resume_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
     role_terms = role_depth_terms(role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
     role_suffix = ""
     if role_terms:
-        role_suffix = f" for {short_signal(role_terms[0], 80)}"
+        role_suffix = f" for {clean_resume_signal(role_terms[0], 80)}"
     action = "Built"
     if evidence_has_any(mechanism, "validation", "lookup", "query", "retrieval", "routing", "authentication"):
         action = "Implemented"
@@ -8734,6 +9692,29 @@ def build_compact_bullet_writer_input(
         MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
     )
     depth_profile = build_bullet_depth_profile(evidence_card, role_profile, ontology_jd_profile, prompt_tech_context)
+    project_card_for_angle = {
+        **(source_facts if isinstance(source_facts, dict) else {}),
+        "project_name": source_name,
+        "evidence_card": evidence_card,
+        "role_lens": role_lens,
+        "bullet_depth_profile": depth_profile,
+        "current_project_compact_facts": current_project_facts,
+    }
+    project_modules: list[dict[str, Any]] = []
+    project_angle_profile: dict[str, Any] = {}
+    role_angle_bullet_candidates: list[dict[str, Any]] = []
+    if section_type == "project":
+        bullet_budget = bullet_budget_from_extra_rules(extra_rules)
+        project_modules = extract_project_modules(project_card_for_angle, role_profile, ontology_jd_profile, prompt_tech_context)
+        project_angle_profile = build_project_angle_profile(project_card_for_angle, role_profile, ontology_jd_profile, prompt_tech_context)
+        project_angle_profile["project_modules"] = project_modules
+        role_angle_bullet_candidates = generate_role_angle_bullet_candidates(
+            project_card_for_angle,
+            project_angle_profile,
+            role_profile,
+            ontology_jd_profile,
+            bullet_budget or 3,
+        )
     return {
         "section_type": section_type,
         "source_name": source_name,
@@ -8742,6 +9723,9 @@ def build_compact_bullet_writer_input(
         "role_profile": compact_bullet_writer_value(role_profile, 300, 5),
         "tech_ontology_context": prompt_tech_context,
         "bullet_depth_profile": compact_bullet_writer_value(depth_profile, 320, 8),
+        "project_angle_profile": compact_bullet_writer_value(project_angle_profile, 420, 8),
+        "project_modules": compact_bullet_writer_value(project_modules, 260, MAX_PROJECT_MODULES),
+        "role_angle_bullet_candidates": compact_bullet_writer_value(role_angle_bullet_candidates, 320, max(3, (bullet_budget_from_extra_rules(extra_rules) or 3) + 3)),
         "current_project_compact_facts": current_project_facts,
         "current_project_evidence_summary": {
             "evidenceSources": shortest_evidence_sources(listish(evidence_card.get("source_refs", [])) + listish(evidence_card.get("artifacts", [])), 10),
@@ -8832,6 +9816,16 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
         trim_list_field(depth_profile, "mechanisms", 8 if mode == "retry" else 5)
         trim_list_field(depth_profile, "implemented_functions", 6 if mode == "retry" else 4)
         trim_list_field(depth_profile, "problems_solved", 5 if mode == "retry" else 3)
+    angle_profile = reduced.get("project_angle_profile", {})
+    if isinstance(angle_profile, dict):
+        trim_list_field(angle_profile, "available_angles", MAX_PROJECT_ANGLE_CANDIDATES)
+        trim_list_field(angle_profile, "selected_focus", 6 if mode == "retry" else 4)
+        trim_list_field(angle_profile, "high_value_mechanisms", MAX_PROJECT_HIGH_VALUE_MECHANISMS if mode == "retry" else 8)
+        trim_list_field(angle_profile, "project_modules", MAX_PROJECT_MODULES if mode == "retry" else 6)
+    if isinstance(reduced.get("project_modules"), list):
+        reduced["project_modules"] = reduced["project_modules"][:MAX_PROJECT_MODULES if mode == "retry" else 6]
+    if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+        reduced["role_angle_bullet_candidates"] = reduced["role_angle_bullet_candidates"][:7 if mode == "retry" else 5]
     if isinstance(reduced.get("tech_ontology_context"), list):
         reduced["tech_ontology_context"] = reduced["tech_ontology_context"][:6 if mode == "retry" else 4]
     reduced["compact_jd_requirements"] = trim_compact_jd_requirements(
@@ -8894,6 +9888,9 @@ Rules:
 - For project bullets, apply payload.prompt_policies.project and payload.prompt_policies.bullet_depth.
 - Do not merely describe what the project is. For each bullet, explain the implementation mechanism.
 - Use payload.bullet_depth_profile and payload.tech_ontology_context only as compact guidance; ontology explains terminology and does not prove candidate experience.
+- Use payload.project_angle_profile, payload.project_modules, and payload.role_angle_bullet_candidates to select
+  the role-appropriate angle. Do not use a single fixed description for a complex project, and do not flatten
+  mechanism-rich bullets into generic product summaries.
 - Prioritize bullets that include at least 3 of these 5 elements: concrete technical mechanism/tool, implemented function/process, technical/workflow problem solved, user/business/engineering value, and target-role relevance.
 - Use payload.bullet_depth_profile.role_relevance to shift emphasis by role; do not write every project in the same style.
 - If payload.section_type is "experience", apply payload.prompt_policies.experience.
@@ -8903,6 +9900,10 @@ Rules:
 - Final bullets must combine a concrete method, a substantive workflow/business capability, and an evidence-grounded result/value.
 - Avoid stack-only, CRUD-only, and shallow UI-only bullets.
 - When payload.bullet_constraints.max_final_bullets is present, keep final_bullets at or below that count.
+- For project candidates, when payload.bullet_constraints.extra_rules or ranking context specifies a bullet_budget,
+  return that many final_bullets when supported evidence exists. If you return fewer, risks must explain the
+  specific evidence or page-space reason. A top-ranked project must not receive fewer bullets than lower-ranked
+  selected projects.
 
 Compact bullet writer payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -8935,6 +9936,11 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
         ("existing_bullets", 4),
         ("existing_resume_snippet.latex_lines", 14),
         ("tech_ontology_context", 8),
+        ("project_angle_profile.available_angles", MAX_PROJECT_ANGLE_CANDIDATES),
+        ("project_angle_profile.high_value_mechanisms", MAX_PROJECT_HIGH_VALUE_MECHANISMS),
+        ("project_angle_profile.project_modules", MAX_PROJECT_MODULES),
+        ("project_modules", MAX_PROJECT_MODULES),
+        ("role_angle_bullet_candidates", 8),
         ("bullet_depth_profile.mechanisms", 10),
         ("bullet_depth_profile.allowed_claims", 10),
         ("bullet_depth_profile.forbidden_claims", 8),
@@ -9006,6 +10012,16 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             depth_profile["unsupported_metrics"] = depth_profile.get("unsupported_metrics", [])[:2]
             depth_profile["allowed_claims"] = depth_profile.get("allowed_claims", [])[:5]
             depth_profile["forbidden_claims"] = depth_profile.get("forbidden_claims", [])[:5]
+        angle_profile = reduced.get("project_angle_profile", {})
+        if isinstance(angle_profile, dict):
+            angle_profile["available_angles"] = angle_profile.get("available_angles", [])[:MAX_PROJECT_ANGLE_CANDIDATES]
+            angle_profile["selected_focus"] = angle_profile.get("selected_focus", [])[:4]
+            angle_profile["high_value_mechanisms"] = angle_profile.get("high_value_mechanisms", [])[:8]
+            angle_profile["project_modules"] = angle_profile.get("project_modules", [])[:5]
+        if isinstance(reduced.get("project_modules"), list):
+            reduced["project_modules"] = reduced["project_modules"][:5]
+        if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+            reduced["role_angle_bullet_candidates"] = reduced["role_angle_bullet_candidates"][:5]
         if isinstance(reduced.get("tech_ontology_context"), list):
             reduced["tech_ontology_context"] = compact_value_for_prompt(reduced["tech_ontology_context"][:3], 160, 3)
         reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 180, 3)
@@ -9027,6 +10043,18 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
                 "forbidden_claims": reduced["bullet_depth_profile"].get("forbidden_claims", [])[:2],
                 "metric_rule": "Do not invent metrics.",
             }
+        angle_profile = reduced.get("project_angle_profile", {})
+        if isinstance(angle_profile, dict):
+            reduced["project_angle_profile"] = {
+                "selected_angle": angle_profile.get("selected_angle"),
+                "selected_focus": angle_profile.get("selected_focus", [])[:3],
+                "high_value_mechanisms": angle_profile.get("high_value_mechanisms", [])[:5],
+                "reason": short_signal(angle_profile.get("reason"), 160),
+            }
+        if isinstance(reduced.get("project_modules"), list):
+            reduced["project_modules"] = compact_value_for_prompt(reduced["project_modules"][:4], 120, 4)
+        if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+            reduced["role_angle_bullet_candidates"] = compact_value_for_prompt(reduced["role_angle_bullet_candidates"][:3], 120, 3)
 
     if prompt_size() > max_chars:
         snippet = reduced.get("existing_resume_snippet", {})
@@ -9075,6 +10103,9 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
                 "forbidden_claims": depth_profile.get("forbidden_claims", [])[:1],
                 "metric_rule": "Do not invent metrics.",
             },
+            "project_angle_profile": compact_value_for_prompt(reduced.get("project_angle_profile", {}), 100, 3),
+            "project_modules": compact_value_for_prompt(reduced.get("project_modules", []), 100, 3),
+            "role_angle_bullet_candidates": compact_value_for_prompt(reduced.get("role_angle_bullet_candidates", []), 100, 2),
             "current_project_compact_facts": {
                 "projectName": facts.get("projectName"),
                 "projectSummary": short_signal(facts.get("projectSummary"), 160),
@@ -9198,6 +10229,37 @@ def run_resume_bullet_writer_tool(
         append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
     for claim in listish(jd_requirements.get("forbidden_unsupported_claims", [])) + tech_forbidden_claims(tech_context, MAX_PROMPT_CLAIMS):
         append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
+    current_project_facts = build_current_project_compact_facts(
+        source_name,
+        source_facts,
+        evidence_card,
+        allowed_claims,
+        forbidden_claims,
+        job_description,
+    )
+    project_card_for_angle = {
+        **(source_facts if isinstance(source_facts, dict) else {}),
+        "project_name": source_name,
+        "evidence_card": evidence_card,
+        "role_lens": role_lens,
+        "bullet_depth_profile": depth_profile,
+        "current_project_compact_facts": current_project_facts,
+    }
+    project_modules: list[dict[str, Any]] = []
+    project_angle_profile: dict[str, Any] = {}
+    role_angle_bullet_candidates: list[dict[str, Any]] = []
+    if section_type == "project":
+        bullet_budget = bullet_budget_from_extra_rules(extra_rules)
+        project_modules = extract_project_modules(project_card_for_angle, role_profile, jd_requirements, tech_context)
+        project_angle_profile = build_project_angle_profile(project_card_for_angle, role_profile, jd_requirements, tech_context)
+        project_angle_profile["project_modules"] = project_modules
+        role_angle_bullet_candidates = generate_role_angle_bullet_candidates(
+            project_card_for_angle,
+            project_angle_profile,
+            role_profile,
+            jd_requirements,
+            bullet_budget or 3,
+        )
     prompt = f"""
 {RESUME_BULLET_WRITER_PROMPT}
 
@@ -9250,6 +10312,15 @@ Tech ontology context:
 Bullet depth profile:
 {json.dumps(depth_profile, ensure_ascii=False, indent=2)}
 
+Project angle profile:
+{json.dumps(compact_value_for_prompt(project_angle_profile, 900, 8), ensure_ascii=False, indent=2)}
+
+Compact project modules:
+{json.dumps(compact_value_for_prompt(project_modules, 700, MAX_PROJECT_MODULES), ensure_ascii=False, indent=2)}
+
+Role-specific angle bullet candidates:
+{json.dumps(compact_value_for_prompt(role_angle_bullet_candidates, 900, max(3, (bullet_budget_from_extra_rules(extra_rules) or 3) + 3)), ensure_ascii=False, indent=2)}
+
 Existing bullets:
 {json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
 
@@ -9266,6 +10337,9 @@ STAR enforcement:
 - If a metric, ownership level, business scale, or result is not supported, list it in missing_star_fields.
 - final_bullets must not include unsupported numbers, inflated ownership, or generic stack-only wording.
 - For Projects-section candidates, follow PROJECT_SECTION_POLICY from Prompt policies plus the ranking context and bullet budget from Extra rules.
+- If Extra rules/ranking context specifies a project bullet_budget, produce exactly that many final_bullets when
+  supported evidence exists; returning fewer requires a concrete evidence or one-page-space reason in risks.
+- The highest-ranked selected project must not receive fewer final_bullets than lower-ranked selected projects.
 - evidence_card.inferred_results may be used as conservative qualitative Result evidence from local diff/code
   analysis, but never convert it into verified QPS, P99, latency, cost, accuracy, or percentage claims unless
   data_or_scale or user-confirmed star_facts explicitly supports the number.
@@ -9276,6 +10350,8 @@ STAR enforcement:
   and target-role relevance.
 - Use the bullet_depth_profile role_relevance signals to change emphasis for software engineering, IT analyst,
   DevOps, data/analytics, business/product analyst, and inventory/operations roles.
+- Use project_angle_profile and compact project modules to select a role-appropriate angle. Do not flatten
+  complex projects into one fixed product description or generic stack summary.
 - Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
     compact_payload = None
@@ -9459,6 +10535,10 @@ STAR enforcement:
     payload["role_lens"] = role_lens
     payload["tech_ontology_context"] = tech_context
     payload["bullet_depth_profile"] = depth_profile
+    payload["project_angle_profile"] = project_angle_profile
+    payload["project_modules"] = project_modules
+    payload["role_angle_bullet_candidates"] = role_angle_bullet_candidates
+    payload["current_project_compact_facts"] = current_project_facts
     payload["bullet_depth_validation"] = depth_debug
     return payload
 
@@ -9494,12 +10574,29 @@ def build_project_resume_candidate(
             "language": language,
             "progress_guidance": progress_guidance,
             "ranking_context": ranking_context,
+            "project_angle_strategy": "project_angle_profile_v1",
         }
     )
     task_id = current_agent_task_id.get("")
     cached_candidate = get_completed_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash)
     if cached_candidate:
-        return cached_candidate
+        payload = json.loads(json.dumps(cached_candidate, ensure_ascii=False))
+        payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
+        payload["project_name"] = payload.get("project_name") or project.get("project_name") or project.get("name") or ""
+        if rank_entry:
+            payload["project_rank"] = rank_entry.get("rank")
+            payload["bullet_budget"] = bullet_budget
+            payload["focus_areas"] = rank_entry.get("focus_areas", [])
+            payload["project_ranking_context"] = compact_value_for_prompt(rank_entry, 500, 8)
+            selected_entries = project_ranking.get("selected_projects", []) if isinstance(project_ranking, dict) else []
+            total_projects = len(selected_entries) if isinstance(selected_entries, list) else 0
+            payload = ensure_project_candidate_bullet_budget(
+                payload,
+                bullet_budget,
+                int(rank_entry.get("rank") or 0),
+                total_projects,
+            )
+        return payload
     try:
         payload = run_resume_bullet_writer_tool(
             section_type="project",
@@ -9711,6 +10808,40 @@ LOW_VALUE_SKILL_SECTION_NAMES = {
     "testing",
     "validation",
 }
+
+NON_TECHNICAL_SKILL_TERMS = {
+    "application support",
+    "bug fixing",
+    "code review",
+    "data validation",
+    "debugging",
+    "documentation",
+    "integration testing",
+    "instrumentation testing",
+    "issue diagnosis",
+    "manual testing",
+    "process improvement",
+    "quality assurance",
+    "regression testing",
+    "reporting",
+    "requirements",
+    "requirements analysis",
+    "requirements gathering",
+    "root cause analysis",
+    "root-cause analysis",
+    "stakeholder management",
+    "technical documentation",
+    "testing",
+    "troubleshooting",
+    "unit testing",
+    "unit tests",
+    "validation",
+    "workflow analysis",
+    "workflow automation",
+    "workflow documentation",
+}
+
+LOW_VALUE_SKILL_SECTION_NAMES |= NON_TECHNICAL_SKILL_TERMS
 
 DEPRIORITIZED_SPACE_TIGHT_SKILLS = {"cursor"}
 
@@ -10209,7 +11340,7 @@ def project_tech_stack_rows_from_context(context: dict[str, Any]) -> list[dict[s
         append_unique(detected, skill, 80)
     rows = []
     for skill in detected:
-        name = canonical_skill_name(skill)
+        name = clean_resume_skill_name(skill)
         if not name:
             continue
         rows.append(
@@ -10692,12 +11823,12 @@ def validate_technical_skills(
         notes.append("Technical Skills may be too broad; keep it below roughly 25-32 skills.")
     contaminated = standalone_skill_tokens_in_text(
         text,
-        {"Backend", "Frontend", "Embedding", "embeddings", "Cursor"},
+        NON_TECHNICAL_SKILL_TERMS | {"Backend", "Frontend", "Embedding", "embeddings", "Cursor"},
     )
     if contaminated:
         for skill in contaminated:
             append_unique(unsupported, skill, 40)
-        notes.append("Technical Skills contains ontology/category or low-priority standalone terms: " + ", ".join(contaminated))
+        notes.append("Technical Skills contains ontology/category, generic practice, or low-priority standalone terms: " + ", ".join(contaminated))
     if re.search(r"(?<![A-Za-z0-9+#./-])OpenAI API(?![A-Za-z0-9+#./-])", skill_text, re.IGNORECASE):
         openai_candidate = candidate_map.get("openai api")
         openai_sources = set(openai_candidate.get("sources", [])) if openai_candidate else set()
@@ -10947,6 +12078,7 @@ def build_compact_skills_input(
             "Move unsupported JD-only skills into gap_report instead of the Technical Skills section.",
             "Tech ontology explains terminology but does not prove the candidate knows a technology.",
             "Do not include Backend, Frontend, Embedding, or ontology category labels as standalone skills.",
+            "Do not include generic practice/activity labels such as debugging, testing, documentation, requirements, reporting, or validation as skill items.",
             "Use vector search or semantic retrieval instead of standalone Embedding when retrieval evidence supports it.",
         ],
     }
@@ -10976,6 +12108,7 @@ Rules:
 - Prefer high JD relevance and high confidence.
 - Keep the section concise and role-targeted: use categorySchema, at most 5 categories, and 8 skills per category.
 - Do not include ontology category labels or generic category words as standalone skills; use payload.promptPolicies.skills for the blocked/rewritten cases.
+- Do not include generic practices or work activities as skill items, including debugging, troubleshooting, testing, unit testing, documentation, requirements, reporting, or validation. Keep those in bullets only when evidence supports them.
 - Put unsupported JD-only tools in gap_report / risks instead of recommended_skills_section.
 - Do not read or infer raw repo context, full project memory, code, or chat history.
 
@@ -11686,11 +12819,9 @@ Loop step:
   Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies.
   Preserve project ranking, project order, and bullet budgets. When trimming for one-page length, cut weaker or
   lower-ranked project bullets before removing important mechanism details from the top-ranked project.
-- For WorkAgent, keep supported evidence/persistence mechanisms such as FastAPI/React, SQLite, Chroma,
-  Project Memory, GitHub evidence, generated output history, allowed/forbidden claim boundaries, and compact
-  evidence handling. For Furniture Search and Inventory, keep supported MongoDB/PyMongo search, dynamic category
-  loading/browsing, price sorting, pagination, required-field/unique-ID validation, database insertion/update
-  logic, shared utilities, and menu-driven CLI workflow.
+- Do not flatten complex project value. Preserve this candidate's selected project angle, high-value mechanisms,
+  compact project modules, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic
+  product summaries.
 - Project selection allowed: {payload["allow_project_selection"]}
 - If project selection is not allowed, keep the existing resume project list and only update factual wording.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
@@ -11735,6 +12866,9 @@ def apply_resume_section_candidate(
     candidate: dict[str, Any],
     body: TailorBody,
 ) -> str:
+    if section_name.lower() in {"skills-section", "technical skills", "skills"} and isinstance(candidate, dict):
+        if candidate.get("recommended_skills_section"):
+            return apply_skills_section_candidate(current_resume, candidate)
     normal_payload = {
         "section_name": section_name,
         "prompt_policies": stage_policy_payload("final_merge"),
@@ -12037,11 +13171,9 @@ Rules:
   and problem/value language. Do not simplify strong bullets back into vague project descriptions.
   Do not add unsupported metrics or unsupported technologies. Preserve project ranking, project order, and bullet budgets.
   When trimming for one-page length, cut weaker or lower-ranked project bullets before removing important mechanism details from the top-ranked project.
-- Preserve WorkAgent evidence/persistence mechanisms when supported: FastAPI/React, SQLite, Chroma, Project Memory,
-  GitHub evidence, generated output history, allowed/forbidden claim boundaries, prompt compression, and local
-  troubleshooting/setup support. Preserve Furniture inventory mechanisms when supported: MongoDB/PyMongo search,
-  dynamic category loading, price-descending sorting, paginated CLI results, required-field and unique-ID validation,
-  database insertion/update logic, shared database/pagination utilities, and menu-driven CLI workflow.
+- Do not flatten complex project value. Preserve each candidate's selected project angle, high-value mechanisms,
+  compact project modules, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic
+  product summaries.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Preserve LaTeX validity and existing section style.
 - Return only LaTeX code with no Markdown fences and no analysis text.
@@ -12305,6 +13437,9 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
                 "Omitted projects were re-added",
                 "Project order does not follow",
                 "over-expanded",
+                "top-ranked but has too few bullets",
+                "highest-ranked project does not receive",
+                "lost selected project-angle value",
             ]
         )
     ]
