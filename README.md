@@ -9,6 +9,24 @@ WorkAgent is a local, single-user AI workspace for job applications. It connects
 
 The project is designed for truthful, conservative job-search writing. It helps organize and tailor real experience; it should not invent credentials, metrics, company experience, awards, ownership, APIs, deployment details, or unsupported technologies.
 
+## Contents
+
+- [What It Does](#what-it-does)
+- [Architecture](#architecture)
+- [Model Providers](#model-providers)
+- [GitHub Evidence Setup](#github-evidence-setup)
+- [Vector Memory](#vector-memory)
+- [Prompt Customization](#prompt-customization)
+- [Web UI Pages](#web-ui-pages)
+- [API Endpoints](#api-endpoints)
+- [Local Files And Privacy](#local-files-and-privacy)
+- [Minimum Environment Requirements](#minimum-environment-requirements)
+- [Setup](#setup)
+- [CLI Usage](#cli-usage)
+- [Development Checks](#development-checks)
+- [Current Limitations](#current-limitations)
+- [Roadmap](#roadmap)
+
 ## What It Does
 
 - Analyze a saved job description and summarize requirements, skills, responsibilities, expectations, and fit.
@@ -544,6 +562,24 @@ Production frontend output is written to `outputs/frontend/`.
 WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把简历、职位描述、个人背景、GitHub 证据、生成文档、面试准备和投递记录串成一个完整流程。
 
 项目的目标是生成真实、保守、可验证的求职材料。它帮助你组织和定制已有经历，不应该编造学历、指标、公司经历、奖项、项目所有权、API、部署细节或来源材料中没有的技术。
+
+## 目录
+
+- [功能概览](#功能概览)
+- [架构](#架构)
+- [模型配置](#模型配置)
+- [GitHub 证据配置](#github-证据配置)
+- [向量记忆](#向量记忆)
+- [Prompt 个性化](#prompt-个性化)
+- [Web UI 页面](#web-ui-页面)
+- [API 接口](#api-接口)
+- [本地文件与隐私](#本地文件与隐私)
+- [最低环境配置要求](#最低环境配置要求)
+- [启动方式](#启动方式)
+- [CLI 用法](#cli-用法)
+- [开发检查](#开发检查)
+- [当前限制](#当前限制)
+- [Roadmap](#roadmap-1)
 
 ## 功能概览
 
