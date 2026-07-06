@@ -66,6 +66,19 @@ function formatApiDetail(detail, status) {
     ].filter(Boolean).join(" ");
   }
 
+  if (type === "PdfCompileError") {
+    const zh = currentLanguage() === "zh";
+    const head = detail.message || (zh ? "LaTeX 简历编译失败。" : "LaTeX failed to compile the tailored resume.");
+    const tail = detail.logTail ? `\n\n${detail.logTail}` : "";
+    return `${head}${tail}`;
+  }
+
+  if (type === "ResumeQualityGateError") {
+    const issues = Array.isArray(detail.issues) ? detail.issues : [];
+    const issueText = issues.length ? `\n\n${issues.join("\n")}` : "";
+    return `${detail.message || "Resume quality gate failed."}${issueText}`;
+  }
+
   if (detail.message) return String(detail.message);
   return JSON.stringify(detail);
 }
@@ -319,10 +332,10 @@ export const api = {
       }),
       signal: options.signal,
     }),
-  exportTailoredResumePdf: (content) =>
+  exportTailoredResumePdf: (content, language = "") =>
     request("/resume/tailored/pdf", {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, language }),
     }),
   generateCoverLetter: (options = {}, requestOptions = {}) =>
     request("/cover-letter/generate", {
