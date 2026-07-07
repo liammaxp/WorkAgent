@@ -8,6 +8,7 @@ import hashlib
 import inspect
 import io
 import json
+import logging
 import os
 import re
 import signal
@@ -67,6 +68,22 @@ agent_task_cancellations: dict[str, threading.Event] = {}
 agent_task_adapters: dict[str, list[Any]] = {}
 background_task_lock = threading.Lock()
 background_agent_tasks: dict[str, dict[str, Any]] = {}
+USE_GITHUB_CONTEXT_STATUS_V2 = os.getenv("USE_GITHUB_CONTEXT_STATUS_V2", "1") == "1"
+GITHUB_CONTEXT_STATUS_MAX_JSON_CHARS = 1_000_000
+GITHUB_CONTEXT_STATUS_DISABLED_MESSAGE = (
+    "GitHub context status v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable."
+)
+GITHUB_CONTEXT_PREVIEW_DISABLED_MESSAGE = (
+    "GitHub context preview v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable."
+)
+GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT = 5
+GITHUB_CONTEXT_PREVIEW_MAX_LIMIT = 20
+GITHUB_CONTEXT_PREVIEW_SUMMARY_CHARS = 400
+GITHUB_CONTEXT_PREVIEW_TEXT_CHARS = 800
+GITHUB_CONTEXT_RAW_DEFAULT_CHARS = 10_000
+GITHUB_CONTEXT_RAW_MIN_CHARS = 500
+GITHUB_CONTEXT_RAW_MAX_CHARS = 30_000
+logger = logging.getLogger(__name__)
 
 FILE_MAP = {
     "resume": agent.RESUME_PATH,
@@ -15641,6 +15658,746 @@ def read_github_repo_source(resume_source: str, project_name: str = "", project_
 GITHUB_REPO_SCAN_STATE_VERSION = 1
 
 
+# Phase 1 only:
+# GitHub context persistence/status/preview/raw inspect.
+# Do not modify resume generation, project ranking, bullet writing,
+# LaTeX merge, or quality gates in this phase.
+def github_context_status_v2_enabled() -> bool:
+    return USE_GITHUB_CONTEXT_STATUS_V2
+
+
+def github_status_error(errors: list[str], source: str, error: Exception | str) -> None:
+    message = str(error)
+    errors.append(f"{source}: {message}" if message else source)
+
+
+def file_mtime_iso(path: Path, errors: list[str], source: str) -> str | None:
+    try:
+        if not path.exists():
+            return None
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError as error:
+        github_status_error(errors, source, error)
+        return None
+
+
+def file_size_chars(path: Path, errors: list[str], source: str) -> int:
+    try:
+        if not path.exists():
+            return 0
+        return int(path.stat().st_size)
+    except OSError as error:
+        github_status_error(errors, source, error)
+        return 0
+
+
+def safe_status_json_load(path: Path, errors: list[str], source: str) -> Any:
+    try:
+        if not path.exists():
+            return None
+        size = path.stat().st_size
+        if size > GITHUB_CONTEXT_STATUS_MAX_JSON_CHARS:
+            github_status_error(
+                errors,
+                source,
+                f"skipped JSON parse because file is {size} bytes",
+            )
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        github_status_error(errors, source, f"invalid JSON: {error}")
+    except OSError as error:
+        github_status_error(errors, source, error)
+    return None
+
+
+def status_file_info(path: Path, errors: list[str], source: str) -> dict[str, Any]:
+    return {
+        "exists": path.exists(),
+        "path": str(path),
+        "updated_at": file_mtime_iso(path, errors, source),
+        "raw_chars": file_size_chars(path, errors, source),
+    }
+
+
+def status_projects_from_memory(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    raw_projects = payload.get("projects")
+    if isinstance(raw_projects, list):
+        return [project for project in raw_projects if isinstance(project, dict)]
+    if isinstance(raw_projects, dict):
+        return [raw_projects]
+    if payload.get("project_id") or payload.get("project_name") or payload.get("name"):
+        return [payload]
+    return []
+
+
+def status_project_value(project: dict[str, Any], keys: list[str]) -> str:
+    for key in keys:
+        value = project.get(key)
+        if value:
+            return str(value).strip()
+    identity = project.get("identity")
+    if isinstance(identity, dict):
+        for key in keys:
+            value = identity.get(key)
+            if value:
+                return str(value).strip()
+    return ""
+
+
+def status_project_id(project: dict[str, Any], index: int) -> str:
+    return (
+        status_project_value(project, ["project_id", "id", "slug"])
+        or status_project_value(project, ["repository", "repo", "github_repository"])
+        or status_project_value(project, ["project_name", "name", "title"])
+        or f"project-{index + 1}"
+    )
+
+
+def status_project_name(project: dict[str, Any]) -> str | None:
+    return status_project_value(project, ["project_name", "name", "title"]) or None
+
+
+def status_project_repo(project: dict[str, Any]) -> str | None:
+    return (
+        status_project_value(
+            project,
+            ["repository", "repo", "github_repository", "github_repo", "github_url", "url"],
+        )
+        or None
+    )
+
+
+def status_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def status_project_key(project_id: str = "", project_name: str = "", repo: str = "") -> str:
+    return status_key(repo) or status_key(project_id) or status_key(project_name)
+
+
+def status_record_chars(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return 0
+
+
+def merge_status_project(
+    projects: dict[str, dict[str, Any]],
+    *,
+    project_id: str,
+    project_name: str | None = None,
+    repo: str | None = None,
+    saved: bool = False,
+    record_count: int = 0,
+    raw_chars: int = 0,
+    preview_available: bool = False,
+) -> None:
+    key = status_project_key(project_id, project_name or "", repo or "")
+    if not key:
+        key = status_key(project_id or project_name or repo or f"project-{len(projects) + 1}")
+    current = projects.get(key)
+    if current is None:
+        projects[key] = {
+            "project_id": project_id,
+            "project_name": project_name,
+            "repo": repo,
+            "saved": bool(saved),
+            "record_count": int(record_count),
+            "raw_chars": int(raw_chars),
+            "preview_available": bool(preview_available),
+        }
+        return
+
+    if not current.get("project_id") and project_id:
+        current["project_id"] = project_id
+    if not current.get("project_name") and project_name:
+        current["project_name"] = project_name
+    if not current.get("repo") and repo:
+        current["repo"] = repo
+    current["saved"] = bool(current.get("saved") or saved)
+    current["record_count"] = int(current.get("record_count") or 0) + int(record_count)
+    current["raw_chars"] = int(current.get("raw_chars") or 0) + int(raw_chars)
+    current["preview_available"] = bool(current.get("preview_available") or preview_available)
+
+
+def compact_facts_status(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"project_count": 0, "record_count": 0, "records": []}
+
+    records = []
+    for value in payload.values():
+        if not isinstance(value, dict):
+            continue
+        project_name = str(value.get("project_name") or "").strip()
+        repo = str(value.get("repo_name") or value.get("repository") or "").strip()
+        project_id = str(value.get("project_id") or project_name or repo or "").strip()
+        records.append(
+            {
+                "project_id": project_id,
+                "project_name": project_name or None,
+                "repo": repo or None,
+                "raw_chars": status_record_chars(value),
+                "updated_at": str(value.get("updated_at") or ""),
+            }
+        )
+
+    unique_projects = {
+        status_project_key(
+            str(record.get("project_id") or ""),
+            str(record.get("project_name") or ""),
+            str(record.get("repo") or ""),
+        )
+        for record in records
+    }
+    unique_projects.discard("")
+    return {
+        "project_count": len(unique_projects),
+        "record_count": len(records),
+        "records": records,
+    }
+
+
+def chroma_github_evidence_status(errors: list[str]) -> dict[str, Any]:
+    try:
+        summary = agent.MEMORY_STORE.github_metadata_status()
+        return {
+            "available": bool(summary.get("available")),
+            "count": int(summary.get("count") or 0),
+            "error": None,
+            "repositories": summary.get("repositories") or [],
+        }
+    except Exception as error:  # pragma: no cover - depends on optional local Chroma setup
+        github_status_error(errors, "chroma_github_evidence", error)
+        return {
+            "available": False,
+            "count": 0,
+            "error": str(error),
+            "repositories": [],
+        }
+
+
+def latest_status_timestamp(
+    sources: list[dict[str, Any]],
+    chroma_repositories: list[dict[str, Any]],
+) -> str | None:
+    updated_values = [
+        str(source.get("updated_at") or "")
+        for source in sources
+        if source.get("updated_at")
+    ]
+    if updated_values:
+        return max(updated_values)
+    chroma_updates = [
+        str(repository.get("updated_at") or "")
+        for repository in chroma_repositories
+        if repository.get("updated_at")
+    ]
+    return max(chroma_updates) if chroma_updates else None
+
+
+def get_github_context_status_v2() -> dict[str, Any]:
+    """
+    Phase 1 status aggregation.
+    Must not trigger GitHub sync or resume generation.
+    """
+    errors: list[str] = []
+    projects: dict[str, dict[str, Any]] = {}
+
+    project_memory_info = status_file_info(agent.PROJECT_MEMORY_PATH, errors, "project_memory")
+    project_memory_payload = safe_status_json_load(agent.PROJECT_MEMORY_PATH, errors, "project_memory")
+    project_memory_projects = status_projects_from_memory(project_memory_payload)
+    for index, project in enumerate(project_memory_projects):
+        project_id = status_project_id(project, index)
+        project_name = status_project_name(project)
+        repo = status_project_repo(project)
+        merge_status_project(
+            projects,
+            project_id=project_id,
+            project_name=project_name,
+            repo=repo,
+            saved=True,
+            record_count=1,
+            raw_chars=status_record_chars(project),
+            preview_available=True,
+        )
+
+    compact_facts_info = status_file_info(PROJECT_COMPACT_FACTS_PATH, errors, "project_compact_facts")
+    compact_payload = safe_status_json_load(PROJECT_COMPACT_FACTS_PATH, errors, "project_compact_facts")
+    compact_summary = compact_facts_status(compact_payload)
+    for record in compact_summary["records"]:
+        merge_status_project(
+            projects,
+            project_id=str(record.get("project_id") or record.get("repo") or "project"),
+            project_name=record.get("project_name"),
+            repo=record.get("repo"),
+            saved=True,
+            record_count=1,
+            raw_chars=int(record.get("raw_chars") or 0),
+            preview_available=True,
+        )
+
+    scan_state_info = status_file_info(agent.GITHUB_REPO_SCAN_STATE_PATH, errors, "github_scan_state")
+    chroma_status = chroma_github_evidence_status(errors)
+    chroma_repositories = chroma_status.pop("repositories", [])
+    for repository in chroma_repositories:
+        repo = str(repository.get("repository") or "").strip()
+        if not repo:
+            continue
+        merge_status_project(
+            projects,
+            project_id=repo,
+            project_name=None,
+            repo=repo,
+            saved=True,
+            record_count=1,
+            raw_chars=0,
+            preview_available=False,
+        )
+
+    project_sources = {
+        str(project.get("repo") or "")
+        for project in projects.values()
+        if project.get("repo")
+    }
+    chroma_repo_count = len({str(item.get("repository") or "") for item in chroma_repositories if item.get("repository")})
+    repo_count = len(project_sources | {str(item.get("repository") or "") for item in chroma_repositories if item.get("repository")})
+    indexed_count = int(chroma_status.get("count") or 0)
+    project_memory_count = len(project_memory_projects)
+    compact_record_count = int(compact_summary.get("record_count") or 0)
+    record_count = indexed_count + project_memory_count + compact_record_count
+    raw_chars = (
+        int(project_memory_info.get("raw_chars") or 0)
+        + int(compact_facts_info.get("raw_chars") or 0)
+        + int(scan_state_info.get("raw_chars") or 0)
+    )
+
+    sources = {
+        "project_memory": {
+            "exists": bool(project_memory_info["exists"]),
+            "path": project_memory_info["path"],
+            "project_count": project_memory_count,
+            "updated_at": project_memory_info["updated_at"],
+        },
+        "project_compact_facts": {
+            "exists": bool(compact_facts_info["exists"]),
+            "path": compact_facts_info["path"],
+            "project_count": int(compact_summary.get("project_count") or 0),
+            "updated_at": compact_facts_info["updated_at"],
+        },
+        "github_scan_state": {
+            "exists": bool(scan_state_info["exists"]),
+            "path": scan_state_info["path"],
+            "updated_at": scan_state_info["updated_at"],
+            "raw_chars": int(scan_state_info.get("raw_chars") or 0),
+        },
+        "chroma_github_evidence": {
+            "available": bool(chroma_status.get("available")),
+            "count": indexed_count,
+            "error": chroma_status.get("error"),
+        },
+    }
+
+    return {
+        "enabled": True,
+        "saved": bool(record_count or scan_state_info["exists"] or chroma_repo_count),
+        "last_sync_at": latest_status_timestamp(
+            [project_memory_info, compact_facts_info, scan_state_info],
+            chroma_repositories,
+        ),
+        "repo_count": repo_count,
+        "record_count": record_count,
+        "raw_chars": raw_chars,
+        "indexed_count": indexed_count,
+        "sources": sources,
+        "projects": sorted(
+            projects.values(),
+            key=lambda item: (
+                str(item.get("project_name") or item.get("repo") or item.get("project_id") or "").lower()
+            ),
+        ),
+        "errors": errors,
+    }
+
+
+def safe_preview_limit(limit: int | None) -> int:
+    try:
+        parsed = int(limit if limit is not None else GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        parsed = GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT
+    if parsed < 1:
+        return GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT
+    return max(1, min(parsed, GITHUB_CONTEXT_PREVIEW_MAX_LIMIT))
+
+
+def preview_truncate(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 3)].rstrip() + "..."
+
+
+def preview_source_id(*parts: Any) -> str:
+    payload = "|".join(str(part or "") for part in parts)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"github-preview-{digest}"
+
+
+def preview_matches_project(project_id: str, item: dict[str, Any]) -> bool:
+    if not project_id:
+        return True
+    target = status_key(project_id)
+    if not target:
+        return True
+    candidates = [
+        item.get("project_id"),
+        item.get("project_name"),
+        item.get("repo"),
+        item.get("source_id"),
+    ]
+    return any(target in status_key(candidate) or status_key(candidate) in target for candidate in candidates if candidate)
+
+
+def preview_item(
+    *,
+    source_id: str,
+    project_id: str | None,
+    project_name: str | None,
+    repo: str | None,
+    path: str | None,
+    source_type: str | None,
+    summary: Any,
+    preview_text: Any,
+    raw_chars: int,
+    raw_available: bool,
+) -> dict[str, Any]:
+    return {
+        "source_id": source_id,
+        "project_id": project_id or None,
+        "project_name": project_name or None,
+        "repo": repo or None,
+        "path": path or None,
+        "source_type": source_type or None,
+        "summary": preview_truncate(summary, GITHUB_CONTEXT_PREVIEW_SUMMARY_CHARS),
+        "preview_text": preview_truncate(preview_text, GITHUB_CONTEXT_PREVIEW_TEXT_CHARS),
+        "raw_chars": int(raw_chars or 0),
+        "raw_available": bool(raw_available),
+    }
+
+
+def project_memory_preview_text(project: dict[str, Any]) -> str:
+    identity = project.get("identity") if isinstance(project.get("identity"), dict) else {}
+    parts = [
+        status_project_value(project, ["project_name", "name", "title"]),
+        status_project_value(project, ["repository", "repo", "github_repository", "github_url", "url"]),
+        identity.get("positioning"),
+        identity.get("core_problem"),
+        identity.get("core_value"),
+        project.get("summary"),
+        project.get("evidence_notes"),
+    ]
+    workflows = project.get("workflows")
+    if isinstance(workflows, list):
+        parts.extend(workflows[:3])
+    elif isinstance(workflows, str):
+        parts.append(workflows)
+    features = project.get("confirmed_features")
+    if isinstance(features, list):
+        parts.extend(features[:5])
+    elif isinstance(features, str):
+        parts.append(features)
+    return " | ".join(str(part).strip() for part in parts if part)
+
+
+def project_memory_preview_items(project_id: str, limit: int, errors: list[str]) -> list[dict[str, Any]]:
+    payload = safe_status_json_load(agent.PROJECT_MEMORY_PATH, errors, "project_memory_preview")
+    projects = status_projects_from_memory(payload)
+    items = []
+    for index, project in enumerate(projects):
+        current_project_id = status_project_id(project, index)
+        project_name = status_project_name(project)
+        repo = status_project_repo(project)
+        item = preview_item(
+            source_id=preview_source_id("project_memory", current_project_id, project_name, repo),
+            project_id=current_project_id,
+            project_name=project_name,
+            repo=repo,
+            path=str(agent.PROJECT_MEMORY_PATH),
+            source_type="project_memory",
+            summary=project_name or current_project_id,
+            preview_text=project_memory_preview_text(project),
+            raw_chars=status_record_chars(project),
+            raw_available=True,
+        )
+        if preview_matches_project(project_id, item):
+            items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def compact_facts_preview_items(project_id: str, limit: int, errors: list[str]) -> list[dict[str, Any]]:
+    payload = safe_status_json_load(PROJECT_COMPACT_FACTS_PATH, errors, "project_compact_facts_preview")
+    if not isinstance(payload, dict):
+        return []
+    items = []
+    for key, record in payload.items():
+        if not isinstance(record, dict):
+            continue
+        project_name = str(record.get("project_name") or "").strip() or None
+        repo = str(record.get("repo_name") or record.get("repository") or "").strip() or None
+        current_project_id = str(record.get("project_id") or project_name or repo or key).strip()
+        facts = record.get("compact_facts_json") if isinstance(record.get("compact_facts_json"), dict) else {}
+        summary_parts = [
+            project_name,
+            repo,
+            ", ".join(str(item) for item in facts.get("technicalStack", [])[:8]) if isinstance(facts.get("technicalStack"), list) else "",
+        ]
+        preview_parts = []
+        for field in ["summary", "coreWorkflow", "keyModules", "resumeRelevantClaims", "userContributionSignals"]:
+            value = facts.get(field)
+            if isinstance(value, list):
+                preview_parts.extend(str(item) for item in value[:6])
+            elif value:
+                preview_parts.append(str(value))
+        item = preview_item(
+            source_id=preview_source_id("project_compact_facts", key, current_project_id, repo),
+            project_id=current_project_id,
+            project_name=project_name,
+            repo=repo,
+            path=str(PROJECT_COMPACT_FACTS_PATH),
+            source_type="project_compact_facts",
+            summary=" | ".join(part for part in summary_parts if part),
+            preview_text=" | ".join(preview_parts),
+            raw_chars=status_record_chars(record),
+            raw_available=True,
+        )
+        if preview_matches_project(project_id, item):
+            items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def chroma_github_preview_items(project_id: str, limit: int, errors: list[str]) -> list[dict[str, Any]]:
+    try:
+        records = agent.MEMORY_STORE.github_preview_metadata(limit=max(limit * 3, limit))
+    except Exception as error:  # pragma: no cover - depends on optional local Chroma setup
+        github_status_error(errors, "chroma_github_evidence_preview", error)
+        return []
+
+    items = []
+    for record in records:
+        repo = str(record.get("repository") or "").strip() or None
+        source = str(record.get("source") or "").strip()
+        updated_at = str(record.get("updated_at") or "").strip()
+        current_project_id = repo or str(record.get("id") or "")
+        item = preview_item(
+            source_id=preview_source_id("chroma_github_evidence", record.get("id"), repo, updated_at),
+            project_id=current_project_id,
+            project_name=None,
+            repo=repo,
+            path=str(agent.CHROMA_DB_PATH),
+            source_type="chroma_github_evidence",
+            summary=f"Indexed GitHub evidence metadata for {repo or current_project_id}",
+            preview_text=" | ".join(part for part in [repo, source, updated_at] if part),
+            raw_chars=0,
+            raw_available=True,
+        )
+        if preview_matches_project(project_id, item):
+            items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def get_github_context_preview_v2(project_id: str | None = None, limit: int = GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT) -> dict[str, Any]:
+    """
+    Phase 1 bounded preview aggregation.
+    Must not trigger GitHub sync, resume generation, or raw inspect.
+    """
+    errors: list[str] = []
+    safe_limit_value = safe_preview_limit(limit)
+    requested_project_id = str(project_id or "").strip()
+    items: list[dict[str, Any]] = []
+
+    for loader in [project_memory_preview_items, compact_facts_preview_items, chroma_github_preview_items]:
+        if len(items) >= safe_limit_value:
+            break
+        remaining = safe_limit_value - len(items)
+        items.extend(loader(requested_project_id, remaining, errors))
+
+    return {
+        "enabled": True,
+        "project_id": requested_project_id or None,
+        "limit": safe_limit_value,
+        "count": len(items),
+        "items": items[:safe_limit_value],
+        "errors": errors,
+    }
+
+
+def safe_raw_max_chars(max_chars: int | None) -> int:
+    try:
+        parsed = int(max_chars if max_chars is not None else GITHUB_CONTEXT_RAW_DEFAULT_CHARS)
+    except (TypeError, ValueError):
+        parsed = GITHUB_CONTEXT_RAW_DEFAULT_CHARS
+    return max(GITHUB_CONTEXT_RAW_MIN_CHARS, min(parsed, GITHUB_CONTEXT_RAW_MAX_CHARS))
+
+
+def raw_response(
+    *,
+    source_id: str,
+    project_id: str | None,
+    repo: str | None,
+    path: str | None,
+    source_type: str | None,
+    raw_text: Any,
+    max_chars: int,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    text = str(raw_text or "")
+    bounded = text[:max_chars]
+    return {
+        "enabled": True,
+        "source_id": source_id,
+        "project_id": project_id or None,
+        "repo": repo or None,
+        "path": path or None,
+        "source_type": source_type or None,
+        "raw_chars_total": len(text),
+        "returned_chars": len(bounded),
+        "max_chars": max_chars,
+        "truncated": len(text) > max_chars,
+        "raw_text": bounded,
+        "errors": errors or [],
+    }
+
+
+def raw_not_found_response(source_id: str, max_chars: int, message: str = "source_id not found") -> dict[str, Any]:
+    return raw_response(
+        source_id=source_id,
+        project_id=None,
+        repo=None,
+        path=None,
+        source_type=None,
+        raw_text="",
+        max_chars=max_chars,
+        errors=[message],
+    )
+
+
+def project_memory_raw_by_source_id(source_id: str, max_chars: int, errors: list[str]) -> dict[str, Any] | None:
+    payload = safe_status_json_load(agent.PROJECT_MEMORY_PATH, errors, "project_memory_raw")
+    projects = status_projects_from_memory(payload)
+    for index, project in enumerate(projects):
+        current_project_id = status_project_id(project, index)
+        project_name = status_project_name(project)
+        repo = status_project_repo(project)
+        current_source_id = preview_source_id("project_memory", current_project_id, project_name, repo)
+        if current_source_id != source_id:
+            continue
+        return raw_response(
+            source_id=source_id,
+            project_id=current_project_id,
+            repo=repo,
+            path=str(agent.PROJECT_MEMORY_PATH),
+            source_type="project_memory",
+            raw_text=json.dumps(project, ensure_ascii=False, indent=2),
+            max_chars=max_chars,
+            errors=errors,
+        )
+    return None
+
+
+def compact_facts_raw_by_source_id(source_id: str, max_chars: int, errors: list[str]) -> dict[str, Any] | None:
+    payload = safe_status_json_load(PROJECT_COMPACT_FACTS_PATH, errors, "project_compact_facts_raw")
+    if not isinstance(payload, dict):
+        return None
+    for key, record in payload.items():
+        if not isinstance(record, dict):
+            continue
+        project_name = str(record.get("project_name") or "").strip() or None
+        repo = str(record.get("repo_name") or record.get("repository") or "").strip() or None
+        current_project_id = str(record.get("project_id") or project_name or repo or key).strip()
+        current_source_id = preview_source_id("project_compact_facts", key, current_project_id, repo)
+        if current_source_id != source_id:
+            continue
+        return raw_response(
+            source_id=source_id,
+            project_id=current_project_id,
+            repo=repo,
+            path=str(PROJECT_COMPACT_FACTS_PATH),
+            source_type="project_compact_facts",
+            raw_text=json.dumps(record, ensure_ascii=False, indent=2),
+            max_chars=max_chars,
+            errors=errors,
+        )
+    return None
+
+
+def chroma_github_raw_by_source_id(source_id: str, max_chars: int, errors: list[str]) -> dict[str, Any] | None:
+    try:
+        summary = agent.MEMORY_STORE.github_metadata_status()
+        count = int(summary.get("count") or 0)
+        if count <= 0:
+            return None
+        records = agent.MEMORY_STORE.github_preview_metadata(limit=count)
+    except Exception as error:  # pragma: no cover - depends on optional local Chroma setup
+        github_status_error(errors, "chroma_github_evidence_raw", error)
+        return None
+
+    for record in records:
+        repo = str(record.get("repository") or "").strip() or None
+        updated_at = str(record.get("updated_at") or "").strip()
+        current_source_id = preview_source_id("chroma_github_evidence", record.get("id"), repo, updated_at)
+        if current_source_id != source_id:
+            continue
+        try:
+            stored = agent.MEMORY_STORE.read_github_document(str(record.get("id") or ""))
+        except Exception as error:  # pragma: no cover - depends on optional local Chroma setup
+            github_status_error(errors, "chroma_github_evidence_raw", error)
+            return None
+        if not stored:
+            return None
+        metadata = stored.get("metadata") if isinstance(stored.get("metadata"), dict) else {}
+        repository = str(metadata.get("repository") or repo or "").strip() or None
+        return raw_response(
+            source_id=source_id,
+            project_id=repository or str(stored.get("id") or ""),
+            repo=repository,
+            path=str(agent.CHROMA_DB_PATH),
+            source_type="chroma_github_evidence",
+            raw_text=stored.get("document") or "",
+            max_chars=max_chars,
+            errors=errors,
+        )
+    return None
+
+
+def get_github_context_raw_v2(source_id: str, max_chars: int = GITHUB_CONTEXT_RAW_DEFAULT_CHARS) -> dict[str, Any]:
+    """
+    Phase 1 bounded raw inspect.
+    Must not trigger GitHub sync, Chroma migration, resume generation, or unbounded reads.
+    """
+    safe_chars = safe_raw_max_chars(max_chars)
+    requested_source_id = str(source_id or "").strip()
+    errors: list[str] = []
+    if not requested_source_id:
+        return raw_not_found_response("", safe_chars, "source_id is required")
+
+    for loader in [project_memory_raw_by_source_id, compact_facts_raw_by_source_id, chroma_github_raw_by_source_id]:
+        result = loader(requested_source_id, safe_chars, errors)
+        if result is not None:
+            return result
+
+    return raw_not_found_response(requested_source_id, safe_chars, "source_id not found")
+
+
 def project_memory_prompt_hash() -> str:
     return hashlib.sha256(PROJECT_MEMORY_FROM_REPO_ANALYSIS_PROMPT.encode("utf-8")).hexdigest()[:16]
 
@@ -16792,6 +17549,122 @@ def save_github_config(body: GitHubConfigBody):
         "saved": True,
         **build_github_config_status(),
     }
+
+
+@app.get("/api/github/context/status")
+def github_context_status():
+    if not github_context_status_v2_enabled():
+        logger.info("GitHub context status v2 requested: enabled=False")
+        return {
+            "enabled": False,
+            "saved": False,
+            "message": GITHUB_CONTEXT_STATUS_DISABLED_MESSAGE,
+        }
+
+    status = get_github_context_status_v2()
+    logger.info(
+        "GitHub context status v2 requested: enabled=True saved=%s repo_count=%s "
+        "record_count=%s raw_chars=%s errors=%s",
+        status.get("saved"),
+        status.get("repo_count"),
+        status.get("record_count"),
+        status.get("raw_chars"),
+        len(status.get("errors") or []),
+    )
+    return status
+
+
+@app.get("/api/github/context/preview")
+def github_context_preview(project_id: str = "", limit: str = Query(default=str(GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT))):
+    safe_limit_value = safe_preview_limit(limit)
+    if not github_context_status_v2_enabled():
+        logger.info(
+            "GitHub context preview v2 requested: enabled=False project_id=%s requested_limit=%s safe_limit=%s",
+            project_id,
+            limit,
+            safe_limit_value,
+        )
+        return {
+            "enabled": False,
+            "project_id": project_id.strip() or None,
+            "limit": safe_limit_value,
+            "count": 0,
+            "items": [],
+            "message": GITHUB_CONTEXT_PREVIEW_DISABLED_MESSAGE,
+            "errors": [],
+        }
+
+    preview = get_github_context_preview_v2(project_id=project_id, limit=safe_limit_value)
+    logger.info(
+        "GitHub context preview v2 requested: enabled=True project_id=%s requested_limit=%s "
+        "safe_limit=%s returned=%s errors=%s",
+        project_id,
+        limit,
+        safe_limit_value,
+        preview.get("count"),
+        len(preview.get("errors") or []),
+    )
+    return preview
+
+
+@app.get("/api/github/context/raw")
+def github_context_raw(
+    source_id: str = "",
+    max_chars: str = Query(default=str(GITHUB_CONTEXT_RAW_DEFAULT_CHARS)),
+):
+    safe_chars = safe_raw_max_chars(max_chars)
+    requested_source_id = source_id.strip()
+    if not github_context_status_v2_enabled():
+        logger.info(
+            "GitHub context raw v2 requested: enabled=False source_id=%s requested_max_chars=%s safe_max_chars=%s",
+            requested_source_id,
+            max_chars,
+            safe_chars,
+        )
+        return {
+            "enabled": False,
+            "source_id": requested_source_id or None,
+            "max_chars": safe_chars,
+            "raw_text": "",
+            "message": "GitHub context raw inspect v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable.",
+            "errors": [],
+        }
+
+    if not requested_source_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "enabled": True,
+                "source_id": None,
+                "max_chars": safe_chars,
+                "message": "source_id is required",
+                "errors": ["source_id is required"],
+            },
+        )
+
+    result = get_github_context_raw_v2(source_id=requested_source_id, max_chars=safe_chars)
+    logger.info(
+        "GitHub context raw v2 requested: enabled=True source_id=%s requested_max_chars=%s "
+        "safe_max_chars=%s returned_chars=%s truncated=%s errors=%s",
+        requested_source_id,
+        max_chars,
+        safe_chars,
+        result.get("returned_chars"),
+        result.get("truncated"),
+        len(result.get("errors") or []),
+    )
+    if "source_id not found" in (result.get("errors") or []):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "enabled": True,
+                "source_id": requested_source_id,
+                "max_chars": safe_chars,
+                "message": "source_id not found",
+                "errors": result.get("errors") or [],
+            },
+        )
+    return result
 
 
 @app.post("/api/github/context")

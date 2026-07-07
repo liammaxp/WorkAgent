@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import {
@@ -37,6 +37,399 @@ function formatUnixUpdatedAt(value, language) {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value * 1000));
+}
+
+function formatStatusTimestamp(value, language) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(language === "en" ? "en" : "zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(date);
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function githubDiagnosticsText(language) {
+  if (language === "en") {
+    return {
+      yes: "Yes",
+      no: "No",
+      statusTitle: "Saved GitHub Context Status",
+      refresh: "Refresh",
+      statusLoading: "Loading GitHub context status...",
+      statusError: "Unable to load GitHub context status.",
+      statusDisabled: "GitHub context status v2 is disabled. Enable USE_GITHUB_CONTEXT_STATUS_V2=1 to view saved/indexed context diagnostics.",
+      endpointEnabled: "Endpoint enabled",
+      saved: "Saved",
+      lastSync: "Last sync",
+      repoCount: "Repo count",
+      recordCount: "Record count",
+      rawChars: "Raw chars",
+      indexedCount: "Indexed count",
+      sources: "Sources",
+      projects: "Projects",
+      projectId: "Project ID",
+      projectName: "Name",
+      repository: "Repo",
+      records: "Records",
+      previewAvailable: "Preview",
+      action: "Action",
+      preview: "Preview",
+      loading: "Loading",
+      projectCount: "Project count",
+      emptyProjects: "No saved GitHub context projects found.",
+      firstProjects: "Showing first 20 projects.",
+      moreProjects: "more project summaries are available from the status endpoint.",
+      diagnosticsIssuesPrefix: "Status diagnostics reported",
+      diagnosticsIssuesSuffix: "issue(s). Raw GitHub content is not shown.",
+      previewLoading: "Loading preview...",
+      previewError: "Unable to load GitHub context preview.",
+      previewDisabled: "GitHub context preview v2 is disabled. Enable USE_GITHUB_CONTEXT_STATUS_V2=1 to view bounded previews.",
+      previewEmpty: "No bounded preview items are available for this project.",
+      inspectRaw: "Inspect Raw",
+      loadingRaw: "Loading Raw",
+      rawLoading: "Loading bounded raw content...",
+      rawError: "Unable to inspect raw GitHub context.",
+      rawDisabled: "GitHub raw inspect v2 is disabled. Enable USE_GITHUB_CONTEXT_STATUS_V2=1 to inspect bounded raw context.",
+      totalRawChars: "Total raw chars",
+      returnedChars: "Returned chars",
+      truncated: "Raw content truncated",
+      completeWithinLimit: "Complete within limit",
+      hideRaw: "Hide Raw",
+      chars: "chars",
+      safetyNote: "Note: this page shows status and summaries by default. It does not automatically load full GitHub raw content.",
+      rawSafetyNote: "Raw inspection is only loaded after clicking Inspect Raw, and the backend returns only a bounded segment using max_chars.",
+      rawNotRendered: "Raw GitHub evidence is saved locally and summarized in the status panel above. Full raw context is not rendered on this page.",
+    };
+  }
+  return {
+    yes: "是",
+    no: "否",
+    statusTitle: "已保存的 GitHub 上下文状态",
+    refresh: "刷新",
+    statusLoading: "正在加载 GitHub 上下文状态...",
+    statusError: "无法加载 GitHub 上下文状态。",
+    statusDisabled: "GitHub 上下文诊断功能未启用。如需查看保存/索引状态，请在启动后端前设置：USE_GITHUB_CONTEXT_STATUS_V2=1",
+    endpointEnabled: "诊断功能",
+    saved: "保存状态",
+    lastSync: "最后同步时间",
+    repoCount: "仓库数量",
+    recordCount: "记录数量",
+    rawChars: "原始内容字符数",
+    indexedCount: "已索引数量",
+    sources: "数据来源",
+    projects: "项目列表",
+    projectId: "项目 ID",
+    projectName: "项目名称",
+    repository: "仓库",
+    records: "记录",
+    previewAvailable: "可预览",
+    action: "操作",
+    preview: "预览",
+    loading: "正在加载",
+    projectCount: "项目数量",
+    emptyProjects: "暂无已保存的 GitHub 上下文项目。",
+    firstProjects: "当前显示前 20 个项目。",
+    moreProjects: "个更多项目摘要可通过状态接口获取。",
+    diagnosticsIssuesPrefix: "状态诊断报告了",
+    diagnosticsIssuesSuffix: "个问题。页面不会显示完整 GitHub 原始内容。",
+    previewLoading: "正在加载预览...",
+    previewError: "无法加载 GitHub 上下文预览。",
+    previewDisabled: "GitHub 上下文预览功能未启用。请设置 USE_GITHUB_CONTEXT_STATUS_V2=1 后查看有界预览。",
+    previewEmpty: "该项目暂无可预览内容。",
+    inspectRaw: "查看原始内容",
+    loadingRaw: "正在加载原文",
+    rawLoading: "正在加载有界原始内容...",
+    rawError: "无法加载原始内容。",
+    rawDisabled: "GitHub 原始内容查看功能未启用。请设置 USE_GITHUB_CONTEXT_STATUS_V2=1 后查看有界原文。",
+    totalRawChars: "原始字符总数",
+    returnedChars: "已返回字符数",
+    truncated: "原始内容已截断",
+    completeWithinLimit: "未超过返回上限",
+    hideRaw: "隐藏原始内容",
+    chars: "字符",
+    safetyNote: "注意：页面默认只显示状态和摘要，不会自动加载完整 GitHub 原始内容。",
+    rawSafetyNote: "点击“查看原始内容”后，也只会按 max_chars 返回一小段用于调试的原文。",
+    rawNotRendered: "GitHub 原始证据已保存在本地，并在上方状态面板中以摘要显示；本页面不会渲染完整原始上下文。",
+  };
+}
+
+function yesNo(value, ui) {
+  return value ? ui.yes : ui.no;
+}
+
+function statusSourceLine(label, source, ui, countLabel = ui.projectCount) {
+  if (!source) return null;
+  const exists = source.exists ?? source.available;
+  const count = source.project_count ?? source.count ?? 0;
+  return (
+    <div className="github-status-source" key={label}>
+      <span>{label}</span>
+      <strong>{yesNo(Boolean(exists), ui)}</strong>
+      <small>{countLabel}: {formatCount(count)}</small>
+    </div>
+  );
+}
+
+function previewProjectKey(project) {
+  return String(project?.project_id || project?.repo || project?.project_name || "").trim();
+}
+
+function GitHubRawPanel({ rawState, onClose, ui }) {
+  if (!rawState) return null;
+  if (rawState.loading) {
+    return <div className="github-raw-panel helper-text">{ui.rawLoading}</div>;
+  }
+  if (rawState.error) {
+    return (
+      <div className="github-raw-panel github-status-message github-status-error">
+        {ui.rawError}
+      </div>
+    );
+  }
+  const raw = rawState.data;
+  if (!raw) return null;
+  if (raw.enabled === false) {
+    return (
+      <div className="github-raw-panel github-status-message">
+        {ui.rawDisabled}
+      </div>
+    );
+  }
+  return (
+    <div className="github-raw-panel">
+      <div className="github-raw-toolbar">
+        <span>{ui.totalRawChars}: {formatCount(raw.raw_chars_total)}</span>
+        <span>{ui.returnedChars}: {formatCount(raw.returned_chars)} / {formatCount(raw.max_chars)}</span>
+        <span>{raw.truncated ? ui.truncated : ui.completeWithinLimit}</span>
+        <button type="button" className="btn btn-secondary btn-small" onClick={onClose}>
+          {ui.hideRaw}
+        </button>
+      </div>
+      <pre className="github-raw-text">{raw.raw_text || ""}</pre>
+    </div>
+  );
+}
+
+function GitHubPreviewPanel({ preview, rawInspections, onInspectRaw, onCloseRaw, ui }) {
+  if (!preview) return null;
+  if (preview.loading) {
+    return <div className="github-preview-panel helper-text">{ui.previewLoading}</div>;
+  }
+  if (preview.error) {
+    return (
+      <div className="github-preview-panel github-status-message github-status-error">
+        {ui.previewError}
+      </div>
+    );
+  }
+  if (preview.data?.enabled === false) {
+    return (
+      <div className="github-preview-panel github-status-message">
+        {ui.previewDisabled}
+      </div>
+    );
+  }
+  const items = Array.isArray(preview.data?.items) ? preview.data.items : [];
+  if (!items.length) {
+    return <div className="github-preview-panel empty-state">{ui.previewEmpty}</div>;
+  }
+  return (
+    <div className="github-preview-panel">
+      {items.map((item) => (
+        <div className="github-preview-item" key={item.source_id}>
+          <div className="github-preview-meta">
+            <strong>{item.source_id}</strong>
+            <span>{item.source_type || "-"}</span>
+            <span>{item.repo || "-"}</span>
+            <span>{item.path || "-"}</span>
+            <span>{ui.rawChars}: {formatCount(item.raw_chars)}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => onInspectRaw(item)}
+              disabled={!item.source_id || rawInspections?.[item.source_id]?.loading}
+            >
+              {rawInspections?.[item.source_id]?.loading ? ui.loadingRaw : ui.inspectRaw}
+            </button>
+          </div>
+          {item.summary && <p>{item.summary}</p>}
+          {item.preview_text && <p className="github-preview-text">{item.preview_text}</p>}
+          <GitHubRawPanel
+            rawState={rawInspections?.[item.source_id]}
+            onClose={() => onCloseRaw(item.source_id)}
+            ui={ui}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GitHubContextStatusPanel({
+  status,
+  loading,
+  error,
+  onRefresh,
+  onPreview,
+  previews,
+  rawInspections,
+  onInspectRaw,
+  onCloseRaw,
+  language,
+}) {
+  const ui = githubDiagnosticsText(language);
+  const sources = status?.sources || {};
+  const projects = Array.isArray(status?.projects) ? status.projects.slice(0, 20) : [];
+  const hiddenProjectCount = Math.max(0, Number(status?.projects?.length || 0) - projects.length);
+
+  return (
+    <section className="card">
+      <div className="section-toolbar">
+        <h2 className="card-title">{ui.statusTitle}</h2>
+        <button type="button" className="btn btn-secondary btn-small" onClick={onRefresh} disabled={loading}>
+          {ui.refresh}
+        </button>
+      </div>
+
+      {loading && <p className="helper-text">{ui.statusLoading}</p>}
+
+      {!loading && error && (
+        <div className="github-status-message github-status-error">
+          {ui.statusError}
+        </div>
+      )}
+
+      {!loading && !error && status?.enabled === false && (
+        <div className="github-status-message">
+          {ui.statusDisabled}
+        </div>
+      )}
+
+      {!loading && !error && status?.enabled && (
+        <>
+          <p className="helper-text">{ui.safetyNote}</p>
+          <div className="github-status-grid">
+            <div className="github-status-metric">
+              <span>{ui.endpointEnabled}</span>
+              <strong>{yesNo(status.enabled, ui)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.saved}</span>
+              <strong>{yesNo(status.saved, ui)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.lastSync}</span>
+              <strong>{formatStatusTimestamp(status.last_sync_at, language)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.repoCount}</span>
+              <strong>{formatCount(status.repo_count)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.recordCount}</span>
+              <strong>{formatCount(status.record_count)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.rawChars}</span>
+              <strong>{formatCount(status.raw_chars)}</strong>
+            </div>
+            <div className="github-status-metric">
+              <span>{ui.indexedCount}</span>
+              <strong>{formatCount(status.indexed_count)}</strong>
+            </div>
+          </div>
+
+          <h3 className="github-status-subtitle">{ui.sources}</h3>
+          <div className="github-status-sources">
+            {[
+              statusSourceLine("project_memory", sources.project_memory, ui),
+              statusSourceLine("project_compact_facts", sources.project_compact_facts, ui),
+              statusSourceLine("chroma_github_evidence", sources.chroma_github_evidence, ui, ui.recordCount),
+            ].filter(Boolean)}
+          </div>
+
+          <h3 className="github-status-subtitle">{ui.projects}</h3>
+          {projects.length ? (
+            <>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{ui.projectId}</th>
+                      <th>{ui.projectName}</th>
+                      <th>{ui.repository}</th>
+                      <th>{ui.saved}</th>
+                      <th>{ui.records}</th>
+                      <th>{ui.rawChars}</th>
+                      <th>{ui.previewAvailable}</th>
+                      <th>{ui.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projects.map((project, index) => {
+                      const projectKey = previewProjectKey(project);
+                      const preview = previews?.[projectKey] || null;
+                      return (
+                        <Fragment key={`${project.project_id || project.repo || "project"}-${index}`}>
+                          <tr key={`${project.project_id || project.repo || "project"}-${index}`}>
+                            <td>{project.project_id || "-"}</td>
+                            <td>{project.project_name || "-"}</td>
+                            <td>{project.repo || "-"}</td>
+                            <td>{yesNo(project.saved, ui)}</td>
+                            <td>{formatCount(project.record_count)}</td>
+                            <td>{formatCount(project.raw_chars)}</td>
+                            <td>{yesNo(project.preview_available, ui)}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-small"
+                                onClick={() => onPreview(project)}
+                                disabled={!projectKey || preview?.loading}
+                              >
+                                {preview?.loading ? ui.loading : ui.preview}
+                              </button>
+                            </td>
+                          </tr>
+                          {preview && (
+                            <tr key={`${project.project_id || project.repo || "project"}-${index}-preview`}>
+                              <td colSpan={8}>
+                                <GitHubPreviewPanel
+                                  preview={preview}
+                                  rawInspections={rawInspections}
+                                  onInspectRaw={onInspectRaw}
+                                  onCloseRaw={onCloseRaw}
+                                  ui={ui}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {hiddenProjectCount > 0 && (
+                <p className="helper-text">{ui.firstProjects} {formatCount(hiddenProjectCount)} {ui.moreProjects}</p>
+              )}
+            </>
+          ) : (
+            <p className="empty-state">{ui.emptyProjects}</p>
+          )}
+
+          {Array.isArray(status.errors) && status.errors.length > 0 && (
+            <p className="warning-line">{ui.diagnosticsIssuesPrefix} {formatCount(status.errors.length)} {ui.diagnosticsIssuesSuffix}</p>
+          )}
+          <p className="helper-text">{ui.rawSafetyNote}</p>
+        </>
+      )}
+    </section>
+  );
 }
 
 function resolveProjectMemoryUpdatedAt(githubConfig, status) {
@@ -210,6 +603,11 @@ export default function GitHubContext() {
   const [memoryRepositories, setMemoryRepositories] = useState([]);
   const [projectOptions, setProjectOptions] = useState([]);
   const [projectMemoryUpdatedAt, setProjectMemoryUpdatedAt] = useState(null);
+  const [contextStatus, setContextStatus] = useState(null);
+  const [contextStatusLoading, setContextStatusLoading] = useState(false);
+  const [contextStatusError, setContextStatusError] = useState("");
+  const [contextPreviews, setContextPreviews] = useState({});
+  const [rawInspections, setRawInspections] = useState({});
   const { loading, error, success, run } = useAsyncAction();
   const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
@@ -237,8 +635,87 @@ export default function GitHubContext() {
       return data;
     });
 
+  const loadGithubContextStatus = async () => {
+    setContextStatusLoading(true);
+    setContextStatusError("");
+    try {
+      const data = await api.getGithubContextStatus();
+      setContextStatus(data);
+      return data;
+    } catch (statusError) {
+      setContextStatus(null);
+      setContextStatusError(statusError?.message || "Unable to load GitHub context status.");
+      return null;
+    } finally {
+      setContextStatusLoading(false);
+    }
+  };
+
+  const loadGithubContextPreview = async (project) => {
+    const projectKey = previewProjectKey(project);
+    if (!projectKey) return null;
+    setContextPreviews((current) => ({
+      ...current,
+      [projectKey]: { loading: true, error: "", data: current[projectKey]?.data || null },
+    }));
+    try {
+      const data = await api.getGithubContextPreview(projectKey, 5);
+      setContextPreviews((current) => ({
+        ...current,
+        [projectKey]: { loading: false, error: "", data },
+      }));
+      return data;
+    } catch (previewError) {
+      setContextPreviews((current) => ({
+        ...current,
+        [projectKey]: {
+          loading: false,
+          error: previewError?.message || "Unable to load GitHub context preview.",
+          data: null,
+        },
+      }));
+      return null;
+    }
+  };
+
+  const inspectGithubContextRaw = async (item) => {
+    const sourceId = String(item?.source_id || "").trim();
+    if (!sourceId) return null;
+    setRawInspections((current) => ({
+      ...current,
+      [sourceId]: { loading: true, error: "", data: current[sourceId]?.data || null },
+    }));
+    try {
+      const data = await api.getGithubContextRaw(sourceId, 10000);
+      setRawInspections((current) => ({
+        ...current,
+        [sourceId]: { loading: false, error: "", data },
+      }));
+      return data;
+    } catch (rawError) {
+      setRawInspections((current) => ({
+        ...current,
+        [sourceId]: {
+          loading: false,
+          error: rawError?.message || "Unable to inspect raw GitHub context.",
+          data: null,
+        },
+      }));
+      return null;
+    }
+  };
+
+  const closeGithubContextRaw = (sourceId) => {
+    setRawInspections((current) => {
+      const next = { ...current };
+      delete next[sourceId];
+      return next;
+    });
+  };
+
   useEffect(() => {
     loadGithubConfig();
+    loadGithubContextStatus();
   }, []);
 
   const saveGithubConfig = () =>
@@ -357,9 +834,11 @@ export default function GitHubContext() {
           return { data, githubConfig, status };
         },
       });
-      setContext(data);
+      const { context: _rawContext, ...safeContext } = data || {};
+      setContext(safeContext);
       setMemoryRepositories(githubConfig.memory_repositories || []);
       setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(githubConfig, status));
+      await loadGithubContextStatus();
       return data;
     }, copy.fetched);
 
@@ -405,6 +884,7 @@ export default function GitHubContext() {
   const noRepositoryEvidence =
     language === "en" ? (copy.noMemoryRepositories || "No Chroma repository evidence yet") : "暂无 Chroma 仓库证据";
   const projectMemoryStatus = getProjectMemoryStatus(context, language);
+  const diagnosticsCopy = githubDiagnosticsText(language);
 
   return (
     <>
@@ -530,6 +1010,19 @@ export default function GitHubContext() {
         </div>
       </section>
 
+      <GitHubContextStatusPanel
+        status={contextStatus}
+        loading={contextStatusLoading}
+        error={contextStatusError}
+        onRefresh={loadGithubContextStatus}
+        onPreview={loadGithubContextPreview}
+        previews={contextPreviews}
+        rawInspections={rawInspections}
+        onInspectRaw={inspectGithubContextRaw}
+        onCloseRaw={closeGithubContextRaw}
+        language={language}
+      />
+
       <section className="card">
         <h2 className="card-title">{repositoryEvidenceTitle}</h2>
         <p className="helper-text">{repositoryEvidenceHint}</p>
@@ -578,7 +1071,7 @@ export default function GitHubContext() {
         </section>
       )}
 
-      {context?.context && (
+      {context && (
         <section className="card">
           <h2 className="card-title">{copy.contextSummary}</h2>
           {projectMemoryStatus && (
@@ -601,7 +1094,9 @@ export default function GitHubContext() {
               ))}
             </div>
           ) : null}
-          <pre className="json-preview">{JSON.stringify(context.context, null, 2)}</pre>
+          <p className="helper-text">
+            {diagnosticsCopy.rawNotRendered}
+          </p>
         </section>
       )}
 
