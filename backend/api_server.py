@@ -6300,6 +6300,154 @@ def repair_missing_section_headings(
     return repaired
 
 
+def quality_issue(
+    source: str,
+    severity: str,
+    code: str,
+    message: Any,
+    repairable: bool = False,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "severity": severity if severity in {"blocking", "warning", "info"} else "warning",
+        "code": code,
+        "message": str(message or "").strip(),
+        "repairable": bool(repairable),
+    }
+
+
+def dedupe_quality_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    severity_rank = {"blocking": 0, "warning": 1, "info": 2}
+    filtered = [item for item in issues if isinstance(item, dict) and str(item.get("message") or "").strip()]
+    for issue in sorted(
+        filtered,
+        key=lambda item: (
+            severity_rank.get(str(item.get("severity")), 2),
+            str(item.get("source") or ""),
+            str(item.get("code") or ""),
+            str(item.get("message") or ""),
+        ),
+    ):
+        key = (str(issue.get("source") or ""), str(issue.get("code") or ""), str(issue.get("message") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(issue)
+    return deduped
+
+
+def structure_issue_code(message: Any) -> str:
+    text = str(message or "")
+    lower = text.lower()
+    if r"\resumesubheading" in lower and "must have" in lower:
+        return "MISSING_RESUME_SUBHEADING_ARGS"
+    if r"\resumeprojectheading" in lower and "must have" in lower:
+        return "MISSING_RESUME_PROJECT_HEADING_ARGS"
+    if "unterminated braced argument" in lower:
+        return "UNTERMINATED_MACRO_ARGUMENT"
+    if "missing a matching list end" in lower or "closes without a matching list start" in lower:
+        return "LATEX_LIST_STRUCTURE"
+    if "bullets appear without a complete" in lower or "starts with bullets before" in lower:
+        return "MISSING_ENTRY_HEADING"
+    return "STRUCTURE_VALIDATION"
+
+
+def structure_quality_issue(message: Any) -> dict[str, Any]:
+    return quality_issue("structure", "blocking", structure_issue_code(message), message, repairable=False)
+
+
+def latex_quality_issue(message: Any) -> dict[str, Any]:
+    text = str(message or "")
+    lower = text.lower()
+    if "technical skills" in lower:
+        return quality_issue("skills", "warning", "TECHNICAL_SKILLS_LATEX_OR_STYLE", text, repairable=True)
+    if "truncated placeholder" in lower or "placeholder text" in lower:
+        return quality_issue("content", "warning", "PLACEHOLDER_OR_TRUNCATED_TEXT", text, repairable=True)
+    fatal_markers = [
+        "no latex resume code found",
+        "missing required latex markers",
+        "closes without a matching list start",
+        "missing a matching list end",
+        "project heading without resume bullets",
+        "must have",
+        "unterminated",
+    ]
+    if any(marker in lower for marker in fatal_markers):
+        return quality_issue("latex", "blocking", "LATEX_VALIDATION", text, repairable=False)
+    return quality_issue("latex", "warning", "LATEX_NON_FATAL_VALIDATION", text, repairable=True)
+
+
+def clean_technical_skills_pollution_in_resume(document: str) -> tuple[str, dict[str, Any]]:
+    section = find_latex_section(document, "skills")
+    report: dict[str, Any] = {
+        "changed": False,
+        "removed": [],
+        "kept": [],
+        "reclassified": [],
+        "parsed_skill_count": 0,
+        "remaining_skill_count": 0,
+    }
+    if not section:
+        return document, report
+    grouped, _order = parse_rendered_technical_skills(section.get("text", ""))
+    parsed = [(category, skill) for category, skills in grouped.items() for skill in skills]
+    report["parsed_skill_count"] = len(parsed)
+    if not parsed:
+        return document, report
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_category, raw_skill in parsed:
+        cleaned_skill = clean_rendered_skill_name(raw_skill)
+        if not cleaned_skill or is_skill_pollution_name(raw_skill):
+            append_unique(report["removed"], str(raw_skill).strip(), 40)
+            continue
+        normalized = canonical_skill_name(cleaned_skill)
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        old_category = normalize_resume_skill_category(raw_category)
+        new_category = normalize_resume_skill_category("", normalized)
+        if old_category != new_category:
+            report["reclassified"].append({"skill": normalized, "from": old_category, "to": new_category})
+        report["kept"].append(normalized)
+        entries.append(
+            {
+                "skill": normalized,
+                "normalized_skill": normalized,
+                "category": new_category,
+                "sources": ["current_resume"],
+                "confidence": "medium",
+                "safe_to_include": True,
+            }
+        )
+    report["remaining_skill_count"] = len(entries)
+    if not entries:
+        report["changed"] = bool(report["removed"])
+        return document, report
+    replacement = render_full_technical_skills_section(entries, FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA)
+    changed = replacement.strip() != section.get("text", "").strip()
+    report["changed"] = bool(changed or report["removed"] or report["reclassified"])
+    if not changed and not report["changed"]:
+        return document, report
+    if not replacement.endswith("\n"):
+        replacement += "\n"
+    return document[: section["start"]] + replacement + document[section["end"] :], report
+
+
+def skills_cleanup_blocks(cleanup_report: dict[str, Any]) -> bool:
+    if not isinstance(cleanup_report, dict):
+        return False
+    return (
+        int(cleanup_report.get("parsed_skill_count") or 0) > 0
+        and int(cleanup_report.get("remaining_skill_count") or 0) == 0
+        and bool(cleanup_report.get("removed"))
+    )
+
+
 def resume_quality_gate(
     document: str,
     original_resume: str = "",
@@ -6316,31 +6464,117 @@ def resume_quality_gate(
             staged_experience_candidates=staged_experience_candidates,
             staged_project_candidates=staged_project_candidates,
         )
+    cleanup = {"applied": False, "technical_skills": {}}
+    skills_cleanup: dict[str, Any] = {}
+    if repair:
+        cleaned, skills_cleanup = clean_technical_skills_pollution_in_resume(cleaned)
+        cleanup["technical_skills"] = skills_cleanup
+        cleanup["applied"] = bool(skills_cleanup.get("changed"))
+
     structure = validate_resume_section_structure(cleaned)
     latex_issues = agent.latex_resume_validation_issues(cleaned)
     technical_skill_issues = agent.technical_skills_section_issues(cleaned)
+    skills_section = find_latex_section(cleaned, "skills")
+    technical_skills_validation = validate_technical_skills_section(
+        skills_section.get("text", "") if skills_section else "",
+        [],
+    )
     project_missing_bullets = agent.project_headings_without_bullets(cleaned)
     bullet_quality = resume_section_bullet_quality_issues(cleaned)
-    blocking = []
-    blocking.extend(structure.get("issues", []))
-    blocking.extend(latex_issues)
+    summary_quality = validate_summary_quality(cleaned)
+
+    all_issues: list[dict[str, Any]] = []
+    for issue in structure.get("issues", []):
+        all_issues.append(structure_quality_issue(issue))
+    structure_messages = {str(issue) for issue in structure.get("issues", [])}
+    for issue in latex_issues:
+        if str(issue) not in structure_messages:
+            all_issues.append(latex_quality_issue(issue))
+    for issue in technical_skill_issues:
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "warning",
+                "TECHNICAL_SKILLS_STYLE_OR_POLLUTION",
+                issue,
+                repairable=True,
+            )
+        )
+    for issue in technical_skills_validation.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "warning",
+                "TECHNICAL_SKILLS_CLEANUP_REMAINING",
+                issue,
+                repairable=True,
+            )
+        )
     if project_missing_bullets:
-        blocking.append("Project heading without resume bullets: " + ", ".join(project_missing_bullets) + ".")
-    warnings = []
-    warnings.extend(f"technical_skills: {issue}" for issue in technical_skill_issues)
-    warnings.extend(bullet_quality.get("issues", []))
-    blocking = sorted(set(str(issue) for issue in blocking if str(issue).strip()))
-    warnings = sorted(set(str(issue) for issue in warnings if str(issue).strip()))
+        all_issues.append(
+            quality_issue(
+                "structure",
+                "blocking",
+                "PROJECT_HEADING_WITHOUT_BULLETS",
+                "Project heading without resume bullets: " + ", ".join(project_missing_bullets) + ".",
+                repairable=False,
+            )
+        )
+    for issue in bullet_quality.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "bullets",
+                "warning",
+                "BULLET_QUALITY_REPAIRABLE",
+                issue,
+                repairable=True,
+            )
+        )
+    for issue in summary_quality.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "summary",
+                "warning",
+                "SUMMARY_QUALITY_REPAIRABLE",
+                issue,
+                repairable=True,
+            )
+        )
+    if skills_cleanup_blocks(skills_cleanup if repair else {}):
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "blocking",
+                "TECHNICAL_SKILLS_EMPTY_AFTER_CLEANUP",
+                "Technical Skills cleanup removed every parsed skill and could not rebuild a usable section.",
+                repairable=False,
+            )
+        )
+
+    all_issues = dedupe_quality_issues(all_issues)
+    blocking = [issue for issue in all_issues if issue.get("severity") == "blocking"]
+    warnings = [issue for issue in all_issues if issue.get("severity") != "blocking"]
     return {
         "ok": not blocking,
         "content": cleaned,
         "blocking_issues": blocking,
         "warnings": warnings,
+        "cleanup_applied": cleanup["applied"],
+        "cleanup": cleanup,
+        "quality_gate_sources": {
+            "structure": structure,
+            "latex": latex_issues,
+            "technical_skills": technical_skills_validation,
+            "bullets": bullet_quality,
+            "summary": summary_quality,
+        },
         "structure": structure,
         "latex_issues": latex_issues,
         "technical_skill_issues": technical_skill_issues,
+        "technical_skills_validation": technical_skills_validation,
         "project_headings_without_bullets": project_missing_bullets,
         "bullet_quality": bullet_quality,
+        "summary_quality": summary_quality,
     }
 
 
@@ -6355,6 +6589,26 @@ def resume_quality_gate_error(gate: dict[str, Any], message: str = "Resume quali
             "quality_gate": {k: v for k, v in gate.items() if k != "content"},
         },
     )
+
+
+def validate_summary_quality(resume_latex: str) -> dict[str, Any]:
+    section = find_latex_section(resume_latex, "summary")
+    if not section:
+        return {"valid": True, "issues": [], "word_count": 0}
+    plain = latex_fragment_plain_text(section.get("text", ""))
+    plain = re.sub(r"\b(?:Professional Summary|Summary|Profile)\b", " ", plain, flags=re.IGNORECASE)
+    words = re.findall(r"[A-Za-z0-9+#./-]+", plain)
+    lower = plain.lower()
+    issues: list[str] = []
+    if len(words) > 75:
+        issues.append(f"Summary is too long ({len(words)} words); keep it around 55-70 words unless explicitly requested.")
+    if "eager to contribute" in lower or "passionate about contributing" in lower:
+        issues.append("Summary uses weak applicant boilerplate.")
+    if len(words) > 45 and plain.count(",") >= 8:
+        issues.append("Summary looks like keyword stuffing instead of evidence-backed positioning.")
+    if len(re.findall(r"\b(?:responsibilities|requirements|sdlc|troubleshooting|documentation|code review)\b", lower)) >= 4:
+        issues.append("Summary repeats broad JD responsibility terms instead of candidate evidence.")
+    return {"valid": not issues, "issues": issues, "word_count": len(words)}
 
 
 def prepare_tailored_resume_for_save(
@@ -10104,6 +10358,34 @@ BULLET_RAW_FRAGMENT_MARKERS = [
 
 _TECHNICAL_PROPER_TOKENS = {"API", "LaTeX", "JD", "SQLite", "GitHub", "LLM", "PDF", "REST", "AI", "UI", "CI"}
 
+BULLET_VALUE_KEYWORDS = [
+    "improve", "improving", "reduce", "reducing", "prevent", "preserve", "traceable",
+    "repeatable", "reliable", "maintainable", "recover", "debug", "debuggable",
+    "validate", "validation", "supporting", "enabling", "connecting", "organizing",
+    "coordination", "collaboration", "stability", "reliability", "visibility",
+    "workflow quality", "data handling", "integration", "user", "engineering",
+]
+
+BULLET_RAW_LIST_VERBS = [
+    "supporting", "routes", "route", "connecting", "including", "configuration-driven",
+    "provider", "model", "token", "prompt", "setup",
+]
+
+PROJECT_BULLET_TOPIC_GROUPS = [
+    ("data_persistence", ["persistence", "persistent", "database", "sqlite", "firestore", "mongodb", "storage", "records"]),
+    ("backend_api", ["api", "backend", "route", "request", "server", "fastapi", "endpoint"]),
+    ("frontend_mobile", ["frontend", "interface", "screen", "react", "mobile", "android", "ui flow"]),
+    ("validation_error_handling", ["validation", "validate", "retry", "fallback", "error", "logging", "debug", "recover"]),
+    ("evidence_mapping", ["evidence", "mapping", "github", "repository", "metadata", "source files", "implementation signals"]),
+    ("retrieval_ranking", ["retrieval", "vector", "search", "ranking", "semantic", "matching"]),
+    ("generation_merge", ["generation", "generated", "merge", "latex", "export", "pdf", "candidate"]),
+    ("parsing_normalization", ["parsing", "parse", "normalization", "normalize", "schema", "input"]),
+    ("configuration", ["configuration", "provider", "model", "token", "settings"]),
+    ("build_test_debug", ["test", "automation", "build", "debugging", "diagnostic", "quality gate"]),
+    ("user_workflow", ["user workflow", "onboarding", "notification", "management", "review steps"]),
+    ("workflow_orchestration", ["workflow", "orchestration", "routing", "pipeline", "agent-style"]),
+]
+
 
 def _bullet_token_overlap(a: str, b: str) -> float:
     tokens_a = set(re.findall(r"[a-z0-9]+", str(a or "").lower()))
@@ -10116,12 +10398,20 @@ def _bullet_token_overlap(a: str, b: str) -> float:
 def validate_resume_bullet_quality(
     bullet: str,
     entry_name: str = "",
+    entry_type: str = "",
     peer_bullets: list[str] | None = None,
     mechanism_cards: list[dict[str, Any]] | None = None,
-    entry_type: str = "",
 ) -> dict[str, Any]:
     """Deterministic quality gate that rejects field-concatenated, truncated, list-only,
     duplicated, or ungrammatical resume bullets."""
+    # Backward compatibility for older positional calls:
+    # validate_resume_bullet_quality(bullet, entry_name, peer_bullets, mechanism_cards)
+    if isinstance(entry_type, list):
+        if mechanism_cards is None and isinstance(peer_bullets, list):
+            mechanism_cards = peer_bullets
+        peer_bullets = entry_type
+        entry_type = ""
+
     raw = str(bullet or "").strip()
     lower = raw.lower()
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#./-]*", raw)
@@ -10135,6 +10425,8 @@ def validate_resume_bullet_quality(
     last_word = re.sub(r"[^A-Za-z]", "", words[-1]).lower() if words else ""
     if last_word in BULLET_TRUNCATION_STEMS:
         issues.append("bullet ends with a truncated word")
+    if last_word in {"to", "for", "with", "and", "or", "via", "using", "through", "supporting"}:
+        issues.append("bullet ends with a broken phrase")
     for stem in BULLET_TRUNCATION_STEMS:
         if re.search(rf"\b{stem}\.(?:\s|$)", lower):
             issues.append("bullet contains a truncated word before punctuation")
@@ -10146,7 +10438,10 @@ def validate_resume_bullet_quality(
             break
     generic_bad_patterns = [
         r"\bbuilt\s+scripting\s+to\s+support\s+workflow\b",
+        r"\bbuilt\s+(?:[a-z0-9+#./-]+\s+){0,3}scripting\s+to\s+support\b",
         r"\bimplemented\s+system\s+for\s+\w+\s*,?\s+supporting\b",
+        r"\bimplemented\s+(?:an?\s+)?[a-z0-9-]+\s+workflow\s+that\s+routes?\s+[^.]*,\s*[^.]*,\s*[^.]*",
+        r"\bbuilt\s+.+\bworkflow\s+support\s+for\s+[^.]*,\s*[^.]*",
         r"\bautomated\s+workflow\s+for\s+workflow\b",
         r"\bused\s+technology\s+stack\s+to\s+build\s+system\b",
         r"\bimplemented\s+backend,\s*frontend,\s*and\s*database\b",
@@ -10163,18 +10458,43 @@ def validate_resume_bullet_quality(
     if first not in RESUME_ACTION_VERBS:
         issues.append("bullet does not start with a resume action verb")
 
-    if len(re.findall(r"workflow", lower)) >= 2:
+    if len(re.findall(r"\bworkflow\b", lower)) >= 2:
         issues.append("bullet repeats 'workflow' without a distinct concrete mechanism")
 
     tech_tokens = extract_skill_names_with_ontology(raw, 20)
     has_mechanism_phrase = any(keyword in lower for keyword in BULLET_MECHANISM_KEYWORDS)
-    has_mechanism = bool(tech_tokens) or has_mechanism_phrase
-    describes_purpose = any(marker in lower for marker in [" to ", " that ", "connecting ", "enabling ", "reducing "])
+    has_stack_signal = bool(tech_tokens)
+    has_mechanism = has_mechanism_phrase
+    describes_purpose = any(
+        marker in lower
+        for marker in [" to ", " that ", "connecting ", "enabling ", "reducing ", "through ", "by ", "for "]
+    )
+    has_value_signal = any(keyword in lower for keyword in BULLET_VALUE_KEYWORDS)
+    comma_count = raw.count(",")
+    raw_list_signal = comma_count >= 2 and any(term in lower for term in BULLET_RAW_LIST_VERBS)
+    if raw_list_signal and not has_value_signal:
+        issues.append("bullet looks like a raw feature or workflow list instead of an engineered mechanism")
+    if re.search(r"^\s*supporting\b", lower):
+        issues.append("bullet starts with a fragment instead of an action")
+    if re.search(r"\bsupporting\s+[^.]*,\s*[^.]*,\s*[^.]*", lower) and not (
+        has_mechanism_phrase and has_value_signal
+    ):
+        issues.append("bullet appends a supporting-list fragment without mechanism and value")
     if not (has_mechanism_phrase or describes_purpose):
         if re.search(r"\b(application|system|app|features?|project|dashboard|page|button|screen)s?\.?\s*$", lower):
             issues.append("bullet only names components/stack without an implemented mechanism or value")
-    if not has_mechanism and len(words) < 10:
-        issues.append("bullet has no concrete technical mechanism, tool, or process")
+    if has_stack_signal and not has_mechanism_phrase and not describes_purpose:
+        issues.append("bullet contains stack names but no implemented mechanism")
+    if not has_mechanism and len(words) < 12:
+        issues.append("bullet has no concrete technical mechanism or process")
+    if has_mechanism and not has_value_signal and len(words) < 18:
+        issues.append("bullet lacks engineering or user value")
+    if re.search(r"\b(?:backend|frontend|database|api|ui|module|modules|components?)\b(?:\s*,\s*|\s+and\s+){1,}", lower) and not has_value_signal:
+        issues.append("bullet is only a module list")
+    if re.search(r"\b(?:users?|customers?)\s+can\b|\b(?:application|platform|system)\s+(?:allows|provides|helps)\b", lower) and not has_mechanism_phrase:
+        issues.append("bullet reads like a product summary instead of engineering evidence")
+    if metric_like_claims(raw):
+        issues.append("bullet contains metric-like claims that require explicit evidence")
 
     if len(raw) > 340 or len(words) > 48:
         issues.append("bullet is too long for a resume line")
@@ -10239,6 +10559,8 @@ def build_project_mechanism_cards(
         10,
         160,
     )
+    if not values and mechanisms:
+        values = ["improving traceability, maintainability, or recovery for repeated tasks"]
     stack: list[str] = []
     for skill in extract_skill_names_with_ontology(project_text_for_tech_matching(card), 24):
         cleaned_skill = clean_resume_skill_name(skill)
@@ -10258,16 +10580,19 @@ def build_project_mechanism_cards(
         value = values[index % len(values)] if values else ""
         mechanism_lower = mechanism.lower()
         mechanism_stack = [skill for skill in stack if skill.lower() in mechanism_lower] or stack[:3]
-        safe = bool(mechanism and (function or mechanism_stack) and evidence_sources)
+        safe = bool(mechanism and function and value and evidence_sources)
         cards.append(
             {
                 "projectName": project_name,
+                "entryName": project_name,
+                "entryType": "project",
                 "mechanism": mechanism,
                 "implementedFunction": function,
                 "technicalStack": mechanism_stack[:5],
                 "engineeringValue": value,
                 "evidenceSources": evidence_sources[:5],
                 "safeToWrite": safe,
+                "riskFlags": [] if safe else ["missing mechanism, function, value, or evidence source"],
             }
         )
     return cards
@@ -10363,6 +10688,67 @@ def conservative_bullet_from_mechanism_card(card: dict[str, Any], action: str = 
     return normalize_resume_bullet_sentence(sentence)
 
 
+def project_bullet_topic(text: Any, mechanism_cards: list[dict[str, Any]] | None = None) -> str:
+    lower = str(text or "").lower()
+    hits: list[tuple[str, int]] = []
+    for topic, terms in PROJECT_BULLET_TOPIC_GROUPS:
+        score = sum(1 for term in terms if term in lower)
+        if score:
+            hits.append((topic, score))
+    if hits:
+        hits.sort(key=lambda item: (-item[1], item[0]))
+        return hits[0][0]
+    for card in mechanism_cards or []:
+        if not isinstance(card, dict):
+            continue
+        mechanism = str(card.get("mechanism") or "").lower()
+        if mechanism and _bullet_token_overlap(lower, mechanism) >= 0.24:
+            return normalize_match_text(mechanism)[:40] or "mechanism"
+    return normalize_match_text(lower)[:40] or "general"
+
+
+def dedupe_project_bullet_topics(
+    bullets: list[str],
+    mechanism_cards: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Keep project bullets on distinct mechanisms instead of repeating one workflow topic."""
+    cleaned = [normalize_resume_bullet_sentence(bullet) for bullet in bullets if str(bullet or "").strip()]
+    retained: list[str] = []
+    topic_counts: dict[str, int] = {}
+    for bullet in cleaned:
+        topic = project_bullet_topic(bullet, mechanism_cards)
+        broad_workflow = topic in {"workflow_orchestration", "configuration"}
+        duplicate_topic = topic_counts.get(topic, 0) >= (1 if broad_workflow else 2)
+        near_duplicate = any(_bullet_token_overlap(bullet, peer) >= 0.62 for peer in retained)
+        if duplicate_topic or near_duplicate:
+            continue
+        retained.append(bullet)
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        if len(retained) >= 5:
+            break
+    return retained
+
+
+def dedupe_experience_bullet_topics(bullets: list[str]) -> list[str]:
+    retained: list[str] = []
+    verb_counts: dict[str, int] = {}
+    for bullet in bullets:
+        text = normalize_resume_bullet_sentence(bullet)
+        if not text:
+            continue
+        verb = leading_resume_verb(text).lower()
+        if verb:
+            verb_counts[verb] = verb_counts.get(verb, 0) + 1
+            if verb == "implemented" and verb_counts[verb] > 2:
+                text = replace_leading_resume_verb(text, choose_experience_action_verb(text, len(retained)))
+        if any(_bullet_token_overlap(text, peer) >= 0.66 for peer in retained):
+            continue
+        retained.append(text)
+        if len(retained) >= 5:
+            break
+    return retained
+
+
 def apply_bullet_quality_gate(
     final_bullets: list[Any],
     project_name: str,
@@ -10370,6 +10756,7 @@ def apply_bullet_quality_gate(
     depth_profile: dict[str, Any] | None = None,
     role_profile: dict[str, Any] | None = None,
     jd_profile: dict[str, Any] | None = None,
+    entry_type: str = "project",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Reject low-quality bullets, rewrite via mechanism-first repair (max 2 tries),
     fall back to a conservative mechanism-card bullet, and drop only if nothing survives."""
@@ -10381,7 +10768,7 @@ def apply_bullet_quality_gate(
     for item in final_bullets or []:
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
         text = str(bullet or "").strip()
-        quality = validate_resume_bullet_quality(text, project_name, peer, mechanism_cards)
+        quality = validate_resume_bullet_quality(text, project_name, entry_type, peer, mechanism_cards)
         attempts = 0
         while not quality.get("valid") and attempts < 2:
             rewritten = normalize_resume_bullet_sentence(
@@ -10390,7 +10777,7 @@ def apply_bullet_quality_gate(
             attempts += 1
             if rewritten and rewritten != text:
                 text = rewritten
-                quality = validate_resume_bullet_quality(text, project_name, peer, mechanism_cards)
+                quality = validate_resume_bullet_quality(text, project_name, entry_type, peer, mechanism_cards)
                 if quality.get("valid"):
                     report["rewritten"] += 1
             else:
@@ -10400,7 +10787,7 @@ def apply_bullet_quality_gate(
             while card_index < len(safe_cards):
                 candidate = conservative_bullet_from_mechanism_card(safe_cards[card_index])
                 card_index += 1
-                if candidate and validate_resume_bullet_quality(candidate, project_name, peer, mechanism_cards).get("valid"):
+                if candidate and validate_resume_bullet_quality(candidate, project_name, entry_type, peer, mechanism_cards).get("valid"):
                     fallback = candidate
                     break
             if fallback:
@@ -10417,6 +10804,36 @@ def apply_bullet_quality_gate(
             new_item = {"bullet": text, "evidence": "bullet_quality_gate", "confidence": "medium"}
         result.append(new_item)
         peer.append(text)
+    if entry_type == "project":
+        deduped_texts = dedupe_project_bullet_topics([item.get("bullet", "") for item in result], safe_cards)
+        deduped_keys = {normalize_match_text(text) for text in deduped_texts}
+        before = len(result)
+        result = [item for item in result if normalize_match_text(item.get("bullet", "")) in deduped_keys]
+        if len(result) < before:
+            report["dropped"] += before - len(result)
+            report["issues"].append("duplicate project bullet topics were removed")
+        existing_texts = [item.get("bullet", "") for item in result]
+        for card in safe_cards:
+            if len(result) >= 3:
+                break
+            candidate = conservative_bullet_from_mechanism_card(card)
+            if not candidate:
+                continue
+            if project_bullet_topic(candidate, safe_cards) in {project_bullet_topic(text, safe_cards) for text in existing_texts}:
+                continue
+            if not validate_resume_bullet_quality(candidate, project_name, entry_type, existing_texts, safe_cards).get("valid"):
+                continue
+            result.append({"bullet": candidate, "evidence": "mechanism_card_fallback", "confidence": "medium"})
+            existing_texts.append(candidate)
+            report["fallback"] += 1
+    elif entry_type == "experience":
+        deduped_texts = dedupe_experience_bullet_topics([item.get("bullet", "") for item in result])
+        deduped_keys = {normalize_match_text(text) for text in deduped_texts}
+        before = len(result)
+        result = [item for item in result if normalize_match_text(item.get("bullet", "")) in deduped_keys][:5]
+        if len(result) < before:
+            report["dropped"] += before - len(result)
+            report["issues"].append("duplicate or overlong experience bullets were removed")
     report["final_count"] = len(result)
     report["issues"] = sorted(set(report["issues"]))
     return result, report
@@ -10434,15 +10851,10 @@ def resume_section_bullet_quality_issues(resume_latex: str) -> dict[str, Any]:
         peer: list[str] = []
         for bullet in bullets:
             checked += 1
-            quality = validate_resume_bullet_quality(bullet, section_key, peer)
+            quality = validate_resume_bullet_quality(bullet, section_key, "project" if section_key == "projects" else "experience", peer)
             peer.append(bullet)
             for issue in quality.get("issues", []):
-                # Only surface hard defects that merge should never introduce.
-                if any(
-                    marker in issue
-                    for marker in ["truncated", "raw project-memory", "ellipsis", "capitalized fragment", "duplicates another"]
-                ):
-                    append_unique(issues, f"{section_key}: {issue}", 20)
+                append_unique(issues, f"{section_key}: {issue}", 30)
     return {"valid": not issues, "issues": issues, "bullets_checked": checked}
 
 
@@ -11498,6 +11910,7 @@ STAR enforcement:
         depth_profile,
         role_profile,
         jd_requirements,
+        section_type if section_type in {"project", "experience"} else "project",
     )
     if gated_bullets:
         payload["final_bullets"] = gated_bullets
@@ -11814,7 +12227,9 @@ SKILL_ALIASES = {
 
 
 LOW_VALUE_SKILL_SECTION_NAMES = {
+    "agent",
     "api",
+    "ai",
     "automation",
     "backend",
     "batch",
@@ -11843,10 +12258,13 @@ LOW_VALUE_SKILL_SECTION_NAMES = {
     "configuration management",
     "device-based identity",
     "error handling",
+    "event-management workflows",
     "generated materials",
+    "job description parsing",
     "local workflow",
     "monitoring",
     "navigation",
+    "notification workflow implementation",
     "notification workflow logic",
     "openai",
     "project memory",
@@ -11854,6 +12272,7 @@ LOW_VALUE_SKILL_SECTION_NAMES = {
     "qa",
     "reporting",
     "requirements",
+    "retrieval",
     "role-based flow",
     "stakeholder",
     "testing",
@@ -11895,10 +12314,13 @@ NON_TECHNICAL_SKILL_TERMS = {
 }
 
 LOW_VALUE_SKILL_SECTION_NAMES |= NON_TECHNICAL_SKILL_TERMS
+LOW_VALUE_SKILL_SECTION_NAMES -= {"androidx", "camerax", "firebase analytics"}
 
 DEPRIORITIZED_SPACE_TIGHT_SKILLS = {"cursor"}
 
 STANDALONE_SKILL_BLOCKLIST = {
+    "agent",
+    "api",
     "backend",
     "frontend",
     "embedding",
@@ -11908,7 +12330,35 @@ STANDALONE_SKILL_BLOCKLIST = {
     "prompt",
     "cache",
     "batch",
+    "retrieval",
 }
+
+SKILL_POLLUTION_EXACT = LOW_VALUE_SKILL_SECTION_NAMES | STANDALONE_SKILL_BLOCKLIST | {
+    "application workflow",
+    "workflow coordination",
+    "workflow routing",
+    "admin workflow",
+    "local workflow",
+    "user flow",
+    "role-based flow",
+    "raw feature phrase",
+    "model-generated descriptor",
+}
+
+SKILL_POLLUTION_PHRASE_MARKERS = [
+    " workflow",
+    "workflows",
+    " user flow",
+    " business logic",
+    " error handling",
+    " requirements",
+    " documentation",
+    " generated material",
+    " candidate generation",
+    " configuration management",
+    " implementation",
+    " coordination",
+]
 
 BAD_SKILL_TEXT_MARKERS = [
     "...",
@@ -11965,11 +12415,48 @@ def is_blocked_standalone_skill_name(name: Any) -> bool:
     return False
 
 
+def is_skill_pollution_name(name: Any) -> bool:
+    lower = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not lower:
+        return True
+    concrete_exceptions = {
+        "openai api",
+        "github api",
+        "rest api",
+        "firebase firestore",
+        "firebase auth",
+        "firebase messaging",
+        "firebase analytics",
+        "vector search",
+        "semantic retrieval",
+    }
+    if lower in concrete_exceptions:
+        return False
+    if lower in SKILL_POLLUTION_EXACT:
+        return True
+    if lower.endswith((" workflow", " workflows", " flow", " flows")):
+        return True
+    if any(marker in f" {lower}" for marker in SKILL_POLLUTION_PHRASE_MARKERS):
+        return True
+    if "parsing" in lower and any(term in lower for term in ["job", "description", "resume", "workflow"]):
+        return True
+    if "management" in lower and lower not in {"package management"}:
+        return True
+    word_parts = re.findall(r"[A-Za-z0-9+#./-]+", lower)
+    if len(word_parts) >= 3 and not tech_entry_for_skill(lower):
+        process_terms = {"workflow", "implementation", "coordination", "business", "logic", "generated", "candidate"}
+        if any(term in word_parts for term in process_terms):
+            return True
+    return False
+
+
 def clean_resume_skill_name(value: Any) -> str:
     name = canonical_skill_name(value)
     name = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", name)
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     if not name:
+        return ""
+    if is_skill_pollution_name(name):
         return ""
     if is_truncated_placeholder_text(name):
         return ""
@@ -11999,6 +12486,8 @@ def clean_rendered_skill_name(value: Any) -> str:
     name = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", name)
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     if not name or is_truncated_placeholder_text(name):
+        return ""
+    if is_skill_pollution_name(name):
         return ""
     if is_blocked_standalone_skill_name(name):
         return ""
@@ -12182,6 +12671,30 @@ def normalize_resume_skill_category(category: Any, skill: Any = "") -> str:
     if raw in {"Languages", "Languages & Scripting", "Languages & Querying"}:
         return "Languages"
     if skill_lower:
+        if skill_lower in {
+            "openai api",
+            "chroma",
+            "langchain",
+            "langgraph",
+            "vector search",
+            "semantic retrieval",
+        }:
+            return "AI & Automation"
+        if skill_lower in {
+            "gradle",
+            "maven",
+            "gradle kotlin dsl",
+            "github actions",
+            "ci/cd",
+            "npm",
+            "vite",
+            "webpack",
+            "rollup",
+            "package managers",
+        }:
+            return "Testing, Build & Debugging"
+        if skill_lower in {"android studio", "intellij", "cursor", "vs code", "visual studio code"}:
+            return "Tools"
         base = base_skill_category(skill_name)
         if base == "Languages":
             return "Languages"
@@ -12931,7 +13444,9 @@ def validate_technical_skills(
         notes.append("Technical Skills may be too broad; keep it below roughly 25-32 skills.")
     contaminated = standalone_skill_tokens_in_text(
         text,
-        NON_TECHNICAL_SKILL_TERMS | {"Backend", "Frontend", "Embedding", "embeddings", "Cursor"},
+        NON_TECHNICAL_SKILL_TERMS
+        | {term.title() for term in SKILL_POLLUTION_EXACT if term not in {"api", "ai"}}
+        | {"Backend", "Frontend", "Embedding", "embeddings", "Cursor", "Agent", "Retrieval"},
     )
     if contaminated:
         for skill in contaminated:
@@ -13531,7 +14046,36 @@ def build_full_technical_skill_inventory(compact_payload: dict[str, Any]) -> lis
         entry["safe_to_include"] = True
         result.append(entry)
     result.sort(key=full_inventory_skill_sort_key)
-    return result
+    return clean_skill_inventory_pollution(result)
+
+
+def clean_skill_inventory_pollution(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove non-technical feature/process phrases while preserving real user-backed skills."""
+    cleaned: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_entry in inventory or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        skill = clean_resume_skill_name(entry.get("skill") or entry.get("normalized_skill"))
+        if not skill or is_skill_pollution_name(skill):
+            continue
+        sources = set(entry.get("sources", []))
+        if not (sources & USER_SPECIFIC_SKILL_SOURCE_LABELS):
+            continue
+        if sources.issubset(TECH_ONTOLOGY_NON_EVIDENCE_SOURCES):
+            continue
+        key = canonical_skill_name(skill).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entry["skill"] = canonical_skill_name(skill)
+        entry["normalized_skill"] = canonical_skill_name(skill)
+        entry["category"] = normalize_resume_skill_category("", skill)
+        entry["safe_to_include"] = True
+        cleaned.append(entry)
+    cleaned.sort(key=full_inventory_skill_sort_key)
+    return cleaned
 
 
 def render_full_technical_skills_section(inventory: list[dict[str, Any]], category_schema: list[str]) -> str:
@@ -13657,6 +14201,74 @@ def audit_technical_skills_completeness(recommended_section: str, inventory: lis
     }
 
 
+def validate_technical_skills_section(section: dict | str, inventory: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    text = skills_section_text(section)
+    grouped, _order = parse_rendered_technical_skills(text)
+    inventory_list = clean_skill_inventory_pollution(inventory or []) if inventory else []
+    inventory_map = {
+        canonical_skill_name(entry.get("skill")).lower(): entry
+        for entry in inventory_list
+        if isinstance(entry, dict) and entry.get("skill")
+    }
+    issues: list[str] = []
+    pollution: list[str] = []
+    unsupported: list[str] = []
+    duplicates: list[str] = []
+    category_errors: list[str] = []
+    seen: set[str] = set()
+
+    for category, skills in grouped.items():
+        normalized_category = normalize_resume_skill_category(category)
+        if normalized_category not in FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA:
+            category_errors.append(f"Unknown Technical Skills category: {category}")
+        for raw_skill in skills:
+            skill = clean_rendered_skill_name(raw_skill)
+            raw_lower = re.sub(r"\s+", " ", str(raw_skill or "").strip().lower())
+            if not skill or is_skill_pollution_name(raw_skill):
+                append_unique(pollution, str(raw_skill), 30)
+                continue
+            key = canonical_skill_name(skill).lower()
+            if key in seen:
+                append_unique(duplicates, skill, 30)
+            seen.add(key)
+            expected_category = normalize_resume_skill_category("", skill)
+            if expected_category != normalized_category:
+                category_errors.append(f"{skill} is categorized under {category}, expected {expected_category}.")
+            if inventory_map:
+                entry = inventory_map.get(key)
+                sources = set(entry.get("sources", [])) if entry else set()
+                if not entry or not (sources & USER_SPECIFIC_SKILL_SOURCE_LABELS) or sources.issubset(TECH_ONTOLOGY_NON_EVIDENCE_SOURCES):
+                    append_unique(unsupported, skill, 30)
+
+    missing_inventory = []
+    if inventory_list:
+        audit = audit_technical_skills_completeness(text, inventory_list)
+        missing_inventory = list(audit.get("missingSkills", []))
+
+    if pollution:
+        issues.append("Technical Skills contains pollution/process phrases: " + ", ".join(pollution))
+    if unsupported:
+        issues.append("Technical Skills contains skills without user-specific evidence: " + ", ".join(unsupported))
+    if duplicates:
+        issues.append("Technical Skills contains duplicate/alias skill entries: " + ", ".join(duplicates))
+    if category_errors:
+        issues.extend(category_errors[:8])
+    if missing_inventory:
+        issues.append("Technical Skills omitted user-backed inventory skills: " + ", ".join(missing_inventory[:12]))
+
+    return {
+        "ok": not issues,
+        "valid": not issues,
+        "issues": sorted(set(issues)),
+        "pollution": pollution,
+        "unsupported_skills": unsupported,
+        "duplicate_skills": duplicates,
+        "category_errors": category_errors,
+        "missing_inventory_skills": missing_inventory,
+        "skills_checked": sum(len(skills) for skills in grouped.values()),
+    }
+
+
 def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dict[str, Any]:
     category_schema = compact_payload.get("categorySchema") or []
     # Full inventory drives the final Technical Skills section (JD only affects order).
@@ -13695,6 +14307,10 @@ def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dic
         {"skill_candidates": inventory_public, "role_family": compact_payload.get("roleFamily", "software_engineering")},
         jd_profile,
     )
+    section_validation = validate_technical_skills_section(recommended_section, inventory_public)
+    if not section_validation.get("valid"):
+        validation["valid"] = False
+        validation.setdefault("notes", []).extend(section_validation.get("issues", []))
     return {
         "skills_strategy": (
             "Technical Skills is a full user technology overview sourced from the current resume, selected and "
@@ -13712,6 +14328,7 @@ def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dic
         "gap_report": compact_payload.get("gap_report", {}),
         "completeness_audit": {k: v for k, v in audit.items() if k != "section"},
         "validation": validation,
+        "section_validation": section_validation,
         "risks": [
             f"Unsupported JD-only skill omitted: {skill}" for skill in unsupported[:10]
         ] + [
@@ -14005,6 +14622,36 @@ def reduce_compact_summary_payload_for_limit(payload: dict[str, Any], max_chars:
     return reduced
 
 
+def clean_recommended_summary_text(summary: Any, max_words: int = 70) -> str:
+    text = re.sub(r"\s+", " ", str(summary or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\b(?:eager to contribute|passionate about contributing|seeking an opportunity to)\b[^.]*\.?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if len(sentences) > 3:
+        text = " ".join(sentences[:3])
+    words = re.findall(r"[A-Za-z0-9+#./-]+|[^\sA-Za-z0-9+#./-]+", text)
+    word_tokens = re.findall(r"[A-Za-z0-9+#./-]+", text)
+    if len(word_tokens) <= max_words:
+        return text
+    kept: list[str] = []
+    count = 0
+    for token in words:
+        if re.fullmatch(r"[A-Za-z0-9+#./-]+", token):
+            count += 1
+        if count > max_words:
+            break
+        kept.append(token)
+    shortened = " ".join(kept)
+    shortened = re.sub(r"\s+([,.;:!?])", r"\1", shortened).strip(" ,;:")
+    return shortened.rstrip(".") + "."
+
+
 class ResumeCompactInputBuilder:
     build_compact_summary_input = staticmethod(build_compact_summary_input)
     build_compact_skills_input = staticmethod(build_compact_skills_input)
@@ -14102,6 +14749,12 @@ Staged Experience candidate:
     for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    original_summary = str(payload.get("recommended_summary") or "")
+    cleaned_summary = clean_recommended_summary_text(original_summary)
+    if cleaned_summary:
+        payload["recommended_summary"] = cleaned_summary
+        if cleaned_summary != original_summary.strip():
+            payload["risks"].append("Summary was locally tightened to avoid overlong or boilerplate wording.")
     if "compact_payload" in locals() and isinstance(compact_payload, dict):
         supported_skills = {canonical_skill_name(item.get("skill")).lower() for item in compact_payload.get("compactSkills", []) if isinstance(item, dict)}
         if supported_skills:
@@ -14389,12 +15042,18 @@ def validate_final_resume_policy(
     section_structure_validation = validate_resume_section_structure(resume_latex)
     project_validation = validate_project_section_allocation(resume_latex, project_ranking or {}, resume_constraints)
     skills_validation = {"valid": True, "issues": []}
+    skills_section_validation = {"valid": True, "issues": []}
     if isinstance(skills_candidate, dict):
         skills_block = resume_block_for_prompt(resume_latex, "Skills-section")
         skill_sources = skills_candidate.get("skillCandidateSources") or {"skill_candidates": skills_candidate.get("skill_candidates", [])}
         skills_validation = validate_technical_skills(skills_block, skill_sources, {})
+        skills_section_validation = validate_technical_skills_section(
+            skills_block.get("latex", "") if isinstance(skills_block, dict) else skills_block,
+            skills_candidate.get("full_skill_inventory", []),
+        )
     experience_validation = validate_experience_style_in_resume(resume_latex)
     bullet_quality_validation = resume_section_bullet_quality_issues(resume_latex)
+    summary_quality_validation = validate_summary_quality(resume_latex)
     issues = []
     if not section_structure_validation.get("valid"):
         issues.extend(section_structure_validation.get("issues", []))
@@ -14402,18 +15061,24 @@ def validate_final_resume_policy(
         issues.extend(project_validation.get("issues", []))
     if not skills_validation.get("valid"):
         issues.extend(skills_validation.get("notes", []) or skills_validation.get("unsupported_skills", []))
+    if not skills_section_validation.get("valid"):
+        issues.extend(skills_section_validation.get("issues", []))
     if not experience_validation.get("valid"):
         issues.extend(experience_validation.get("issues", []))
     if not bullet_quality_validation.get("valid"):
         issues.extend(bullet_quality_validation.get("issues", []))
+    if not summary_quality_validation.get("valid"):
+        issues.extend(summary_quality_validation.get("issues", []))
     return {
         "valid": not issues,
         "issues": issues,
         "section_structure": section_structure_validation,
         "project": project_validation,
         "technical_skills": skills_validation,
+        "technical_skills_section": skills_section_validation,
         "experience_style": experience_validation,
         "bullet_quality": bullet_quality_validation,
+        "summary_quality": summary_quality_validation,
         "policy": compact_value_for_prompt(stage_policy_payload("final_merge"), 160, 4),
     }
 
@@ -14436,7 +15101,7 @@ def repair_final_resume_policy_once(
     repaired = enforce_project_section_allocation(repaired, project_ranking, project_candidates, resume_constraints)
     if isinstance(skills_candidate, dict):
         validation = validate_final_resume_policy(repaired, project_ranking, skills_candidate, resume_constraints)
-        if not validation.get("technical_skills", {}).get("valid", True):
+        if not validation.get("technical_skills", {}).get("valid", True) or not validation.get("technical_skills_section", {}).get("valid", True):
             repaired = apply_skills_section_candidate(repaired, skills_candidate)
     if not validate_experience_style_in_resume(repaired).get("valid", True):
         repaired = repair_experience_verb_diversity_in_resume(repaired)

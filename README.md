@@ -34,9 +34,9 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory. The tailored Projects section now prefers 2 projects for a one-page resume, allows 3 only when the third is job-critical, and gives higher-ranked projects more bullet space.
 - Let the agent tailor Project and Experience bullets through a stricter ReAct bullet writer that rejects stack-only, CRUD-only, UI-control-only, or broad-module-only wording unless the bullet names a concrete implementation method, substantive workflow capability, and value.
 - Let the agent tailor Experience bullets for the job description by reordering, rewriting, or removing weak and redundant bullets while preserving factual meaning. Removing an entire Experience entry requires explicit user approval.
-- Preserve the base resume's compact Technical Skills LaTeX style and reject generated skills sections that use visible bullets, placeholders, generic filler, or unsupported sentence fragments.
+- Preserve the base resume's compact Technical Skills LaTeX style, clean process/feature phrases out of generated skills, reclassify real user-backed skills into the expected categories, and reject visible bullets, placeholders, generic filler, duplicates, or unsupported sentence fragments.
 - Use a compact technical ontology to recognize JD technologies, aliases, cautious resume wording, and unsupported-claim risks without treating ontology terms as proof of user experience.
-- Validate final resume merges against project order, bullet budgets, Technical Skills evidence, unsupported skills, and mechanism-rich bullet depth before saving the tailored LaTeX.
+- Validate final resume merges against project order, bullet budgets, Technical Skills evidence, unsupported skills, summary quality, and mechanism-rich bullet depth before saving the tailored LaTeX. Quality-gate results are returned as structured issues with source, severity, code, message, and repairability metadata.
 - Return a staged resume-tailoring summary with role profile, extracted JD requirements, project ranking, project-section validation, and a gap report that highlights missing or weak evidence and unsupported keywords to avoid.
 - Run long agent work as cancellable background tasks with status, messages, result retrieval, and live guidance capture for reruns.
 - Check whether Project Memory has enough STAR evidence for resume tailoring and save missing project facts before generation.
@@ -86,6 +86,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- windows/                 # Windows .bat and PowerShell entry points
 |-- linux/                   # Linux .sh entry points
 |-- macos/                   # macOS double-click .command entry points
+|-- tests/                   # Backend regression tests for resume quality gates
 `-- README.md
 ```
 
@@ -532,6 +533,12 @@ Backend syntax check:
 python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
 ```
 
+Resume quality-gate regression tests:
+
+```powershell
+python -m unittest tests\test_resume_quality_gates.py
+```
+
 Frontend production build:
 
 ```powershell
@@ -588,9 +595,9 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 允许 Agent 根据岗位选择最强且真实的项目组合：移除较弱项目、更新已有项目 bullet，或加入 Project Memory 中更匹配的项目。定制版 Projects 部分优先保持 2 个项目，只有第三个项目对岗位很关键时才使用 3 个，并给排名更高的项目更多 bullet 空间。
 - 通过更严格的 ReAct bullet writer 定制 Project 和 Experience bullet；如果 bullet 只是在堆技术栈、描述 CRUD、UI 控件或宽泛模块，而没有具体实现方法、实质工作流能力和价值，会被拒绝。
 - 允许 Agent 根据职位描述重排、改写或删除 Experience 中较弱和重复的 bullet，同时保持事实含义不变。删除整段 Experience 经历需要用户显式授权。
-- 保留基础简历紧凑的 Technical Skills LaTeX 样式，并拒绝可见 bullet、占位符、泛泛填充内容或无证据支持的技能片段。
+- 保留基础简历紧凑的 Technical Skills LaTeX 样式，清理生成技能中的流程/功能描述短语，把真实且有用户证据支持的技能重新归类到预期类别，并拒绝可见 bullet、占位符、泛泛填充内容、重复项或无证据支持的技能片段。
 - 使用紧凑技术本体识别 JD 技术、别名、谨慎简历措辞和 unsupported claim 风险，但不会把本体术语当作用户经验的证据。
-- 在保存定制版 LaTeX 前校验最终合并结果，检查项目顺序、bullet 预算、Technical Skills 证据、unsupported skills，以及 bullet 是否保留具体机制深度。
+- 在保存定制版 LaTeX 前校验最终合并结果，检查项目顺序、bullet 预算、Technical Skills 证据、unsupported skills、summary 质量，以及 bullet 是否保留具体机制深度。质量闸门结果会以结构化 issue 返回，包含 source、severity、code、message 和 repairable 元数据。
 - 返回分阶段简历定制摘要，包括角色画像、提取出的 JD 要求、项目排名、项目区块校验和 gap report，用于展示缺失或较弱证据以及应避免的 unsupported keywords。
 - 把较长的 agent 工作作为可取消的后台任务运行，支持状态、消息、结果读取和重新运行时的实时指导补充。
 - 在生成前检查 Project Memory 是否有足够 STAR 证据，并保存用户补充的项目事实。
