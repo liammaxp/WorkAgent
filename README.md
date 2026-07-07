@@ -34,7 +34,9 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Let the agent select the strongest truthful project mix for a role by removing weaker resume projects, updating bullets, or adding projects stored in memory. The tailored Projects section now prefers 2 projects for a one-page resume, allows 3 only when the third is job-critical, and gives higher-ranked projects more bullet space.
 - Let the agent tailor Project and Experience bullets through a stricter ReAct bullet writer that rejects stack-only, CRUD-only, UI-control-only, or broad-module-only wording unless the bullet names a concrete implementation method, substantive workflow capability, and value.
 - Let the agent tailor Experience bullets for the job description by reordering, rewriting, or removing weak and redundant bullets while preserving factual meaning. Removing an entire Experience entry requires explicit user approval.
-- Preserve the base resume's compact Technical Skills LaTeX style and reject generated skills sections that use visible bullets, placeholders, generic filler, or unsupported sentence fragments.
+- Preserve the base resume's compact Technical Skills LaTeX style, clean process/feature phrases out of generated skills, reclassify real user-backed skills into the expected categories, and reject visible bullets, placeholders, generic filler, duplicates, or unsupported sentence fragments.
+- Use a compact technical ontology to recognize JD technologies, aliases, cautious resume wording, and unsupported-claim risks without treating ontology terms as proof of user experience.
+- Validate final resume merges against project order, bullet budgets, Technical Skills evidence, unsupported skills, summary quality, and mechanism-rich bullet depth before saving the tailored LaTeX. Quality-gate results are returned as structured issues with source, severity, code, message, and repairability metadata.
 - Return a staged resume-tailoring summary with role profile, extracted JD requirements, project ranking, project-section validation, and a gap report that highlights missing or weak evidence and unsupported keywords to avoid.
 - Run long agent work as cancellable background tasks with status, messages, result retrieval, and live guidance capture for reruns.
 - Check whether Project Memory has enough STAR evidence for resume tailoring and save missing project facts before generation.
@@ -62,6 +64,9 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- backend/
 |   |-- main.py              # Core CLI agent, model adapters, tools, GitHub logic
 |   |-- api_server.py        # FastAPI HTTP layer for the frontend
+|   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
+|   |-- data/
+|   |   `-- tech_ontology.jsonl
 |   |-- memory_store.py      # Chroma persistence, local embeddings, semantic retrieval
 |   `-- requirements.txt     # Python dependencies
 |-- frontend/
@@ -81,6 +86,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- windows/                 # Windows .bat and PowerShell entry points
 |-- linux/                   # Linux .sh entry points
 |-- macos/                   # macOS double-click .command entry points
+|-- tests/                   # Backend regression tests for resume quality gates
 `-- README.md
 ```
 
@@ -88,8 +94,9 @@ The system has four main layers:
 
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
 2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
-3. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
-4. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
+4. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
+5. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
 
@@ -171,6 +178,8 @@ information/chroma/
 ```
 
 The `profile_facts` collection stores durable user and profile facts. The `github_evidence` collection stores approved repository and commit evidence. The `information/project_memory.json` file is a separate project-truth file generated from repository analysis, and resume tailoring uses it as the primary source before consulting Chroma evidence for supporting details.
+
+Repository analysis can also cache compact per-project facts in `information/project_compact_facts.json`. The resume pipeline uses these cached facts to keep prompt payloads small while preserving key modules, technical stack, contribution signals, metric candidates, risk flags, and JD relevance notes.
 
 New facts are embedded locally, compared with similar stored records, and then inserted, updated, or deduplicated. Retrieval also uses vector search when the agent provides a task, skill, or project query. The local embedder is deterministic and works offline without downloading an embedding model or sending private profile data to an external embedding API.
 
@@ -306,7 +315,7 @@ Agent Chat image requests use data URLs:
 
 `GET /api/output-file`, `POST /api/output-file/launch`, and `DELETE /api/output-file` let the frontend read, open with the desktop default application, or delete generated output files such as tailored resume text versions and exported PDF versions. Output history lists readable file names rather than timestamps and omits reserved current-working files. When analysis, tailored resume, cover letter, or interview prep generation produces unchanged content for the same company and role, WorkAgent reuses the matching history file instead of creating a duplicate numbered version.
 
-`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. The staged tailoring path also returns `role_profile`, `jd_requirements`, `project_ranking`, `project_section_validation`, and `gap_report` so the UI can show role classification, extracted requirements, selected/omitted projects, one-page allocation checks, missing evidence, weak bullet candidates, and unsafe unsupported keywords. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
+`POST /api/resume/tailor` accepts `allow_project_selection`, `allow_experience_removal`, and `include_application_hint`. Experience bullet tailoring is enabled by default, while removing an entire Experience entry is disabled unless the user explicitly enables it. The staged tailoring path also returns `role_profile`, `jd_requirements`, `project_ranking`, `project_section_validation`, and `gap_report` so the UI can show role classification, extracted requirements, selected/omitted projects, one-page allocation checks, missing evidence, weak bullet candidates, and unsafe unsupported keywords. The pipeline enriches JD requirements with the local tech ontology, but JD-only and ontology-only terms are moved to the gap report instead of Technical Skills unless user-specific evidence supports them. When `include_application_hint` is true, the response can include extracted `company`, `role`, `link`, and `notes` values for creating an application record.
 
 `POST /api/resume/star-check` reviews Project Memory and staged project candidates for missing STAR facts before tailoring. `POST /api/resume/star-fact` saves a user-provided project fact so later resume generation can stay evidence-grounded instead of inventing unsupported claims.
 
@@ -326,6 +335,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/interview_prep.txt`
 - `information/memory.json`
 - `information/project_memory.json`
+- `information/project_compact_facts.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -523,6 +533,12 @@ Backend syntax check:
 python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
 ```
 
+Resume quality-gate regression tests:
+
+```powershell
+python -m unittest tests\test_resume_quality_gates.py
+```
+
 Frontend production build:
 
 ```powershell
@@ -576,7 +592,15 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 
 - 分析已保存的职位描述，提取岗位要求、技能、职责、隐含期望和匹配度。
 - 编辑基础简历，并为当前岗位生成定制版 LaTeX 简历。
+- 允许 Agent 根据岗位选择最强且真实的项目组合：移除较弱项目、更新已有项目 bullet，或加入 Project Memory 中更匹配的项目。定制版 Projects 部分优先保持 2 个项目，只有第三个项目对岗位很关键时才使用 3 个，并给排名更高的项目更多 bullet 空间。
+- 通过更严格的 ReAct bullet writer 定制 Project 和 Experience bullet；如果 bullet 只是在堆技术栈、描述 CRUD、UI 控件或宽泛模块，而没有具体实现方法、实质工作流能力和价值，会被拒绝。
 - 允许 Agent 根据职位描述重排、改写或删除 Experience 中较弱和重复的 bullet，同时保持事实含义不变。删除整段 Experience 经历需要用户显式授权。
+- 保留基础简历紧凑的 Technical Skills LaTeX 样式，清理生成技能中的流程/功能描述短语，把真实且有用户证据支持的技能重新归类到预期类别，并拒绝可见 bullet、占位符、泛泛填充内容、重复项或无证据支持的技能片段。
+- 使用紧凑技术本体识别 JD 技术、别名、谨慎简历措辞和 unsupported claim 风险，但不会把本体术语当作用户经验的证据。
+- 在保存定制版 LaTeX 前校验最终合并结果，检查项目顺序、bullet 预算、Technical Skills 证据、unsupported skills、summary 质量，以及 bullet 是否保留具体机制深度。质量闸门结果会以结构化 issue 返回，包含 source、severity、code、message 和 repairable 元数据。
+- 返回分阶段简历定制摘要，包括角色画像、提取出的 JD 要求、项目排名、项目区块校验和 gap report，用于展示缺失或较弱证据以及应避免的 unsupported keywords。
+- 把较长的 agent 工作作为可取消的后台任务运行，支持状态、消息、结果读取和重新运行时的实时指导补充。
+- 在生成前检查 Project Memory 是否有足够 STAR 证据，并保存用户补充的项目事实。
 - 根据简历材料更新 Chroma 向量记忆；新增或更新前会先检索并对比相似记录。
 - 通过 Agent Chat 删除指定的长期记忆；删除项目时会同步清理 Chroma 画像记忆和 Project Memory。
 - 在 Agent Chat 中上传 JPG、PNG、GIF 或 WebP 图片，让支持视觉输入的模型识别图片并执行任务。
@@ -601,6 +625,9 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- backend/
 |   |-- main.py              # 核心 CLI agent、模型适配、工具、GitHub 逻辑
 |   |-- api_server.py        # 面向前端的 FastAPI HTTP 层
+|   |-- tech_ontology.py     # 紧凑技术 taxonomy 和安全声明辅助逻辑
+|   |-- data/
+|   |   `-- tech_ontology.jsonl
 |   |-- memory_store.py      # Chroma 持久化、本地向量化和语义检索
 |   `-- requirements.txt     # Python 依赖
 |-- frontend/
@@ -623,12 +650,13 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 `-- README.md
 ```
 
-系统主要分为四层：
+系统主要分为五层：
 
 1. `backend/main.py`：本地 agent 逻辑、模型适配器、文件工具、GitHub 上下文提取和 SQLite 投递记录。
 2. `backend/memory_store.py`：Chroma collections、确定性的本地向量化、写入前相似度对比、语义检索和旧 JSON 自动迁移。
-3. `backend/api_server.py`：Web UI 使用的 FastAPI 接口。
-4. `frontend/`：React + Vite 前端，包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面。
+3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
+4. `backend/api_server.py`：Web UI 使用的 FastAPI 接口。
+5. `frontend/`：React + Vite 前端，包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面。
 
 ## 模型配置
 
@@ -707,6 +735,8 @@ information/chroma/
 ```
 
 `profile_facts` collection 保存稳定的个人画像事实。`github_evidence` collection 保存已授权的仓库和 commit 证据。`information/project_memory.json` 是由仓库分析生成的独立项目事实文件，简历定制会先把它作为主来源，再读取 Chroma 证据补充代码、文件、commit 和 diff 细节。
+
+仓库分析也可以把每个项目的紧凑事实缓存到 `information/project_compact_facts.json`。简历流程会用这些缓存控制 prompt 大小，同时保留关键模块、技术栈、个人贡献信号、指标候选、风险提示和 JD 相关性说明。
 
 新增信息会先在本地完成向量化，再与已有记录进行相似度对比，最后决定新增、更新或去重。提取信息时，agent 也可以根据任务、技能或项目关键词进行语义检索。内置向量化器是确定性的本地实现，不会下载 embedding 模型，也不会把个人资料发送给外部 embedding API。
 
@@ -840,7 +870,9 @@ Agent Chat 图片请求使用 data URL：
 
 `GET /api/output-file`、`POST /api/output-file/launch` 和 `DELETE /api/output-file` 让前端读取、用桌面默认应用打开或删除生成输出文件，例如定制简历文本版本和导出的 PDF 版本。输出历史按可读文件名展示，而不是按时间戳展示，并且会排除保留的当前工作文件。当职位分析、定制简历、求职信或面试准备在同一公司和岗位下生成出未变化的内容时，WorkAgent 会复用匹配的历史文件，而不是创建重复的编号版本。
 
-`POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。分阶段定制流程还会返回 `role_profile`、`jd_requirements` 和 `gap_report`，用于展示角色分类、提取出的 JD 要求、缺失证据、较弱 bullet 候选和应避免的 unsupported keywords。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
+`POST /api/resume/tailor` 接受 `allow_project_selection`、`allow_experience_removal` 和 `include_application_hint`。Experience bullet 默认允许定制，但整段 Experience 经历默认不会删除，只有用户显式开启后才允许移除。分阶段定制流程还会返回 `role_profile`、`jd_requirements`、`project_ranking`、`project_section_validation` 和 `gap_report`，用于展示角色分类、提取出的 JD 要求、选中/省略的项目、一页简历分配检查、缺失证据、较弱 bullet 候选和应避免的 unsupported keywords。流程会用本地技术本体增强 JD 要求，但只有用户材料支持的技术才能进入 Technical Skills；仅来自 JD 或本体的术语会进入 gap report。`include_application_hint` 为 true 时，响应可以包含用于创建投递记录的 `company`、`role`、`link` 和 `notes` 字段。
+
+`POST /api/resume/star-check` 会在定制前检查 Project Memory 和分阶段项目候选是否缺少 STAR 事实。`POST /api/resume/star-fact` 会保存用户补充的项目事实，让后续简历生成继续基于证据，而不是编造 unsupported claims。
 
 `POST /api/resume/pdf-to-latex` 会把上传的 PDF 简历转换为可编辑 LaTeX，并保存为基础简历。`POST /api/resume/tailored/pdf` 会把当前定制版 LaTeX 简历编译成 PDF 输出文件。PDF 导出会为 `glyphtounicode`/`pdfgentounicode` 命令加上引擎兼容保护，并在简历需要这些设置时优先尝试 PDF-oriented LaTeX 编译命令。
 
@@ -858,6 +890,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/interview_prep.txt`
 - `information/memory.json`
 - `information/project_memory.json`
+- `information/project_compact_facts.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -1066,7 +1099,7 @@ npm run build
 
 ## 当前限制
 
-- 生成任务仍是同步请求，暂时没有流式输出或取消功能。
+- 较长生成任务可以在后台运行并取消，但还没有 token-by-token 流式输出。
 - GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
 - 简历和求职信没有内置文档预览或 DOCX 导出；安装 LaTeX 工具链后可以把定制简历导出为 PDF。
 - 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。
@@ -1074,7 +1107,7 @@ npm run build
 ## Roadmap
 
 - 扩展 Agent Chat 求职材料流程，加入职位分析和面试准备。
-- 增加任务队列、进度更新、取消功能和 WebSocket/SSE 流式输出。
+- 增加持久任务队列和 WebSocket/SSE 流式输出。
 - 增加结构化 GitHub 证据可视化。
 - 增加投递统计、批量操作和更丰富的搜索。
 - 增加文档预览和 DOCX 导出。

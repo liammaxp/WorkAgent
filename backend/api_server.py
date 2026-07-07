@@ -104,14 +104,15 @@ Hard source hierarchy:
 Compare the projects currently listed in resume.txt with the factual projects available in Project Memory.
 Choose the strongest project mix for the saved job description: you may remove a weaker resume project,
 update an existing project's bullets, or add a better-matching memory project that is not currently in the resume.
-If WorkAgent is relevant to the saved job description, treat it as a high-priority project because Project Memory
-identifies it as a local AI job application workspace connecting job analysis, tailored resumes, cover letters,
-interview preparation, memory, GitHub evidence, model configuration, and application tracking.
-Prefer a one-page resume. The Projects section should look intentionally prioritized. Prefer 2 projects,
-use 3 only when the third adds distinct job-relevant evidence, and never include more than 3. Allocate
-more bullets to the highest-ranked project. If there are 2 projects, the first project should usually have
-about 5 bullets and the second about 3. If there are 3 projects, use about 4, 3, and 1-2 bullets. Do not
-distribute bullets evenly unless the projects are genuinely equal in relevance and evidence strength.
+For every selected project, choose the project angle that best fits the role family and JD evidence rather than
+using a fixed description. Possible angles include backend APIs, evidence retrieval, validation loops, prompt
+compression, retry handling, support/process automation, structured operations workflows, data persistence,
+mobile flows, testing/debugging, or integration work when those claims are supported.
+Keep the resume concise and relevant; two pages are allowed when needed. The Projects section should look
+intentionally prioritized and evidence-backed. Prefer 2 projects, use 3 only when the third adds distinct
+job-relevant evidence, and avoid adding more than 3. Allocate more bullets to the highest-ranked project.
+Do not remove section headings, company/role/date lines, verified skills, or evidence-backed mechanisms solely
+for page length. If trimming is needed, remove filler, duplicate bullets, and weak generic wording first.
 Tailor the Experience section for the saved job description: you may reorder factual bullets, rewrite bullets
 for relevance and clarity, and remove weaker or redundant bullets. Preserve the factual meaning of the source resume.
 Keep every existing Experience entry unless the user explicitly allows removing entire Experience entries.
@@ -159,7 +160,16 @@ Resume Bullet Writing Rules:
   retry handling, dependency parsing, ranking/matching logic, or error recovery.
 - Prefer Used, Implemented, Automated, or Debugged as the bullet's main verb.
 - Avoid vague verbs such as leveraged, utilized, facilitated, enabled, supported unless necessary.
+- For Experience bullets, avoid repeating "Implemented" across bullets. Prefer varied factual verbs such as
+  Coordinated, Managed, Delivered, Tested, Debugged, Supported, Maintained, Organized, Collaborated,
+  Guided, or Prioritized when the evidence supports coordination, teamwork, debugging, delivery,
+  communication, or deadline-driven work.
 - Technology names should support the story, not become the whole story.
+- Do not use a single fixed description for a complex project. Select the project angle that best fits the target role.
+  Preserve the project's high-value mechanisms when evidence supports them. For complex local or multi-stage systems,
+  consider whether the role calls for emphasizing agent-style workflow, backend APIs, evidence retrieval,
+  validation loops, prompt compression, retry handling, support/process automation, integration, data handling,
+  or structured operations workflow. Use only evidence-supported claims.
 - The Projects section should look intentionally prioritized. Prefer 2 projects, use 3 only when the third
   adds distinct job-relevant evidence, and never include more than 3.
 - Allocate more bullets to the highest-ranked project. If there are 2 projects, the first project should
@@ -184,6 +194,10 @@ Technical Skills Rules:
 - Include only concrete, supported skill names. Do not include sentences, Chinese explanatory fragments,
   "...", "[truncated]", "more items", or generic filler such as API, automation, validation,
   requirements, reporting, or documentation by itself.
+- Do not include ontology category labels or generic category words as standalone skills. Never list
+  Backend, Frontend, or Embedding as standalone skills. If embedding/retrieval evidence is supported,
+  prefer semantic retrieval or vector search. Do not prioritize Cursor unless the JD clearly values it
+  and user-specific evidence supports it.
 - Merge duplicates and aliases, such as React/React.js, Git/GitHub, SQLite/better-sqlite3, and HTML/CSS.
 
 Resume bullet examples:
@@ -205,7 +219,7 @@ Save with save_tailored_resume when complete.
 """
 
 RESUME_BULLET_WRITER_PROMPT = """
-You are the mandatory ReAct resume bullet writer for WorkAgent.
+You are the mandatory ReAct resume bullet writer for this resume generation system.
 
 Use this mode for Project-section bullets and Experience-section bullets:
 1. STAR Check: identify Situation, Task, Action, and Result evidence for each candidate bullet.
@@ -220,6 +234,14 @@ Use Used / Implemented / Automated / Debugged when natural, then name the concre
 method, the substantive logic/workflow/business capability, and the result or value. Natural
 phrasing is allowed; do not force every bullet into an identical "to ..." sentence.
 Prefer: action verb + project/module + technical action + verified result/impact.
+
+Experience style:
+- For Experience-section bullets, avoid making every bullet start with Implemented.
+- Prefer varied action verbs when supported: Coordinated, Led, Managed, Organized, Translated,
+  Collaborated, Debugged, Delivered, Tested, Supported, Maintained, Guided, and Prioritized.
+- Experience bullets may emphasize coordination, requirements breakdown, teamwork, Git/GitHub
+  collaboration, debugging, deadline delivery, communication with designers/artists, and iterative
+  feedback. Do not turn every Experience bullet into a pure coding bullet.
 
 Rules:
 - Use only supported facts from the original resume, Project Memory, staged candidates, and approved evidence.
@@ -245,6 +267,11 @@ Rules:
 - Prefer concrete methods such as algorithms, retrieval/ranking logic, parsing, schema validation,
   state comparison, cache invalidation, chunked processing, retry/fallback handling, data flow
   orchestration, or debugging/root-cause isolation when supported by evidence.
+- Do not use a single fixed description for a complex project. Select the project angle that best fits the target role.
+  Preserve the project's high-value mechanisms when evidence supports them. For complex local or multi-stage systems,
+  consider whether the role calls for emphasizing agent-style workflow, backend APIs, evidence retrieval,
+  validation loops, prompt compression, retry handling, support/process automation, integration, data handling,
+  or structured operations workflow. Use only evidence-supported claims.
 - Each bullet should include at least 3 of these 5 elements: concrete method/tool, implemented
   function/process, technical or process challenge, user/business/engineering value, and role-relevant keyword.
 - Use the provided role profile, JD requirements, evidence card, role lens, allowed claims, and forbidden claims;
@@ -321,21 +348,239 @@ Rules:
   "project_memory": object
 """
 
+RESUME_LENGTH_MODE = "quality_first"
+RESUME_LENGTH_MODES = {"quality_first", "concise", "one_page", "hard_one_page"}
 PREFERRED_RESUME_PROJECTS = 2
 MAX_STAGED_PROJECTS = 3
+QUALITY_FIRST_LENGTH_RULE = (
+    "Keep the resume concise and relevant. Two pages are allowed when needed. Do not remove verified skills, "
+    "section headings, company names, role titles, dates, or evidence-backed mechanisms solely for page length. "
+    "If trimming is needed, remove filler, duplicate bullets, and weak generic wording first while preserving "
+    "section structure and key evidence."
+)
 PROJECT_PRIORITY_INSTRUCTION = (
-    "The Projects section should look intentionally prioritized. Prefer 2 projects, use 3 only when the "
-    "third adds distinct job-relevant evidence, and never include more than 3. Allocate more bullets to "
+    "The Projects section should look intentionally prioritized and evidence-backed. Prefer 2 projects, use 3 only when the "
+    "third adds distinct job-relevant evidence, and avoid adding more than 3. Allocate more bullets to "
     "the highest-ranked project. If there are 2 projects, the first project should usually have about "
     "5 bullets and the second about 3. If there are 3 projects, use about 4, 3, and 1-2 bullets. Do not "
     "distribute bullets evenly unless the projects are genuinely equal in relevance and evidence strength."
 )
+PROJECT_CONCISE_TRIM_ORDER = [
+    "Filler or generic wording",
+    "Duplicate bullets",
+    "Weak repetitive lower-ranked project bullets",
+    "Summary wording",
+    "Lower-signal optional project only when the user explicitly requests a shorter resume",
+]
 PROJECT_ONE_PAGE_CUT_ORDER = [
     "Weak or repetitive third project",
     "Lower-ranked project bullets",
     "Less relevant experience bullets",
     "Summary wording",
     "Top-ranked project bullets only as a last resort",
+]
+EXPERIENCE_PREFERRED_ACTION_VERBS = [
+    "Coordinated",
+    "Led",
+    "Managed",
+    "Organized",
+    "Translated",
+    "Collaborated",
+    "Debugged",
+    "Delivered",
+    "Tested",
+    "Supported",
+    "Maintained",
+    "Guided",
+    "Prioritized",
+]
+RESUME_GLOBAL_POLICY = {
+    "policy_id": "resume_global_policy_v1",
+    "rules": [
+        "Do not invent unsupported technologies, tools, metrics, users, deployment, production scale, ownership, cost, revenue, or performance claims.",
+        "Evidence beats JD keyword matching; JD keywords and Tech Ontology terms are guidance, not proof.",
+        "JD-only and ontology-only skills must not enter Technical Skills.",
+        "Tech Ontology explains terminology and safe wording only; it does not prove user experience.",
+        QUALITY_FIRST_LENGTH_RULE,
+        "Final merge must not override ranking, evidence boundaries, forbidden claims, or staged section decisions.",
+    ],
+}
+PROJECT_SECTION_POLICY = {
+    "policy_id": "project_section_policy_v1",
+    "preferred_project_count": PREFERRED_RESUME_PROJECTS,
+    "maximum_project_count": MAX_STAGED_PROJECTS,
+    "project_count_rule": "Prefer 2 projects; use 3 only when distinct and relevant; never more than 3.",
+    "bullet_budget_rule": "Lead project should have the most or equal-most bullet depth; lower-ranked projects stay concise.",
+    "order_rule": "Project order follows role relevance, evidence strength, and project_ranking.",
+    "trim_order": PROJECT_CONCISE_TRIM_ORDER,
+    "lead_project_rule": "When trimming, cut filler and duplicates before reducing lead-project mechanism evidence.",
+}
+TECHNICAL_SKILLS_POLICY = {
+    "policy_id": "technical_skills_policy_v1",
+    "rules": [
+        "Skills can be broader than final project bullets but cannot be broader than truthful user background.",
+        "Every included skill needs at least one user-specific source.",
+        "Block JD-only and ontology-only skills from Technical Skills; move them to gap_report.",
+        "Block ontology category labels and generic practice/activity labels such as Backend, Frontend, Embedding, API, automation, debugging, testing, documentation, requirements, reporting, and validation.",
+        "Use vector search or semantic retrieval instead of standalone Embedding when retrieval evidence supports it.",
+        "Use cautious wording for medium-confidence skills.",
+        "Do not prioritize Cursor unless strongly role-relevant and evidence-backed.",
+        "Include OpenAI API only when role-relevant and supported by project evidence.",
+    ],
+}
+BULLET_DEPTH_POLICY = {
+    "policy_id": "bullet_depth_policy_v1",
+    "rules": [
+        "Prefer action verb + technical mechanism/tool + implemented function/process + solved problem/value.",
+        "Top-ranked projects receive richer mechanism detail.",
+        "Lower-ranked projects keep only their strongest role-relevant mechanisms.",
+        "Select a role-appropriate project angle instead of using one fixed project description.",
+        "Preserve evidence-supported high-value mechanisms for top-ranked complex projects.",
+        "Do not invent metrics; rewrite unsupported metric-like claims as qualitative value.",
+        "Do not flatten mechanism-rich bullets into product summaries.",
+    ],
+}
+EXPERIENCE_STYLE_POLICY = {
+    "policy_id": "experience_style_policy_v1",
+    "preferred_verbs": EXPERIENCE_PREFERRED_ACTION_VERBS,
+    "rules": [
+        "Use varied action verbs; do not make every Experience bullet start with Implemented.",
+        "Use Implemented only for concrete technical construction.",
+        "Use coordination verbs for team, process, delivery, communication, Git/GitHub, debugging, testing, and deadline work.",
+        "Avoid unnatural phrases like implemented coordination.",
+        "Do not turn every Experience bullet into a pure coding bullet.",
+    ],
+}
+FINAL_MERGE_POLICY = {
+    "policy_id": "final_merge_policy_v1",
+    "authority": "Final merge is an editor, not a new writer.",
+    "must_preserve": [
+        "selected project angle",
+        "high-value mechanisms",
+        "compact project modules",
+        "project ranking",
+        "project order",
+        "bullet budgets",
+        "evidence boundaries",
+        "forbidden claims",
+        "mechanism-rich bullets",
+        "Technical Skills evidence gating",
+        "Experience verb diversity",
+    ],
+    "must_not": [
+        "reorder projects unless project_ranking says so",
+        "re-add omitted projects",
+        "expand lower-ranked projects beyond budget",
+        "reduce lead project below lower-ranked projects without validation reason",
+        "add JD-only or ontology-only skills",
+        "add unsupported tools or metrics",
+        "flatten strong bullets into vague descriptions",
+        "rewrite mechanism-rich bullets into generic product summaries",
+        "normalize varied Experience verbs back to Implemented",
+    ],
+    "may": ["remove duplication", "lightly shorten wording", "fix grammar", "preserve LaTeX structure", "preserve quality-first length constraints"],
+    "trim_order": PROJECT_CONCISE_TRIM_ORDER,
+}
+PROMPT_STAGE_INVENTORY = [
+    {
+        "function": "jd_requirements_for_prompt / classify_role_family",
+        "purpose": "Parse JD requirements and role family.",
+        "inputs": ["job_description"],
+        "output_contract": "compact JD profile / role_profile dict",
+        "writes_content": False,
+        "major_rules": ["role classification", "JD keyword extraction", "evidence emphasis hints"],
+    },
+    {
+        "function": "enrich_jd_profile_with_tech_ontology / tech_context_for_texts",
+        "purpose": "Add compact ontology context and forbidden unsupported claim hints.",
+        "inputs": ["JD text", "project evidence text"],
+        "output_contract": "compact tech context entries",
+        "writes_content": False,
+        "major_rules": ["ontology is terminology only", "safe phrases", "do-not-claim-without-evidence"],
+    },
+    {
+        "function": "build_compact_skills_input / build_compact_skills_prompt",
+        "purpose": "Collect evidence-gated skill candidates and render Technical Skills recommendations.",
+        "inputs": ["JD profile", "project candidates", "current resume", "memory", "tech context"],
+        "output_contract": "skills candidate JSON and deterministic LaTeX skills section",
+        "writes_content": True,
+        "major_rules": ["Technical Skills evidence gating", "ontology contamination filter", "cautious wording"],
+    },
+    {
+        "function": "rank_projects_for_resume",
+        "purpose": "Select, order, and budget resume projects.",
+        "inputs": ["compact projects", "JD profile", "role_profile", "constraints"],
+        "output_contract": "project_ranking with selected/omitted projects and bullet_budget",
+        "writes_content": False,
+        "major_rules": ["prefer 2 max 3", "rank by relevance/evidence/depth", "lead gets most detail"],
+    },
+    {
+        "function": "run_resume_bullet_writer_tool / build_compact_bullet_writer_prompt",
+        "purpose": "Write Project or Experience bullets from compact evidence.",
+        "inputs": ["evidence_card", "depth_profile", "project_angle_profile", "compact modules", "role/JD profile", "policy payload"],
+        "output_contract": "bullet writer JSON with final_bullets and validation",
+        "writes_content": True,
+        "major_rules": ["STAR grounding", "role-aware project angle", "bullet depth", "metric safety", "experience verb diversity"],
+    },
+    {
+        "function": "build_summary_resume_candidate / build_compact_summary_prompt",
+        "purpose": "Recommend concise Summary/Profile wording.",
+        "inputs": ["project candidates", "skills candidate", "experience candidate", "JD"],
+        "output_contract": "summary candidate JSON",
+        "writes_content": True,
+        "major_rules": ["do not invent seniority/metrics", "use staged evidence"],
+    },
+    {
+        "function": "apply_resume_project_candidate / apply_resume_section_candidate / apply_projects_section_layout",
+        "purpose": "Merge staged candidates into LaTeX sections.",
+        "inputs": ["current_resume", "candidate", "project_ranking", "policy payload"],
+        "output_contract": "complete or target LaTeX section",
+        "writes_content": False,
+        "major_rules": ["final merge editor authority", "preserve staged decisions", "LaTeX validity"],
+    },
+    {
+        "function": "merge_retry_payload_for_prompt / final_merge_compact_prompt",
+        "purpose": "Create compact retry payloads for oversized merge prompts.",
+        "inputs": ["normal merge payload"],
+        "output_contract": "compact retry prompt/payload",
+        "writes_content": False,
+        "major_rules": ["no raw diffs/source files", "retain claims/ranking/budgets/policies"],
+    },
+    {
+        "function": "validate_project_section_allocation / validate_project_value_preservation / validate_technical_skills / validate_bullet_depth",
+        "purpose": "Validate post-generation policies and trigger deterministic repair where possible.",
+        "inputs": ["merged LaTeX", "ranking", "skills candidates", "evidence cards"],
+        "output_contract": "validation dicts with issues and suggested fixes",
+        "writes_content": False,
+        "major_rules": ["project order/budgets", "selected project angle", "skills evidence gating", "unsupported metrics/tools", "mechanism preservation"],
+    },
+]
+PROMPT_RULE_AUDIT = [
+    {
+        "rule_family": "project_count_and_budget",
+        "previous_duplication": ["resume tailor prompt", "project writer prompt", "layout merge prompt", "retry merge prompt"],
+        "single_source": "PROJECT_SECTION_POLICY",
+    },
+    {
+        "rule_family": "skills_evidence_gating",
+        "previous_duplication": ["Technical Skills prompt", "skills compact prompt", "skills validation", "final merge prompt"],
+        "single_source": "TECHNICAL_SKILLS_POLICY",
+    },
+    {
+        "rule_family": "ontology_authority",
+        "previous_duplication": ["JD enrichment", "skills writer", "bullet writer", "final merge"],
+        "single_source": "RESUME_GLOBAL_POLICY + TECHNICAL_SKILLS_POLICY",
+    },
+    {
+        "rule_family": "metric_and_forbidden_claim_safety",
+        "previous_duplication": ["bullet writer", "bullet depth validator", "merge prompts", "skills validator"],
+        "single_source": "RESUME_GLOBAL_POLICY + BULLET_DEPTH_POLICY",
+    },
+    {
+        "rule_family": "final_merge_authority",
+        "previous_duplication": ["project merge prompt", "layout prompt", "retry merge prompt"],
+        "single_source": "FINAL_MERGE_POLICY",
+    },
 ]
 MAX_STAGED_TEXT_CHARS = 12000
 MAX_PROMPT_FILES_PER_REPO = 12
@@ -345,13 +590,19 @@ MAX_PROMPT_SIGNAL_CHARS = 240
 MAX_PROMPT_FILE_SUMMARY_CHARS = 500
 MAX_PROMPT_EVIDENCE_CHARS = 9000
 MAX_TECH_ONTOLOGY_PROMPT_ENTRIES = 10
+MAX_TECH_ONTOLOGY_BULLET_ENTRIES = 8
 MAX_TECH_ONTOLOGY_ENTRY_CHARS = 800
 MAX_TECH_ONTOLOGY_SAFE_PHRASES = 5
 MAX_TECH_ONTOLOGY_WEAK_PHRASES = 3
 MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS = 5
 MAX_SKILL_CANDIDATES_FOR_PROMPT = 40
 MAX_BULLET_DEPTH_MECHANISMS = 12
+MAX_BULLET_DEPTH_FUNCTIONS = 10
 MAX_BULLET_DEPTH_PROBLEMS = 8
+MAX_BULLET_DEPTH_ROLE_SIGNALS = 8
+MAX_PROJECT_MODULES = 10
+MAX_PROJECT_HIGH_VALUE_MECHANISMS = 12
+MAX_PROJECT_ANGLE_CANDIDATES = 4
 PROXY_SAFE_MAX_INPUT_CHARS = 25000
 PROXY_SAFE_HARD_INPUT_CHARS = 35000
 OFFICIAL_DIRECT_MAX_INPUT_CHARS = 80000
@@ -474,6 +725,7 @@ class TailorBody(BaseModel):
     allow_experience_removal: bool = False
     include_application_hint: bool = False
     forceChunking: bool = False
+    length_mode: str = "quality_first"
     language: str = "zh"
     agent_progress_messages: list[dict[str, Any]] = Field(default_factory=list)
     agent_task_id: str = ""
@@ -517,6 +769,7 @@ class ResumePdfToLatexBody(BaseModel):
 
 class TailoredResumePdfBody(BaseModel):
     content: str = ""
+    language: str = ""
 
 
 class CoverLetterBody(BaseModel):
@@ -1567,7 +1820,11 @@ def save_file_content(name: str, content: str) -> None:
         return
     if name == "tailored_resume":
         hint = resolve_saved_application_hint()
-        content = normalize_latex_for_resume_output(content)
+        try:
+            original_resume = agent.read_resume()
+        except (FileNotFoundError, ValueError):
+            original_resume = ""
+        content, _quality_gate = prepare_tailored_resume_for_save(content, original_resume=original_resume)
         language_quality_error = tailored_resume_language_quality_error(content)
         if language_quality_error:
             raise ValueError(language_quality_error)
@@ -2030,8 +2287,74 @@ def remove_unnecessary_chinese_resume_bold(latex: str) -> str:
     return text
 
 
+SAFE_SECTION_TITLEFORMAT = (
+    r"\titleformat{\section}{\vspace{-4pt}\scshape\large\bfseries}{}{0em}{}[\titlerule\vspace{-5pt}]"
+)
+
+
+def normalize_section_titleformat_for_resume_export(latex: str) -> str:
+    r"""Collapse any \titleformat{\section}{...} definition onto a single safe line.
+
+    Multi-line or blank-line-containing \titleformat definitions cause xelatex/pdflatex
+    "Runaway argument" / "Paragraph ended before \ttl@format@ii was complete" errors.
+    """
+    text = str(latex or "")
+    if "\\titleformat{\\section}" not in text and "\\titleformat*{\\section}" not in text:
+        return text
+
+    def consume_group(source: str, start: int, open_char: str, close_char: str) -> int:
+        depth = 1
+        pos = start + 1
+        n = len(source)
+        while pos < n and depth:
+            if source[pos] == open_char:
+                depth += 1
+            elif source[pos] == close_char:
+                depth -= 1
+            pos += 1
+        return pos
+
+    result = []
+    index = 0
+    length = len(text)
+    marker_variants = ["\\titleformat{\\section}", "\\titleformat*{\\section}"]
+    while index < length:
+        match_start = -1
+        for marker in marker_variants:
+            found = text.find(marker, index)
+            if found != -1 and (match_start == -1 or found < match_start):
+                match_start = found
+        if match_start == -1:
+            result.append(text[index:])
+            break
+        result.append(text[index:match_start])
+        # Consume the command token and every consecutive {..}/[..] group that follows
+        # (skipping whitespace/newlines), which covers the full multi-line definition
+        # including optional [shape] and trailing [after] groups.
+        cursor = text.find("{", match_start)
+        while cursor < length:
+            if text[cursor] == "{":
+                cursor = consume_group(text, cursor, "{", "}")
+            elif text[cursor] == "[":
+                cursor = consume_group(text, cursor, "[", "]")
+            elif text[cursor] in " \t\r\n":
+                look = cursor
+                while look < length and text[look] in " \t\r\n":
+                    look += 1
+                if look < length and text[look] in "{[":
+                    cursor = look
+                    continue
+                break
+            else:
+                break
+        result.append(SAFE_SECTION_TITLEFORMAT)
+        index = cursor
+    return "".join(result)
+
+
 def normalize_latex_for_resume_output(latex: str) -> str:
     text = normalize_latex_section_comment_newlines(latex)
+    text = normalize_section_titleformat_for_resume_export(text)
     if job_description_prefers_chinese():
         text = localize_latex_resume_headings(text)
         text = remove_unnecessary_chinese_resume_bold(text)
@@ -2205,10 +2528,57 @@ def completed_process_output(result: subprocess.CompletedProcess[str]) -> str:
     return (stdout + "\n" + stderr).strip()
 
 
+def pdf_compile_log_tail(log_path: Path, fallback: str = "", max_chars: int = 8000) -> str:
+    """Return the last ~max_chars of the LaTeX .log, decoded safely (never GBK)."""
+    text = ""
+    try:
+        if log_path.exists():
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    if not text:
+        text = fallback or ""
+    text = text.strip()
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text
+
+
+class PdfCompileError(Exception):
+    """Structured LaTeX compilation failure carrying tex/log paths and a bounded log tail."""
+
+    def __init__(self, message: str, tex_path: str = "", log_path: str = "", log_tail: str = ""):
+        super().__init__(message)
+        self.message = message
+        self.tex_path = tex_path
+        self.log_path = log_path
+        self.log_tail = log_tail
+
+    def to_response(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "type": "PdfCompileError",
+            "message": self.message,
+            "texPath": self.tex_path,
+            "logPath": self.log_path,
+            "logTail": self.log_tail,
+        }
+
+
 def compile_tailored_resume_pdf(latex: str, company: str = "", role: str = "") -> Path:
     document = agent.extract_latex_document(latex)
     if not document:
         raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
+    section_validation = validate_resume_section_structure(document)
+    if not section_validation.get("ok"):
+        raise resume_quality_gate_error(
+            {
+                "ok": False,
+                "blocking_issues": section_validation.get("issues", []),
+                "structure": section_validation,
+            },
+            "Tailored resume has invalid Experience or Projects section structure.",
+        )
     validation_issues = agent.latex_resume_validation_issues(document)
     if validation_issues:
         raise HTTPException(
@@ -2252,18 +2622,26 @@ def compile_tailored_resume_pdf(latex: str, company: str = "", role: str = "") -
             break
 
         output = completed_process_output(result)
-        log_tail = "\n".join(output.splitlines()[-20:])
+        log_tail = "\n".join(output.splitlines()[-40:])
         failures.append(f"{Path(command[0]).name} failed:\n{log_tail or 'No compiler output.'}")
 
+    log_path = LATEX_BUILD_DIR / f"{stem}.log"
     if result is None or result.returncode != 0:
-        raise HTTPException(
-            status_code=400,
-            detail="LaTeX PDF export failed. Compiler log:\n" + "\n\n".join(failures),
+        raise PdfCompileError(
+            message="LaTeX failed to compile the tailored resume.",
+            tex_path=str(tex_path),
+            log_path=str(log_path) if log_path.exists() else "",
+            log_tail=pdf_compile_log_tail(log_path, "\n\n".join(failures)),
         )
 
     built_pdf = LATEX_BUILD_DIR / f"{stem}.pdf"
     if not built_pdf.exists():
-        raise HTTPException(status_code=500, detail="LaTeX compiler finished but no PDF was produced.")
+        raise PdfCompileError(
+            message="LaTeX compiler finished but no PDF was produced.",
+            tex_path=str(tex_path),
+            log_path=str(log_path) if log_path.exists() else "",
+            log_tail=pdf_compile_log_tail(log_path, "\n\n".join(failures)),
+        )
 
     shutil.copyfile(built_pdf, output_pdf)
     return output_pdf
@@ -2821,6 +3199,52 @@ def safe_model_call(
         final_prompt, compact_payload = safe_builder_prompt(map_reduce_result)
         compact_input_chars = estimate_input_size(final_prompt)
         use_compact_input = True
+
+    if should_use_proxy_safe_mode(decision) and compact_builder:
+        current_chars = estimate_input_size(final_prompt)
+        if current_chars > soft_limit:
+            if caller == "run_resume_bullet_writer_tool":
+                preflight_targets = [
+                    BULLET_WRITER_RETRY_COMPACT_CHARS,
+                    BULLET_WRITER_EMERGENCY_COMPACT_CHARS,
+                    8000,
+                ]
+            elif caller == "build_summary_resume_candidate":
+                preflight_targets = [12000, 9000, 7000]
+            else:
+                preflight_targets = [
+                    min(18000, int(soft_limit * 0.75)),
+                    min(12000, int(soft_limit * 0.5)),
+                    8000,
+                ]
+            seen_targets: set[int] = set()
+            for index, target_chars in enumerate(preflight_targets):
+                target_chars = max(4000, int(target_chars))
+                if target_chars in seen_targets:
+                    continue
+                seen_targets.add(target_chars)
+                if current_chars <= soft_limit:
+                    break
+                retry_mode = "emergency" if index == len(preflight_targets) - 1 or target_chars <= 10000 else "retry"
+                compact_result = invoke_safe_builder(
+                    compact_builder,
+                    decision=decision,
+                    soft_limit=soft_limit,
+                    hard_limit=hard_limit,
+                    max_chars=target_chars,
+                    caller=caller,
+                    compact_payload=compact_payload,
+                    retry_mode=retry_mode,
+                    retry_target_chars=target_chars,
+                )
+                next_prompt, next_payload = safe_builder_prompt(compact_result)
+                next_chars = estimate_input_size(next_prompt)
+                if next_chars < current_chars or next_chars <= soft_limit:
+                    final_prompt = next_prompt
+                    compact_payload = next_payload
+                    compact_input_chars = next_chars
+                    current_chars = next_chars
+                    use_compact_input = True
 
     final_input_chars = estimate_input_size(final_prompt)
     print(
@@ -4276,6 +4700,42 @@ def compact_value_for_prompt(value: Any, max_string_chars: int = 1200, max_list_
     return truncate_text(value, max_string_chars)
 
 
+def resume_policy_payload(*policy_names: str) -> dict[str, Any]:
+    policy_map = {
+        "global": RESUME_GLOBAL_POLICY,
+        "project": PROJECT_SECTION_POLICY,
+        "skills": TECHNICAL_SKILLS_POLICY,
+        "bullet_depth": BULLET_DEPTH_POLICY,
+        "experience": EXPERIENCE_STYLE_POLICY,
+        "final_merge": FINAL_MERGE_POLICY,
+    }
+    names = policy_names or ("global",)
+    payload = {
+        name: compact_value_for_prompt(policy_map[name], 260, 8)
+        for name in names
+        if name in policy_map
+    }
+    return payload
+
+
+def stage_policy_payload(stage: str = "") -> dict[str, Any]:
+    stage_key = str(stage or "").lower()
+    names = ["global"]
+    if stage_key in {"project", "project_writer", "project_section"}:
+        names.extend(["project", "bullet_depth"])
+    elif stage_key in {"experience", "experience_writer"}:
+        names.extend(["experience", "bullet_depth"])
+    elif stage_key in {"skills", "technical_skills"}:
+        names.append("skills")
+    elif stage_key in {"summary"}:
+        names.extend(["project", "skills"])
+    elif stage_key in {"merge", "final_merge", "retry_merge", "layout"}:
+        names.extend(["project", "skills", "bullet_depth", "experience", "final_merge"])
+    else:
+        names.extend(["project", "skills", "bullet_depth", "experience", "final_merge"])
+    return resume_policy_payload(*names)
+
+
 def short_signal(value: Any, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> str:
     return truncate_text(str(value or "").strip(), max_chars)
 
@@ -4302,6 +4762,91 @@ def append_resume_output_unique(items: list[str], value: Any, limit: int, max_ch
         return
     if text and text not in items and len(items) < limit:
         items.append(text)
+
+
+def clean_resume_signal(value: Any, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> str:
+    text = short_signal(value, max_chars)
+    if not text:
+        return ""
+    text = TRUNCATED_PLACEHOLDER_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:-")
+    return text
+
+
+def append_clean_resume_signal_unique(
+    items: list[str],
+    value: Any,
+    limit: int,
+    max_chars: int = MAX_PROMPT_SIGNAL_CHARS,
+) -> None:
+    text = clean_resume_signal(value, max_chars)
+    if text and text not in items and len(items) < limit:
+        items.append(text)
+
+
+RESUME_BULLET_SIMILARITY_STOPWORDS = {
+    "across",
+    "application",
+    "applications",
+    "built",
+    "data",
+    "debugged",
+    "generated",
+    "implemented",
+    "improved",
+    "keep",
+    "local",
+    "logic",
+    "multiple",
+    "project",
+    "projects",
+    "records",
+    "resume",
+    "support",
+    "supported",
+    "supporting",
+    "system",
+    "used",
+    "workflow",
+    "workflows",
+}
+
+
+def resume_bullet_keywords(value: Any) -> set[str]:
+    return {
+        word.lower()
+        for word in re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,}\b", str(value or ""))
+        if word.lower() not in RESUME_BULLET_SIMILARITY_STOPWORDS
+    }
+
+
+def resume_bullets_are_similar(left: Any, right: Any) -> bool:
+    left_text = str(left or "")
+    right_text = str(right or "")
+    if normalize_match_text(left_text) == normalize_match_text(right_text):
+        return True
+    left_keywords = resume_bullet_keywords(left_text)
+    right_keywords = resume_bullet_keywords(right_text)
+    if not left_keywords or not right_keywords:
+        return False
+    common = left_keywords & right_keywords
+    return len(common) >= 5 and len(common) / max(1, min(len(left_keywords), len(right_keywords))) >= 0.35
+
+
+def append_resume_budget_bullet_unique(
+    items: list[str],
+    value: Any,
+    limit: int,
+    max_chars: int = MAX_PROMPT_SIGNAL_CHARS,
+) -> None:
+    text = short_signal(value, max_chars)
+    if is_truncated_placeholder_text(text):
+        return
+    if not text or len(items) >= limit:
+        return
+    if any(resume_bullets_are_similar(text, existing) for existing in items):
+        return
+    items.append(text)
 
 
 def classify_prompt_signal_priority(signal: str) -> int:
@@ -4632,6 +5177,11 @@ def candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "role_lens": compact_value_for_prompt(candidate.get("role_lens", {}), 700, 8),
         "tech_ontology_context": compact_value_for_prompt(candidate.get("tech_ontology_context", []), 500, 5),
         "bullet_depth_profile": compact_value_for_prompt(candidate.get("bullet_depth_profile", {}), 700, 8),
+        "project_angle_profile": compact_value_for_prompt(candidate.get("project_angle_profile", {}), 700, 8),
+        "project_modules": compact_value_for_prompt(candidate.get("project_modules", []), 500, MAX_PROJECT_MODULES),
+        "role_angle_bullet_candidates": compact_value_for_prompt(candidate.get("role_angle_bullet_candidates", []), 500, 8),
+        "project_value_validation": compact_value_for_prompt(candidate.get("project_value_validation", {}), 360, 6),
+        "bullet_depth_validation": compact_value_for_prompt(candidate.get("bullet_depth_validation", {}), 260, 5),
         "allowed_claims": compact_value_for_prompt(candidate.get("allowed_claims", []), 400, MAX_PROMPT_CLAIMS),
         "forbidden_claims": compact_value_for_prompt(candidate.get("forbidden_claims", []), 400, MAX_PROMPT_CLAIMS),
         "validation": validation_for_prompt(candidate.get("bullet_writer_validation"), candidate_id=candidate_id, project=str(project_name or "")),
@@ -5366,6 +5916,12 @@ def looks_like_latex_fragment(content: Any) -> bool:
 def validate_complete_resume_or_raise(resume_latex: str, error_detail: str) -> str:
     if not agent.looks_like_latex_resume(resume_latex):
         raise HTTPException(status_code=400, detail=error_detail)
+    section_validation = validate_resume_section_structure(resume_latex)
+    if not section_validation.get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{error_detail} " + " ".join(section_validation.get("issues", [])),
+        )
     validation_issues = agent.latex_resume_validation_issues(resume_latex)
     if validation_issues:
         raise HTTPException(
@@ -5373,6 +5929,704 @@ def validate_complete_resume_or_raise(resume_latex: str, error_detail: str) -> s
             detail=f"{error_detail} " + " ".join(validation_issues),
         )
     return resume_latex
+
+
+def skip_latex_space_and_comments(source: str, position: int) -> int:
+    index = position
+    while index < len(source):
+        if source[index].isspace():
+            index += 1
+            continue
+        if source[index] == "%":
+            newline = source.find("\n", index)
+            if newline == -1:
+                return len(source)
+            index = newline + 1
+            continue
+        break
+    return index
+
+
+def latex_group_end(source: str, start: int, open_char: str = "{", close_char: str = "}") -> int:
+    if start < 0 or start >= len(source) or source[start] != open_char:
+        return -1
+    depth = 1
+    index = start + 1
+    while index < len(source):
+        char = source[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return -1
+
+
+def latex_command_braced_arguments(
+    source: str,
+    command_start: int,
+    command: str,
+) -> tuple[list[str], int, bool]:
+    cursor = command_start + len(command)
+    args: list[str] = []
+    while True:
+        cursor = skip_latex_space_and_comments(source, cursor)
+        if cursor >= len(source) or source[cursor] != "{":
+            return args, cursor, True
+        group_end = latex_group_end(source, cursor)
+        if group_end == -1:
+            return args, cursor, False
+        args.append(source[cursor + 1 : group_end - 1])
+        cursor = group_end
+
+
+def latex_command_braced_argument_count(source: str, command: str, start: int = 0) -> int:
+    command_start = start if start >= 0 and str(source or "").startswith(command, start) else str(source or "").find(command, max(0, start))
+    if command_start == -1:
+        return 0
+    args, _end, valid = latex_command_braced_arguments(str(source or ""), command_start, command)
+    return len(args) if valid else -1
+
+
+def latex_resume_macro_arity_issues(latex: str) -> list[str]:
+    text = str(latex or "")
+    checks = [
+        ("experience", r"\resumeSubheading", 4, "Experience entry heading"),
+        ("projects", r"\resumeProjectHeading", 2, "Project entry heading"),
+    ]
+    issues: list[str] = []
+    for section_name, command, expected, label in checks:
+        section = find_latex_section(text, section_name)
+        if not section:
+            continue
+        section_text = section.get("text", "")
+        for match in re.finditer(re.escape(command) + r"\b", section_text):
+            args, _end, valid = latex_command_braced_arguments(section_text, match.start(), command)
+            line = text.count("\n", 0, section["start"] + match.start()) + 1
+            if not valid:
+                issues.append(f"Line {line}: {label} has an unterminated braced argument.")
+            elif len(args) != expected:
+                issues.append(f"Line {line}: {command} must have {expected} braced arguments; found {len(args)}.")
+    return issues
+
+
+def last_latex_command_before(section_text: str, commands: list[str], position: int) -> tuple[str, int]:
+    best_command = ""
+    best_start = -1
+    for command in commands:
+        for match in re.finditer(re.escape(command) + r"\b", section_text[:position]):
+            if match.start() > best_start:
+                best_command = command
+                best_start = match.start()
+    return best_command, best_start
+
+
+def valid_heading_before_item_list(
+    section_text: str,
+    item_list_start: int,
+    heading_command: str,
+    expected_args: int,
+) -> bool:
+    command, heading_start = last_latex_command_before(section_text, [heading_command], item_list_start)
+    if not command or heading_start == -1:
+        return False
+    previous_list_end = section_text.rfind(r"\resumeItemListEnd", 0, item_list_start)
+    previous_sublist_end = section_text.rfind(r"\resumeSubHeadingListEnd", 0, item_list_start)
+    if heading_start < max(previous_list_end, previous_sublist_end):
+        return False
+    args, heading_end, valid = latex_command_braced_arguments(section_text, heading_start, heading_command)
+    return valid and len(args) == expected_args and heading_end <= item_list_start
+
+
+def section_starts_with_bullets_without_heading(
+    section_text: str,
+    heading_commands: list[str],
+) -> bool:
+    container = re.search(r"\\resumeSubHeadingListStart\b|\\begin\{itemize\}", section_text)
+    start = container.end() if container else 0
+    match = re.search(
+        r"\\(?:resumeItemListStart|resumeItem\b|item\b|resumeSubheading\b|resumeProjectHeading\b)",
+        section_text[start:],
+    )
+    if not match:
+        return False
+    token_start = start + match.start()
+    token = match.group(0)
+    if any(token.startswith(command) for command in heading_commands):
+        return False
+    return True
+
+
+def validate_resume_section_structure(latex: str) -> dict[str, Any]:
+    document = agent.extract_latex_document(str(latex or "")) or str(latex or "")
+    issues: list[str] = []
+    try:
+        issues.extend(agent.latex_structure_issues(document))
+    except Exception:
+        pass
+    issues.extend(latex_resume_macro_arity_issues(document))
+
+    experience = find_latex_section(document, "experience")
+    if experience:
+        section_text = experience.get("text", "")
+        if section_starts_with_bullets_without_heading(section_text, [r"\resumeSubheading"]):
+            issues.append("Experience section starts with bullets before a complete \\resumeSubheading.")
+        for match in re.finditer(r"\\resumeItemListStart\b", section_text):
+            if not valid_heading_before_item_list(section_text, match.start(), r"\resumeSubheading", 4):
+                line = document.count("\n", 0, experience["start"] + match.start()) + 1
+                issues.append(f"Line {line}: Experience bullets appear without a complete \\resumeSubheading heading.")
+
+    projects = find_latex_section(document, "projects")
+    if projects:
+        section_text = projects.get("text", "")
+        if section_starts_with_bullets_without_heading(section_text, [r"\resumeProjectHeading"]):
+            issues.append("Projects section starts with bullets before a complete \\resumeProjectHeading.")
+        for match in re.finditer(r"\\resumeItemListStart\b", section_text):
+            if not valid_heading_before_item_list(section_text, match.start(), r"\resumeProjectHeading", 2):
+                line = document.count("\n", 0, projects["start"] + match.start()) + 1
+                issues.append(f"Line {line}: Project bullets appear without a complete \\resumeProjectHeading heading.")
+
+    issues = sorted(set(issue for issue in issues if str(issue).strip()))
+    return {
+        "ok": not issues,
+        "valid": not issues,
+        "issues": issues,
+        "severity": "pass" if not issues else "blocking",
+    }
+
+
+def parsed_latex_heading_entries(latex: str, section_name: str, command: str, expected_args: int) -> list[dict[str, Any]]:
+    document = agent.extract_latex_document(str(latex or "")) or str(latex or "")
+    section = find_latex_section(document, section_name)
+    if not section:
+        return []
+    section_text = section.get("text", "")
+    matches = list(re.finditer(re.escape(command) + r"\b", section_text))
+    entries: list[dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        args, heading_end, valid = latex_command_braced_arguments(section_text, match.start(), command)
+        if not valid or len(args) != expected_args:
+            continue
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(section_text)
+        block = section_text[match.start() : next_start]
+        heading_latex = section_text[match.start() : heading_end].strip()
+        bullets = latex_resume_item_texts(block)
+        entries.append(
+            {
+                "heading_latex": heading_latex,
+                "args": args,
+                "bullets": bullets,
+                "plain_text": latex_fragment_plain_text(" ".join(args + bullets)),
+            }
+        )
+    return entries
+
+
+def candidate_latex_values(candidates: Any) -> list[str]:
+    values: list[str] = []
+    for item in listish(candidates):
+        if isinstance(item, str):
+            append_unique(values, item, 20)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ["latex", "content", "section", "text", "recommended_section", "heading_latex"]:
+            if item.get(key):
+                append_unique(values, str(item.get(key)), 20)
+        for nested_key in ["entry_recommendations", "selected_project_candidates"]:
+            if isinstance(item.get(nested_key), list):
+                values.extend(candidate_latex_values(item.get(nested_key)))
+    return values[:30]
+
+
+def project_heading_entry_from_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(candidate, dict):
+        return None
+    name = str(candidate.get("project_name") or candidate.get("source_name") or candidate.get("project_id") or "").strip()
+    if not name:
+        return None
+    techs: list[str] = []
+    evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
+    for value in listish(candidate.get("skills_to_emphasize")) + listish(evidence_card.get("technologies")):
+        skill = clean_rendered_skill_name(clean_resume_skill_name(value))
+        if skill:
+            append_resume_output_unique(techs, skill, 5)
+    tech_suffix = f" $|$ \\emph{{{latex_escape_text(', '.join(techs[:5]))}}}" if techs else ""
+    heading = f"\\resumeProjectHeading\n  {{\\textbf{{{latex_escape_text(name)}}}{tech_suffix}}}{{}}"
+    return {
+        "heading_latex": heading,
+        "args": [name, ", ".join(techs)],
+        "bullets": candidate_bullet_texts(candidate),
+        "plain_text": latex_fragment_plain_text(name + " " + " ".join(candidate_bullet_texts(candidate))),
+    }
+
+
+def heading_candidates_for_repair(
+    original_resume: str = "",
+    staged_experience_candidates: Any = None,
+    staged_project_candidates: Any = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    experience_entries = parsed_latex_heading_entries(original_resume, "experience", r"\resumeSubheading", 4)
+    project_entries = parsed_latex_heading_entries(original_resume, "projects", r"\resumeProjectHeading", 2)
+
+    for latex_value in candidate_latex_values(staged_experience_candidates):
+        experience_entries.extend(parsed_latex_heading_entries(latex_value, "experience", r"\resumeSubheading", 4))
+    for latex_value in candidate_latex_values(staged_project_candidates):
+        project_entries.extend(parsed_latex_heading_entries(latex_value, "projects", r"\resumeProjectHeading", 2))
+    for candidate in listish(staged_project_candidates):
+        if isinstance(candidate, dict):
+            entry = project_heading_entry_from_candidate(candidate)
+            if entry:
+                project_entries.append(entry)
+
+    def dedupe(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            key = normalize_match_text(entry.get("heading_latex", ""))
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(entry)
+        return result
+
+    return dedupe(experience_entries), dedupe(project_entries)
+
+
+def best_heading_for_bullets(
+    candidates: list[dict[str, Any]],
+    bullets: list[str],
+    used_indexes: set[int],
+) -> tuple[int, dict[str, Any] | None]:
+    available = [(index, candidate) for index, candidate in enumerate(candidates) if index not in used_indexes]
+    if not available:
+        return -1, None
+    if len(available) == 1:
+        return available[0]
+    bullet_text = latex_fragment_plain_text(" ".join(bullets))
+    scored = []
+    for index, candidate in available:
+        candidate_text = str(candidate.get("plain_text") or " ".join(candidate.get("bullets", [])))
+        scored.append((_bullet_token_overlap(bullet_text, candidate_text), index, candidate))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    if scored and scored[0][0] >= 0.05:
+        return scored[0][1], scored[0][2]
+    return -1, None
+
+
+def item_list_block(section_text: str, item_start: int) -> str:
+    end_match = re.search(r"\\resumeItemListEnd\b", section_text[item_start:])
+    if not end_match:
+        return section_text[item_start:]
+    return section_text[item_start : item_start + end_match.end()]
+
+
+def malformed_heading_replacement_start(section_text: str, item_start: int, heading_command: str) -> int:
+    command, heading_start = last_latex_command_before(section_text, [heading_command], item_start)
+    if not command or heading_start == -1:
+        return item_start
+    previous_list_end = section_text.rfind(r"\resumeItemListEnd", 0, item_start)
+    previous_sublist_end = section_text.rfind(r"\resumeSubHeadingListEnd", 0, item_start)
+    if heading_start < max(previous_list_end, previous_sublist_end):
+        return item_start
+    return heading_start
+
+
+def repair_missing_headings_in_section(
+    resume_latex: str,
+    section_name: str,
+    heading_command: str,
+    expected_args: int,
+    candidates: list[dict[str, Any]],
+) -> str:
+    if not candidates:
+        return resume_latex
+    section = find_latex_section(resume_latex, section_name)
+    if not section:
+        return resume_latex
+    section_text = section.get("text", "")
+    replacements: list[tuple[int, int, str]] = []
+    used: set[int] = set()
+    for match in re.finditer(r"\\resumeItemListStart\b", section_text):
+        if valid_heading_before_item_list(section_text, match.start(), heading_command, expected_args):
+            continue
+        bullets = latex_resume_item_texts(item_list_block(section_text, match.start()))
+        candidate_index, candidate = best_heading_for_bullets(candidates, bullets, used)
+        if not candidate:
+            continue
+        used.add(candidate_index)
+        start = malformed_heading_replacement_start(section_text, match.start(), heading_command)
+        heading = str(candidate.get("heading_latex") or "").strip()
+        if heading:
+            replacements.append((start, match.start(), heading.rstrip() + "\n"))
+    if not replacements:
+        return resume_latex
+    for start, end, replacement in reversed(replacements):
+        section_text = section_text[:start].rstrip() + "\n" + replacement + section_text[end:].lstrip()
+    return resume_latex[: section["start"]] + section_text + resume_latex[section["end"] :]
+
+
+def repair_missing_section_headings(
+    generated_latex: str,
+    original_resume: str = "",
+    staged_experience_candidates: Any = None,
+    staged_project_candidates: Any = None,
+) -> str:
+    document = agent.extract_latex_document(str(generated_latex or "")) or str(generated_latex or "")
+    experience_candidates, project_candidates = heading_candidates_for_repair(
+        original_resume,
+        staged_experience_candidates,
+        staged_project_candidates,
+    )
+    repaired = repair_missing_headings_in_section(
+        document,
+        "experience",
+        r"\resumeSubheading",
+        4,
+        experience_candidates,
+    )
+    repaired = repair_missing_headings_in_section(
+        repaired,
+        "projects",
+        r"\resumeProjectHeading",
+        2,
+        project_candidates,
+    )
+    return repaired
+
+
+def quality_issue(
+    source: str,
+    severity: str,
+    code: str,
+    message: Any,
+    repairable: bool = False,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "severity": severity if severity in {"blocking", "warning", "info"} else "warning",
+        "code": code,
+        "message": str(message or "").strip(),
+        "repairable": bool(repairable),
+    }
+
+
+def dedupe_quality_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    severity_rank = {"blocking": 0, "warning": 1, "info": 2}
+    filtered = [item for item in issues if isinstance(item, dict) and str(item.get("message") or "").strip()]
+    for issue in sorted(
+        filtered,
+        key=lambda item: (
+            severity_rank.get(str(item.get("severity")), 2),
+            str(item.get("source") or ""),
+            str(item.get("code") or ""),
+            str(item.get("message") or ""),
+        ),
+    ):
+        key = (str(issue.get("source") or ""), str(issue.get("code") or ""), str(issue.get("message") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(issue)
+    return deduped
+
+
+def structure_issue_code(message: Any) -> str:
+    text = str(message or "")
+    lower = text.lower()
+    if r"\resumesubheading" in lower and "must have" in lower:
+        return "MISSING_RESUME_SUBHEADING_ARGS"
+    if r"\resumeprojectheading" in lower and "must have" in lower:
+        return "MISSING_RESUME_PROJECT_HEADING_ARGS"
+    if "unterminated braced argument" in lower:
+        return "UNTERMINATED_MACRO_ARGUMENT"
+    if "missing a matching list end" in lower or "closes without a matching list start" in lower:
+        return "LATEX_LIST_STRUCTURE"
+    if "bullets appear without a complete" in lower or "starts with bullets before" in lower:
+        return "MISSING_ENTRY_HEADING"
+    return "STRUCTURE_VALIDATION"
+
+
+def structure_quality_issue(message: Any) -> dict[str, Any]:
+    return quality_issue("structure", "blocking", structure_issue_code(message), message, repairable=False)
+
+
+def latex_quality_issue(message: Any) -> dict[str, Any]:
+    text = str(message or "")
+    lower = text.lower()
+    if "technical skills" in lower:
+        return quality_issue("skills", "warning", "TECHNICAL_SKILLS_LATEX_OR_STYLE", text, repairable=True)
+    if "truncated placeholder" in lower or "placeholder text" in lower:
+        return quality_issue("content", "warning", "PLACEHOLDER_OR_TRUNCATED_TEXT", text, repairable=True)
+    fatal_markers = [
+        "no latex resume code found",
+        "missing required latex markers",
+        "closes without a matching list start",
+        "missing a matching list end",
+        "project heading without resume bullets",
+        "must have",
+        "unterminated",
+    ]
+    if any(marker in lower for marker in fatal_markers):
+        return quality_issue("latex", "blocking", "LATEX_VALIDATION", text, repairable=False)
+    return quality_issue("latex", "warning", "LATEX_NON_FATAL_VALIDATION", text, repairable=True)
+
+
+def clean_technical_skills_pollution_in_resume(document: str) -> tuple[str, dict[str, Any]]:
+    section = find_latex_section(document, "skills")
+    report: dict[str, Any] = {
+        "changed": False,
+        "removed": [],
+        "kept": [],
+        "reclassified": [],
+        "parsed_skill_count": 0,
+        "remaining_skill_count": 0,
+    }
+    if not section:
+        return document, report
+    grouped, _order = parse_rendered_technical_skills(section.get("text", ""))
+    parsed = [(category, skill) for category, skills in grouped.items() for skill in skills]
+    report["parsed_skill_count"] = len(parsed)
+    if not parsed:
+        return document, report
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_category, raw_skill in parsed:
+        cleaned_skill = clean_rendered_skill_name(raw_skill)
+        if not cleaned_skill or is_skill_pollution_name(raw_skill):
+            append_unique(report["removed"], str(raw_skill).strip(), 40)
+            continue
+        normalized = canonical_skill_name(cleaned_skill)
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        old_category = normalize_resume_skill_category(raw_category)
+        new_category = normalize_resume_skill_category("", normalized)
+        if old_category != new_category:
+            report["reclassified"].append({"skill": normalized, "from": old_category, "to": new_category})
+        report["kept"].append(normalized)
+        entries.append(
+            {
+                "skill": normalized,
+                "normalized_skill": normalized,
+                "category": new_category,
+                "sources": ["current_resume"],
+                "confidence": "medium",
+                "safe_to_include": True,
+            }
+        )
+    report["remaining_skill_count"] = len(entries)
+    if not entries:
+        report["changed"] = bool(report["removed"])
+        return document, report
+    replacement = render_full_technical_skills_section(entries, FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA)
+    changed = replacement.strip() != section.get("text", "").strip()
+    report["changed"] = bool(changed or report["removed"] or report["reclassified"])
+    if not changed and not report["changed"]:
+        return document, report
+    if not replacement.endswith("\n"):
+        replacement += "\n"
+    return document[: section["start"]] + replacement + document[section["end"] :], report
+
+
+def skills_cleanup_blocks(cleanup_report: dict[str, Any]) -> bool:
+    if not isinstance(cleanup_report, dict):
+        return False
+    return (
+        int(cleanup_report.get("parsed_skill_count") or 0) > 0
+        and int(cleanup_report.get("remaining_skill_count") or 0) == 0
+        and bool(cleanup_report.get("removed"))
+    )
+
+
+def resume_quality_gate(
+    document: str,
+    original_resume: str = "",
+    staged_experience_candidates: Any = None,
+    staged_project_candidates: Any = None,
+    repair: bool = True,
+) -> dict[str, Any]:
+    cleaned = agent.extract_latex_document(str(document or "")) or str(document or "")
+    cleaned = normalize_latex_for_resume_output(cleaned)
+    if repair:
+        cleaned = repair_missing_section_headings(
+            cleaned,
+            original_resume=original_resume,
+            staged_experience_candidates=staged_experience_candidates,
+            staged_project_candidates=staged_project_candidates,
+        )
+    cleanup = {"applied": False, "technical_skills": {}}
+    skills_cleanup: dict[str, Any] = {}
+    if repair:
+        cleaned, skills_cleanup = clean_technical_skills_pollution_in_resume(cleaned)
+        cleanup["technical_skills"] = skills_cleanup
+        cleanup["applied"] = bool(skills_cleanup.get("changed"))
+
+    structure = validate_resume_section_structure(cleaned)
+    latex_issues = agent.latex_resume_validation_issues(cleaned)
+    technical_skill_issues = agent.technical_skills_section_issues(cleaned)
+    skills_section = find_latex_section(cleaned, "skills")
+    technical_skills_validation = validate_technical_skills_section(
+        skills_section.get("text", "") if skills_section else "",
+        [],
+    )
+    project_missing_bullets = agent.project_headings_without_bullets(cleaned)
+    bullet_quality = resume_section_bullet_quality_issues(cleaned)
+    summary_quality = validate_summary_quality(cleaned)
+
+    all_issues: list[dict[str, Any]] = []
+    for issue in structure.get("issues", []):
+        all_issues.append(structure_quality_issue(issue))
+    structure_messages = {str(issue) for issue in structure.get("issues", [])}
+    for issue in latex_issues:
+        if str(issue) not in structure_messages:
+            all_issues.append(latex_quality_issue(issue))
+    for issue in technical_skill_issues:
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "warning",
+                "TECHNICAL_SKILLS_STYLE_OR_POLLUTION",
+                issue,
+                repairable=True,
+            )
+        )
+    for issue in technical_skills_validation.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "warning",
+                "TECHNICAL_SKILLS_CLEANUP_REMAINING",
+                issue,
+                repairable=True,
+            )
+        )
+    if project_missing_bullets:
+        all_issues.append(
+            quality_issue(
+                "structure",
+                "blocking",
+                "PROJECT_HEADING_WITHOUT_BULLETS",
+                "Project heading without resume bullets: " + ", ".join(project_missing_bullets) + ".",
+                repairable=False,
+            )
+        )
+    for issue in bullet_quality.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "bullets",
+                "warning",
+                "BULLET_QUALITY_REPAIRABLE",
+                issue,
+                repairable=True,
+            )
+        )
+    for issue in summary_quality.get("issues", []):
+        all_issues.append(
+            quality_issue(
+                "summary",
+                "warning",
+                "SUMMARY_QUALITY_REPAIRABLE",
+                issue,
+                repairable=True,
+            )
+        )
+    if skills_cleanup_blocks(skills_cleanup if repair else {}):
+        all_issues.append(
+            quality_issue(
+                "skills",
+                "blocking",
+                "TECHNICAL_SKILLS_EMPTY_AFTER_CLEANUP",
+                "Technical Skills cleanup removed every parsed skill and could not rebuild a usable section.",
+                repairable=False,
+            )
+        )
+
+    all_issues = dedupe_quality_issues(all_issues)
+    blocking = [issue for issue in all_issues if issue.get("severity") == "blocking"]
+    warnings = [issue for issue in all_issues if issue.get("severity") != "blocking"]
+    return {
+        "ok": not blocking,
+        "content": cleaned,
+        "blocking_issues": blocking,
+        "warnings": warnings,
+        "cleanup_applied": cleanup["applied"],
+        "cleanup": cleanup,
+        "quality_gate_sources": {
+            "structure": structure,
+            "latex": latex_issues,
+            "technical_skills": technical_skills_validation,
+            "bullets": bullet_quality,
+            "summary": summary_quality,
+        },
+        "structure": structure,
+        "latex_issues": latex_issues,
+        "technical_skill_issues": technical_skill_issues,
+        "technical_skills_validation": technical_skills_validation,
+        "project_headings_without_bullets": project_missing_bullets,
+        "bullet_quality": bullet_quality,
+        "summary_quality": summary_quality,
+    }
+
+
+def resume_quality_gate_error(gate: dict[str, Any], message: str = "Resume quality gate failed.") -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "ok": False,
+            "type": "ResumeQualityGateError",
+            "message": message,
+            "issues": gate.get("blocking_issues", []),
+            "quality_gate": {k: v for k, v in gate.items() if k != "content"},
+        },
+    )
+
+
+def validate_summary_quality(resume_latex: str) -> dict[str, Any]:
+    section = find_latex_section(resume_latex, "summary")
+    if not section:
+        return {"valid": True, "issues": [], "word_count": 0}
+    plain = latex_fragment_plain_text(section.get("text", ""))
+    plain = re.sub(r"\b(?:Professional Summary|Summary|Profile)\b", " ", plain, flags=re.IGNORECASE)
+    words = re.findall(r"[A-Za-z0-9+#./-]+", plain)
+    lower = plain.lower()
+    issues: list[str] = []
+    if len(words) > 75:
+        issues.append(f"Summary is too long ({len(words)} words); keep it around 55-70 words unless explicitly requested.")
+    if "eager to contribute" in lower or "passionate about contributing" in lower:
+        issues.append("Summary uses weak applicant boilerplate.")
+    if len(words) > 45 and plain.count(",") >= 8:
+        issues.append("Summary looks like keyword stuffing instead of evidence-backed positioning.")
+    if len(re.findall(r"\b(?:responsibilities|requirements|sdlc|troubleshooting|documentation|code review)\b", lower)) >= 4:
+        issues.append("Summary repeats broad JD responsibility terms instead of candidate evidence.")
+    return {"valid": not issues, "issues": issues, "word_count": len(words)}
+
+
+def prepare_tailored_resume_for_save(
+    document: str,
+    original_resume: str = "",
+    staged_experience_candidates: Any = None,
+    staged_project_candidates: Any = None,
+) -> tuple[str, dict[str, Any]]:
+    gate = resume_quality_gate(
+        document,
+        original_resume=original_resume,
+        staged_experience_candidates=staged_experience_candidates,
+        staged_project_candidates=staged_project_candidates,
+        repair=True,
+    )
+    if not gate.get("ok"):
+        raise resume_quality_gate_error(gate, "Tailored resume has blocking structure or LaTeX quality issues.")
+    return str(gate.get("content") or ""), gate
 
 
 def complete_resume_from_merge_response(
@@ -5384,6 +6638,7 @@ def complete_resume_from_merge_response(
     normalized_answer = strip_markdown_code_fence(answer)
     document = agent.extract_latex_document(normalized_answer)
     if document:
+        document = repair_missing_section_headings(document, original_resume=current_resume)
         return validate_complete_resume_or_raise(document, error_detail)
     if not looks_like_latex_fragment(normalized_answer):
         raise HTTPException(status_code=400, detail=error_detail)
@@ -5391,6 +6646,7 @@ def complete_resume_from_merge_response(
         merged = replace_resume_block(current_resume, target_block, normalized_answer)
     except HTTPException as error:
         raise HTTPException(status_code=400, detail=error_detail) from error
+    merged = repair_missing_section_headings(merged, original_resume=current_resume)
     return validate_complete_resume_or_raise(merged, error_detail)
 
 
@@ -5461,6 +6717,7 @@ def merge_retry_payload_for_prompt(original_payload: dict[str, Any]) -> dict[str
                 append_unique(forbidden_claims, claim, 10)
     payload = {
         "retry_reason": "normal merge payload exceeded model context window",
+        "prompt_policies": stage_policy_payload("retry_merge"),
         "compact_jd": jd_core_for_prompt(original_payload["job_description"]),
         "target_resume_block": target_block,
         "candidate": candidate_summary,
@@ -5473,7 +6730,7 @@ def merge_retry_payload_for_prompt(original_payload: dict[str, Any]) -> dict[str
             "Do not add AWS, Kubernetes, Terraform, Jenkins, Docker, or cloud claims unless allowed_claims explicitly support them.",
             PROJECT_PRIORITY_INSTRUCTION,
             "Do not re-add omitted projects or expand lower-ranked projects beyond their target bullet budget.",
-            "Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language. Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.",
+            "Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language. Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies. Preserve project ranking, project order, and bullet budgets. When trimming is necessary, cut filler, duplicate wording, and weak lower-ranked bullets before removing important mechanism details from the top-ranked project.",
         ],
         "length_budget": {
             "original_bullet_count": target_block.get("original_bullet_count", 0),
@@ -5496,12 +6753,12 @@ def build_retry_merge_prompt(payload: dict[str, Any]) -> str:
 You are receiving a compact emergency merge payload because the full resume merge payload exceeded the model context window.
 
 Use only the provided compact JD, target LaTeX block or section, candidate, and claim boundaries.
+Treat payload.prompt_policies as authoritative. Final merge is an editor, not a new writer.
 Preserve valid LaTeX. Do not invent technologies, impact metrics, deployment, ownership, or unsupported claims.
 Prefer the candidate wording that best matches the JD while remaining evidence-grounded.
-For Projects-section merges: {PROJECT_PRIORITY_INSTRUCTION}
-Preserve selected project order, keep omitted projects out, and reduce lower-ranked project bullets first when space is limited.
-Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
-Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
+For Projects-section merges, preserve project_ranking order and bullet budgets from payload.prompt_policies.project/final_merge.
+Keep omitted projects out, preserve Technical Skills evidence gating, preserve Experience verb diversity, and preserve mechanism-rich bullets.
+Do not flatten complex project value. Preserve the selected project angle, high-value mechanisms, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic product summaries.
 Keep the section/project length close to the original budget.
 Return only the merged LaTeX block or section. Do not include Markdown fences or explanation.
 
@@ -5544,6 +6801,7 @@ def compact_merge_candidate(candidate: Any, max_string_chars: int = 420, max_lis
         "forbidden_claims",
         "tech_ontology_context",
         "bullet_depth_profile",
+        "bullet_depth_validation",
         "validation",
         "risks",
     ]
@@ -5609,6 +6867,8 @@ def reduce_final_merge_payload_for_limit(payload: dict[str, Any], max_chars: int
     if prompt_size() <= max_chars:
         return reduced
 
+    if isinstance(reduced.get("prompt_policies"), dict):
+        reduced["prompt_policies"] = compact_value_for_prompt(reduced["prompt_policies"], 180, 5)
     reduced["candidate"] = compact_merge_candidate(reduced.get("candidate"), 420, 6)
     reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 420, 5)
     reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 180, 6)
@@ -5635,6 +6895,8 @@ def reduce_final_merge_payload_for_limit(payload: dict[str, Any], max_chars: int
     reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 240, 3)
     reduced["allowed_claims"] = compact_value_for_prompt(reduced.get("allowed_claims", []), 120, 3)
     reduced["forbidden_claims"] = compact_value_for_prompt(reduced.get("forbidden_claims", []), 120, 3)
+    if isinstance(reduced.get("prompt_policies"), dict):
+        reduced["prompt_policies"] = compact_value_for_prompt(reduced["prompt_policies"], 120, 3)
     reduced["formatting_rules"] = [
         "Return only the merged target LaTeX block or section.",
         "Preserve LaTeX list boundaries and do not invent unsupported claims.",
@@ -5652,6 +6914,8 @@ def reduce_final_merge_payload_for_limit(payload: dict[str, Any], max_chars: int
         reduced["compact_jd"] = compact_value_for_prompt(reduced.get("compact_jd"), 120, 2)
         reduced["allowed_claims"] = []
         reduced["forbidden_claims"] = []
+        if isinstance(reduced.get("prompt_policies"), dict):
+            reduced["prompt_policies"] = compact_value_for_prompt(reduced["prompt_policies"], 80, 2)
         if isinstance(target_block, dict):
             target_block["latex"] = compact_latex_for_merge_prompt(
                 target_block.get("latex"),
@@ -5750,18 +7014,52 @@ def project_display_name(project: dict[str, Any]) -> str:
     return str(project.get("project_name") or project.get("name") or project.get("project_id") or "Project").strip()
 
 
+def normalize_resume_length_mode(value: Any) -> str:
+    mode = str(value or RESUME_LENGTH_MODE).strip().lower().replace("-", "_")
+    if mode == "hard_one_page":
+        return "one_page"
+    if mode not in RESUME_LENGTH_MODES:
+        return RESUME_LENGTH_MODE
+    return mode
+
+
 def default_resume_constraints(resume_constraints: dict[str, Any] | None = None) -> dict[str, Any]:
+    requested_mode = None
+    if isinstance(resume_constraints, dict):
+        requested_mode = resume_constraints.get("length_mode") or resume_constraints.get("resume_length_mode")
+        if resume_constraints.get("prefer_one_page") is True and not requested_mode:
+            requested_mode = "one_page"
+        if resume_constraints.get("hard_one_page") is True:
+            requested_mode = "one_page"
+    length_mode = normalize_resume_length_mode(requested_mode)
+    one_page_requested = length_mode == "one_page"
     constraints = {
-        "prefer_one_page": True,
+        "length_mode": length_mode,
+        "prefer_one_page": one_page_requested,
+        "allow_two_pages": not one_page_requested,
+        "aggressive_trim": one_page_requested,
         "preferred_project_count": PREFERRED_RESUME_PROJECTS,
         "maximum_project_count": MAX_STAGED_PROJECTS,
         "project_priority_instruction": PROJECT_PRIORITY_INSTRUCTION,
+        "length_rule": QUALITY_FIRST_LENGTH_RULE if not one_page_requested else (
+            "The user explicitly requested a one-page resume. Trim filler, duplicate bullets, and weak generic "
+            "wording first; preserve section headings, employer/role/date lines, verified skills, and key evidence."
+        ),
         "two_project_budgets": [5, 3],
         "three_project_budgets": [4, 3, 2],
-        "one_page_cut_order": PROJECT_ONE_PAGE_CUT_ORDER,
+        "trim_order": PROJECT_ONE_PAGE_CUT_ORDER if one_page_requested else PROJECT_CONCISE_TRIM_ORDER,
+        "one_page_cut_order": PROJECT_ONE_PAGE_CUT_ORDER if one_page_requested else [],
     }
     if isinstance(resume_constraints, dict):
         constraints.update({key: value for key, value in resume_constraints.items() if value is not None})
+    constraints["length_mode"] = normalize_resume_length_mode(constraints.get("length_mode"))
+    constraints["prefer_one_page"] = constraints["length_mode"] == "one_page"
+    constraints["allow_two_pages"] = not constraints["prefer_one_page"]
+    constraints["aggressive_trim"] = constraints["prefer_one_page"]
+    if not constraints["prefer_one_page"]:
+        constraints["one_page_cut_order"] = []
+        constraints["trim_order"] = PROJECT_CONCISE_TRIM_ORDER
+        constraints["length_rule"] = QUALITY_FIRST_LENGTH_RULE
     return constraints
 
 
@@ -6139,6 +7437,11 @@ def rank_projects_for_resume(
             + resume_value * 0.10
         )
         focus_areas = project_focus_areas(card, role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+        angle_profile = build_project_angle_profile(card, role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+        angle_score = 0
+        if isinstance(angle_profile.get("available_angles"), list) and angle_profile["available_angles"]:
+            angle_score = int(angle_profile["available_angles"][0].get("fit_score") or 0)
+            total_score = bounded_score(total_score + max(0, angle_score - 55) * 0.08)
         scored_projects.append(
             {
                 "project_card": card,
@@ -6153,6 +7456,8 @@ def rank_projects_for_resume(
                 "resume_value_score": resume_value,
                 "confidence_score": confidence_score,
                 "total_score": total_score,
+                "selected_angle": angle_profile.get("selected_angle"),
+                "project_angle_profile": compact_value_for_prompt(angle_profile, 500, 6),
                 "matched_jd_terms": jd_hits[:8],
                 "matched_role_terms": role_hits[:8],
                 "focus_areas": focus_areas,
@@ -6221,6 +7526,8 @@ def rank_projects_for_resume(
                 "resume_value_score": item["resume_value_score"],
                 "confidence_score": item["confidence_score"],
                 "total_score": item["total_score"],
+                "selected_angle": item.get("selected_angle"),
+                "project_angle_profile": item.get("project_angle_profile", {}),
                 "reason_selected": (
                     "Strong JD fit with supported evidence"
                     if item["matched_jd_terms"]
@@ -6261,6 +7568,8 @@ def rank_projects_for_resume(
             ],
             "preferred_project_count": constraints.get("preferred_project_count"),
             "maximum_project_count": constraints.get("maximum_project_count"),
+            "length_mode": constraints.get("length_mode"),
+            "trim_order": constraints.get("trim_order"),
             "one_page_cut_order": constraints.get("one_page_cut_order"),
         },
     }
@@ -6311,6 +7620,17 @@ def attach_candidate_claims_to_project_ranking(
                 entry["allowed_claims"] = candidate.get("allowed_claims", [])[:MAX_PROMPT_CLAIMS]
                 entry["forbidden_claims"] = candidate.get("forbidden_claims", [])[:MAX_PROMPT_CLAIMS]
                 entry["candidate_bullet_count"] = len(candidate.get("recommended_bullets") or candidate.get("final_bullets") or [])
+                entry["selected_angle"] = (candidate.get("project_angle_profile") or {}).get("selected_angle") if isinstance(candidate.get("project_angle_profile"), dict) else entry.get("selected_angle")
+                entry["project_angle_profile"] = compact_value_for_prompt(candidate.get("project_angle_profile", entry.get("project_angle_profile", {})), 500, 6)
+                entry["project_modules"] = compact_value_for_prompt(candidate.get("project_modules", []), 360, MAX_PROJECT_MODULES)
+                entry["high_value_mechanisms"] = compact_value_for_prompt(
+                    (candidate.get("project_angle_profile") or {}).get("high_value_mechanisms", [])
+                    if isinstance(candidate.get("project_angle_profile"), dict)
+                    else [],
+                    300,
+                    MAX_PROJECT_HIGH_VALUE_MECHANISMS,
+                )
+                entry["project_value_validation"] = compact_value_for_prompt(candidate.get("project_value_validation", {}), 260, 5)
                 break
     return ranking
 
@@ -6369,6 +7689,23 @@ def unsupported_claims_in_project_block(block: str, forbidden_claims: list[Any])
         if len(claim_text) >= 18 and claim_text in lower:
             append_unique(unsupported, claim, 12)
     return unsupported
+
+
+def project_name_contains(name: Any, *terms: str) -> bool:
+    lower = str(name or "").lower()
+    return all(term.lower() in lower for term in terms if term)
+
+
+def mechanism_group_hits(block: str, groups: list[tuple[str, list[str]]]) -> tuple[list[str], list[str]]:
+    lower = str(block or "").lower()
+    hits = []
+    missing = []
+    for label, terms in groups:
+        if any(term.lower() in lower for term in terms):
+            hits.append(label)
+        else:
+            missing.append(label)
+    return hits, missing
 
 
 def validate_project_section_allocation(
@@ -6483,6 +7820,37 @@ def validate_project_section_allocation(
             issues.append("The highest-ranked project does not receive the strongest or most detailed treatment.")
             suggested_fixes.append("Move detail back to rank #1 and trim lower-ranked projects first.")
 
+    value_preservation: dict[str, Any] = {}
+    for entry in selected:
+        heading = next((name for name in headings if project_labels_match(entry.get("project_name"), name)), "")
+        if not heading:
+            continue
+        block = block_by_heading.get(heading, "")
+        rank = rank_by_heading.get(heading, int(entry.get("rank") or 0))
+        budget = budget_by_heading.get(heading, project_bullet_budget(rank or 1, len(selected) or 1))
+        angle_profile = entry.get("project_angle_profile") if isinstance(entry.get("project_angle_profile"), dict) else {}
+        if entry.get("selected_angle") and not angle_profile.get("selected_angle"):
+            angle_profile = {**angle_profile, "selected_angle": entry.get("selected_angle")}
+        if entry.get("high_value_mechanisms") and not angle_profile.get("high_value_mechanisms"):
+            angle_profile = {**angle_profile, "high_value_mechanisms": entry.get("high_value_mechanisms")}
+        if entry.get("project_modules") and not angle_profile.get("project_modules"):
+            angle_profile = {**angle_profile, "project_modules": entry.get("project_modules")}
+        project_card = {
+            "project_id": entry.get("project_id"),
+            "project_name": entry.get("project_name"),
+            "project_rank": rank,
+            "project_modules": entry.get("project_modules", []),
+        }
+        if entry.get("forbidden_claims"):
+            project_card["evidence_card"] = {"forbidden_claims": entry.get("forbidden_claims", [])}
+        bullets = [latex_fragment_plain_text(item) for item in latex_resume_item_texts(block)]
+        preservation = validate_project_value_preservation(bullets, project_card, angle_profile, budget)
+        value_preservation[heading] = preservation
+        if not preservation.get("valid") and (rank in {1, 2} or preservation.get("high_mechanism_depth")):
+            issue_text = "; ".join(preservation.get("issues", [])[:3])
+            issues.append(f"{heading} lost selected project-angle value: {issue_text}")
+            suggested_fixes.extend(preservation.get("suggested_fixes", [])[:3])
+
     unsupported_claims = []
     for entry in selected:
         forbidden_claims = entry.get("forbidden_claims", []) if isinstance(entry.get("forbidden_claims"), list) else []
@@ -6505,6 +7873,7 @@ def validate_project_section_allocation(
         "top_project_has_strongest_detail": top_has_strongest_detail,
         "omitted_projects_readded": omitted_readded,
         "unsupported_claims": unsupported_claims,
+        "value_preservation": value_preservation,
         "suggested_fixes": suggested_fixes,
     }
 
@@ -6689,8 +8058,286 @@ def candidate_bullet_texts(candidate: dict[str, Any] | None) -> list[str]:
         text = item.get("bullet") if isinstance(item, dict) else item
         if is_truncated_placeholder_text(text):
             continue
-        append_resume_output_unique(bullets, text, 12)
+        append_resume_budget_bullet_unique(bullets, text, 12)
     return bullets
+
+
+def has_chinese_text(value: Any) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(value or "")))
+
+
+def sentence_join(items: list[str]) -> str:
+    values = [str(item or "").strip() for item in items if str(item or "").strip()]
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return ", ".join(values[:-1]) + f", and {values[-1]}"
+
+
+def clean_signal_list(values: Any, limit: int, max_chars: int = MAX_PROMPT_SIGNAL_CHARS) -> list[str]:
+    cleaned: list[str] = []
+    for item in listish(values):
+        append_clean_resume_signal_unique(cleaned, item, limit, max_chars)
+    return cleaned[:limit]
+
+
+def normalize_resume_bullet_sentence(value: Any) -> str:
+    text = clean_resume_signal(value, 360)
+    if not text:
+        return ""
+    return text.rstrip(".") + "."
+
+
+def analysis_bullet_candidates(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+    evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
+    depth_profile = candidate.get("bullet_depth_profile") if isinstance(candidate.get("bullet_depth_profile"), dict) else {}
+    variants: list[str] = []
+    for item in candidate.get("star_analysis", []) if isinstance(candidate.get("star_analysis"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        action = clean_resume_signal(item.get("action"), 300)
+        if not action:
+            continue
+        metric_validation = validate_metric_support(action, evidence_card, depth_profile)
+        append_resume_output_unique(
+            variants,
+            normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or action),
+            limit,
+            360,
+        )
+    for item in candidate.get("react_analysis", []) if isinstance(candidate.get("react_analysis"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        technical = clean_resume_signal(item.get("technical_capability"), 170)
+        business = clean_resume_signal(item.get("business_capability"), 150)
+        if not technical or not business:
+            continue
+        bullet = f"Implemented {technical} to support {business[0].lower() + business[1:] if business else business}."
+        metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+        append_resume_output_unique(
+            variants,
+            normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or bullet),
+            limit,
+            360,
+        )
+    return variants[:limit]
+
+
+def depth_profile_bullet_candidates(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+    depth_profile = candidate.get("bullet_depth_profile") if isinstance(candidate.get("bullet_depth_profile"), dict) else {}
+    evidence_card = candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {}
+    role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
+    jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
+    mechanisms = clean_signal_list(depth_profile.get("mechanisms", []), 8, 140)
+    functions = clean_signal_list(depth_profile.get("implemented_functions", []), 8, 120)
+    values = clean_signal_list(
+        listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])),
+        8,
+        140,
+    )
+    if not mechanisms:
+        for item in listish(evidence_card.get("technologies", [])) + listish(evidence_card.get("methods", [])):
+            append_clean_resume_signal_unique(mechanisms, item, 6, 120)
+    if not functions:
+        for item in listish(evidence_card.get("features", [])) + listish(evidence_card.get("methods", [])):
+            append_clean_resume_signal_unique(functions, item, 8, 120)
+    if not values:
+        for item in listish(evidence_card.get("business_or_user_value", [])) + listish(evidence_card.get("inferred_results", [])):
+            append_clean_resume_signal_unique(values, item, 6, 140)
+    if not mechanisms or not functions:
+        return []
+
+    fallback_value = values[0] if values else "supporting a more traceable and maintainable workflow"
+    variants: list[str] = []
+    first = rewrite_bullet_mechanism_first(
+        "Implemented project workflow.",
+        depth_profile,
+        role_profile,
+        jd_profile,
+    )
+    append_resume_output_unique(variants, first, limit, 360)
+
+    for index, mechanism in enumerate(mechanisms[:6]):
+        function_group = sentence_join(functions[index : index + 3] or functions[:3])
+        value = values[index % len(values)] if values else fallback_value
+        if not function_group:
+            continue
+        if index % 3 == 0:
+            bullet = f"Implemented {mechanism} for {function_group}, supporting {value}."
+        elif index % 3 == 1:
+            bullet = f"Built {mechanism} workflows around {function_group} to support {value}."
+        else:
+            bullet = f"Integrated {mechanism} with {function_group}, keeping the project workflow aligned with {value}."
+        metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+        append_resume_output_unique(variants, metric_validation.get("rewritten_bullet") or bullet, limit, 360)
+    return variants[:limit]
+
+
+def candidate_bullet_texts_for_budget(
+    candidate: dict[str, Any] | None,
+    budget: int,
+    *,
+    rank: int = 0,
+    total_projects: int = 0,
+) -> list[str]:
+    bullets = candidate_bullet_texts(candidate)
+    if budget <= 0:
+        return bullets
+    target = budget
+    if rank > 1 and total_projects > 1:
+        top_budget = project_bullet_budget(1, total_projects)
+        target = min(target, max(1, top_budget - 1))
+    needs_padding = rank == 1 and len(bullets) < target
+    if needs_padding and any(has_chinese_text(bullet) for bullet in bullets):
+        needs_padding = False
+    if needs_padding:
+        fallback_bullets = (
+            analysis_bullet_candidates(candidate, target + 3)
+            + role_angle_candidate_bullet_texts(candidate, target + 3)
+            + depth_profile_bullet_candidates(candidate, target + 3)
+        )
+        if rank == 1 and len(bullets) <= 1 and fallback_bullets:
+            merged: list[str] = []
+            append_resume_budget_bullet_unique(merged, fallback_bullets[0], target, 360)
+            for bullet in bullets:
+                append_resume_budget_bullet_unique(merged, bullet, target, 360)
+            for bullet in fallback_bullets[1:]:
+                append_resume_budget_bullet_unique(merged, bullet, target, 360)
+            bullets = merged
+        for bullet in fallback_bullets:
+            append_resume_budget_bullet_unique(bullets, bullet, target, 360)
+            if len(bullets) >= target:
+                break
+    return bullets[:target]
+
+
+def ensure_project_candidate_bullet_budget(
+    candidate: dict[str, Any],
+    budget: int,
+    rank: int,
+    total_projects: int,
+) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or budget <= 0:
+        return candidate
+    bullets = candidate_bullet_texts_for_budget(candidate, budget, rank=rank, total_projects=total_projects)
+    if not bullets:
+        return candidate
+    existing = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+    existing_map = {}
+    for item in existing if isinstance(existing, list) else []:
+        text = item.get("bullet") if isinstance(item, dict) else item
+        if text:
+            existing_map[normalize_match_text(str(text))] = item
+    rebuilt = []
+    for bullet in bullets:
+        source_item = existing_map.get(normalize_match_text(bullet))
+        if isinstance(source_item, dict):
+            rebuilt.append({**source_item, "bullet": bullet})
+        else:
+            rebuilt.append({"bullet": bullet, "evidence": "bullet_depth_profile", "confidence": "medium"})
+    candidate["recommended_bullets"] = rebuilt
+    candidate["final_bullets"] = rebuilt
+    validation = candidate.get("bullet_depth_validation") if isinstance(candidate.get("bullet_depth_validation"), dict) else {}
+    if rank == 1 and len(rebuilt) > len(existing if isinstance(existing, list) else []):
+        validation = {**validation, "budget_padding_added": len(rebuilt) - len(existing if isinstance(existing, list) else [])}
+        candidate["bullet_depth_validation"] = validation
+    candidate = repair_project_value_preservation_once(candidate, budget, rank, total_projects)
+    return candidate
+
+
+def repair_project_value_preservation_once(
+    candidate: dict[str, Any],
+    budget: int,
+    rank: int,
+    total_projects: int,
+) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return candidate
+    role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
+    jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
+    project_card = project_card_from_candidate(candidate)
+    if rank:
+        project_card["project_rank"] = rank
+    angle_profile = candidate.get("project_angle_profile") if isinstance(candidate.get("project_angle_profile"), dict) else {}
+    if not angle_profile:
+        angle_profile = build_project_angle_profile(
+            project_card,
+            role_profile,
+            jd_profile,
+            candidate.get("tech_ontology_context") if isinstance(candidate.get("tech_ontology_context"), list) else None,
+        )
+    angle_profile["project_rank"] = rank
+    if candidate.get("project_modules") and not angle_profile.get("project_modules"):
+        angle_profile["project_modules"] = candidate.get("project_modules")
+    candidate["project_angle_profile"] = angle_profile
+    if angle_profile.get("project_modules") and not candidate.get("project_modules"):
+        candidate["project_modules"] = angle_profile.get("project_modules")
+
+    bullets = candidate_bullet_texts(candidate)
+    validation = validate_project_value_preservation(bullets, project_card, angle_profile, budget)
+    candidate["project_value_validation"] = validation
+    if validation.get("valid"):
+        return candidate
+    if rank not in {1, 2} or not validation.get("high_mechanism_depth"):
+        return candidate
+    if bullets and any(has_chinese_text(bullet) for bullet in bullets):
+        validation["repair_skipped"] = "Chinese bullets present; avoid deterministic English rewrite."
+        candidate["project_value_validation"] = validation
+        return candidate
+
+    target = int(budget or len(bullets) or 3)
+    if rank > 1 and total_projects > 1:
+        target = min(target, max(1, project_bullet_budget(1, total_projects) - 1))
+    suggestions = [
+        item.get("bullet")
+        for item in generate_role_angle_bullet_candidates(project_card, angle_profile, role_profile, jd_profile, target)
+        if isinstance(item, dict)
+    ]
+    if not suggestions:
+        return candidate
+
+    merged: list[str] = []
+    for bullet in suggestions[:2]:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    for bullet in bullets:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    for bullet in suggestions[2:]:
+        append_resume_budget_bullet_unique(merged, bullet, target, 360)
+    if not merged:
+        return candidate
+
+    existing = candidate.get("recommended_bullets") or candidate.get("final_bullets") or []
+    existing_map = {}
+    for item in existing if isinstance(existing, list) else []:
+        text = item.get("bullet") if isinstance(item, dict) else item
+        if text:
+            existing_map[normalize_match_text(str(text))] = item
+    rebuilt = []
+    for bullet in merged[:target]:
+        source_item = existing_map.get(normalize_match_text(bullet))
+        if isinstance(source_item, dict):
+            rebuilt.append({**source_item, "bullet": bullet})
+        else:
+            rebuilt.append({"bullet": bullet, "evidence": "project_angle_profile", "confidence": "medium"})
+    candidate["recommended_bullets"] = rebuilt
+    candidate["final_bullets"] = rebuilt
+    after_validation = validate_project_value_preservation(
+        [item.get("bullet", "") for item in rebuilt],
+        project_card,
+        angle_profile,
+        budget,
+    )
+    after_validation["rewritten_once"] = True
+    after_validation["pre_rewrite_issues"] = validation.get("issues", [])
+    candidate["project_value_validation"] = after_validation
+    return candidate
 
 
 def project_candidate_matches_entry(candidate: dict[str, Any], entry: dict[str, Any]) -> bool:
@@ -6752,7 +8399,13 @@ def trim_project_block_to_budget(block: str, budget: int) -> str:
     return "".join(pieces)
 
 
-def build_project_block_from_candidate(entry: dict[str, Any], candidate: dict[str, Any] | None, budget: int) -> str:
+def build_project_block_from_candidate(
+    entry: dict[str, Any],
+    candidate: dict[str, Any] | None,
+    budget: int,
+    rank: int = 0,
+    total_projects: int = 0,
+) -> str:
     project_name = str(entry.get("project_name") or (candidate or {}).get("project_name") or "Project").strip()
     evidence_card = (candidate or {}).get("evidence_card") if isinstance((candidate or {}).get("evidence_card"), dict) else {}
     technologies = []
@@ -6761,7 +8414,7 @@ def build_project_block_from_candidate(entry: dict[str, Any], candidate: dict[st
     for item in evidence_card.get("technologies", []) if isinstance(evidence_card.get("technologies"), list) else []:
         append_resume_output_unique(technologies, item, 6)
     tech_suffix = f" $|$ \\emph{{{latex_escape_text(', '.join(technologies[:5]))}}}" if technologies else ""
-    bullets = candidate_bullet_texts(candidate)[:budget]
+    bullets = candidate_bullet_texts_for_budget(candidate, budget, rank=rank, total_projects=total_projects)
     return (
         "\\resumeProjectHeading\n"
         f"  {{\\textbf{{{latex_escape_text(project_name)}}}{tech_suffix}}}{{}}\n"
@@ -6802,23 +8455,32 @@ def enforce_project_section_allocation(
         for block in blocks
     }
     project_candidates = project_candidates or []
+    total_selected = len(selected)
     rebuilt_blocks = []
     for entry in selected:
-        budget = int(entry.get("bullet_budget") or project_bullet_budget(int(entry.get("rank") or len(rebuilt_blocks) + 1), len(selected)))
+        rank = int(entry.get("rank") or len(rebuilt_blocks) + 1)
+        budget = int(entry.get("bullet_budget") or project_bullet_budget(rank, total_selected))
+        if rank > 1 and total_selected > 1:
+            budget = min(budget, max(1, project_bullet_budget(1, total_selected) - 1))
         existing_block = ""
         for heading, block in block_by_heading.items():
             if project_labels_match(entry.get("project_name"), heading):
                 existing_block = block
                 break
         candidate = find_project_candidate_for_entry(project_candidates, entry)
-        candidate_bullets = candidate_bullet_texts(candidate)
+        candidate_bullets = candidate_bullet_texts_for_budget(
+            candidate,
+            budget,
+            rank=rank,
+            total_projects=total_selected,
+        )
         if existing_block:
             block = existing_block
             if candidate_bullets:
-                block = replace_project_block_bullets(block, candidate_bullets[:budget])
+                block = replace_project_block_bullets(block, candidate_bullets)
             block = trim_project_block_to_budget(block, budget)
         else:
-            block = build_project_block_from_candidate(entry, candidate, budget)
+            block = build_project_block_from_candidate(entry, candidate, budget, rank, total_selected)
         rebuilt_blocks.append(block.strip())
     if not rebuilt_blocks:
         return current_resume
@@ -7214,7 +8876,7 @@ def preserve_resume_snippet_lines(text: Any, source_name: str, max_lines: int = 
             score += 2
         scored.append((score, index, line))
     kept_indexes = sorted(index for score, index, _ in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_lines])
-    return "\n".join(lines[index] for index in kept_indexes)
+    return "\n".join(truncate_text(lines[index], 360) for index in kept_indexes)
 
 
 def compact_jd_terms(job_description: str) -> list[str]:
@@ -7472,6 +9134,929 @@ def project_text_for_tech_matching(evidence_card: dict[str, Any]) -> str:
     )
 
 
+ROLE_DEPTH_EMPHASIS = {
+    "software_engineering": [
+        "api",
+        "data model",
+        "validation",
+        "backend",
+        "frontend",
+        "integration",
+        "testing",
+        "build",
+        "maintainability",
+        "git",
+    ],
+    "it_analyst": [
+        "troubleshooting",
+        "documentation",
+        "scripting",
+        "support workflow",
+        "configuration",
+        "application support",
+        "process organization",
+        "requirements analysis",
+    ],
+    "infrastructure_devops": [
+        "setup automation",
+        "environment configuration",
+        "ci/cd",
+        "containerization",
+        "logging",
+        "monitoring",
+        "reliability",
+        "deployment workflow",
+    ],
+    "data_analyst": [
+        "sql",
+        "data import",
+        "validation",
+        "reporting",
+        "querying",
+        "structured records",
+        "analysis workflow",
+    ],
+    "product_business_analyst": [
+        "requirements analysis",
+        "process mapping",
+        "stakeholder needs",
+        "documentation",
+        "workflow design",
+        "user-facing value",
+    ],
+    "supply_chain_operations": [
+        "search",
+        "lookup",
+        "inventory records",
+        "update workflows",
+        "data accuracy",
+        "troubleshooting",
+        "documentation",
+        "technical coordination",
+        "process reliability",
+    ],
+}
+
+
+SAFE_QUALITATIVE_VALUES = [
+    "supporting repeatable setup",
+    "improving troubleshooting visibility",
+    "keeping project facts traceable",
+    "reducing unsupported claims",
+    "improving data accuracy",
+    "making workflows easier to maintain and extend",
+    "supporting persistent application state",
+    "organizing repeated preparation workflows",
+    "reducing manual review complexity",
+    "supporting clearer documentation and process tracking",
+]
+
+
+METRIC_CLAIM_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*%|\$\s?\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*x\b|"
+    r"\b\d[\d,]*\s*(?:users?|customers?|requests?|qps|rps|ms|milliseconds?|seconds?|hours?|days?|dollars?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+METRIC_CONCEPT_TERMS = [
+    "latency",
+    "response time",
+    "accuracy rate",
+    "accuracy improvement",
+    "adoption",
+    "production scale",
+    "cost savings",
+    "revenue",
+    "uptime",
+    "throughput",
+    "qps",
+    "p99",
+]
+
+
+def role_family_from_profiles(role_profile: dict[str, Any], jd_profile: dict[str, Any] | None = None) -> str:
+    if isinstance(role_profile, dict) and role_profile.get("role_family"):
+        return str(role_profile.get("role_family"))
+    if isinstance(jd_profile, dict):
+        nested = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
+        return str(nested.get("role_family") or jd_profile.get("role_family") or "software_engineering")
+    return "software_engineering"
+
+
+def role_depth_terms(role_profile: dict[str, Any], jd_profile: dict[str, Any] | None = None) -> list[str]:
+    family = role_family_from_profiles(role_profile, jd_profile)
+    terms = []
+    for item in ROLE_DEPTH_EMPHASIS.get(family, ROLE_DEPTH_EMPHASIS["software_engineering"]):
+        append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    for key in ["high_priority_keywords", "role_focus"]:
+        for item in listish(role_profile.get(key) if isinstance(role_profile, dict) else []):
+            append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    if isinstance(jd_profile, dict):
+        for key in ["evidence_types_to_emphasize", "responsibilities", "tools_platforms", "must_have_skills"]:
+            for item in listish(jd_profile.get(key, [])):
+                append_limited_unique(terms, item, MAX_BULLET_DEPTH_ROLE_SIGNALS, 80)
+    return terms[:MAX_BULLET_DEPTH_ROLE_SIGNALS]
+
+
+def evidence_text_for_depth(evidence_card: dict[str, Any], depth_profile: dict | None = None) -> str:
+    return json.dumps(
+        {
+            "evidence": evidence_card or {},
+            "depth": depth_profile or {},
+        },
+        ensure_ascii=False,
+    ).lower()
+
+
+def evidence_has_any(text: str, *needles: str) -> bool:
+    lower = str(text or "").lower()
+    return any(needle and needle.lower() in lower for needle in needles)
+
+
+def append_if_signal(items: list[str], evidence_text: str, phrase: str, *needles: str, limit: int = MAX_BULLET_DEPTH_MECHANISMS) -> None:
+    if evidence_has_any(evidence_text, *needles):
+        append_limited_unique(items, phrase, limit, 150)
+
+
+def append_if_all(items: list[str], evidence_text: str, phrase: str, *needles: str, limit: int = MAX_BULLET_DEPTH_MECHANISMS) -> None:
+    lower = str(evidence_text or "").lower()
+    if needles and all(needle.lower() in lower for needle in needles if needle):
+        append_limited_unique(items, phrase, limit, 150)
+
+
+PROJECT_MODULE_RULES: list[dict[str, Any]] = [
+    {
+        "module": "interface_layer",
+        "label": "interface layer",
+        "terms": ["react", "vite", "frontend", "screen", "ui", "page", "cli", "menu", "command line"],
+        "focus": ["React/Vite workflows", "CLI integration", "menu-driven workflow"],
+    },
+    {
+        "module": "backend_api_layer",
+        "label": "backend/API layer",
+        "terms": ["fastapi", "api", "route", "endpoint", "backend", "server"],
+        "focus": ["FastAPI backend APIs", "backend route handling", "API workflow"],
+    },
+    {
+        "module": "persistence_layer",
+        "label": "persistence layer",
+        "terms": ["sqlite", "database", "storage", "file storage", "project memory", "application tracking", "mongodb", "pymongo", "firestore"],
+        "focus": ["SQLite persistence", "database-backed records", "Project Memory", "local file storage"],
+    },
+    {
+        "module": "retrieval_search_layer",
+        "label": "retrieval/search layer",
+        "terms": ["chroma", "vector", "retrieval", "search", "lookup", "query", "filter", "sort", "pagination", "category"],
+        "focus": ["Chroma retrieval", "evidence retrieval", "database queries", "pagination", "sorting/filtering", "category browsing"],
+    },
+    {
+        "module": "validation_layer",
+        "label": "validation layer",
+        "terms": ["validation", "validate", "allowed", "forbidden", "unsupported claim", "required field", "unique", "duplicate"],
+        "focus": ["validation loop", "allowed/forbidden claim boundaries", "validation checks", "duplicate handling"],
+    },
+    {
+        "module": "automation_layer",
+        "label": "automation layer",
+        "terms": ["automation", "automated", "agent", "workflow", "orchestration", "candidate generation", "job parsing", "project ranking"],
+        "focus": ["agent-style workflow", "automation workflow", "tool-oriented orchestration", "candidate generation", "project ranking"],
+    },
+    {
+        "module": "testing_debugging_layer",
+        "label": "testing/debugging layer",
+        "terms": ["test", "testing", "debug", "troubleshoot", "error", "logging"],
+        "focus": ["testing/debugging layer", "troubleshooting visibility", "error handling"],
+    },
+    {
+        "module": "documentation_support_layer",
+        "label": "documentation/support layer",
+        "terms": ["documentation", "readme", "support", "setup", "configuration"],
+        "focus": ["documentation", "repeatable setup", "configuration workflow", "support workflow"],
+    },
+    {
+        "module": "merge_orchestration_layer",
+        "label": "merge/orchestration layer",
+        "terms": ["merge", "final merge", "section merge", "orchestration", "pipeline", "stage", "multi-stage"],
+        "focus": ["final merge", "section merge workflow", "multi-stage workflow", "tool-oriented orchestration"],
+    },
+    {
+        "module": "configuration_layer",
+        "label": "configuration layer",
+        "terms": ["config", "configuration", "model provider", "provider config", "api key", "environment", "setup"],
+        "focus": ["model provider configuration", "configuration management", "repeatable setup"],
+    },
+    {
+        "module": "reliability_layer",
+        "label": "reliability layer",
+        "terms": ["retry", "fallback", "context", "timeout", "cancel", "shutdown", "recovery"],
+        "focus": ["context-window retry", "retry/fallback logic", "reliability layer", "recovery path"],
+    },
+]
+
+
+PROJECT_HIGH_VALUE_MECHANISM_RULES: list[dict[str, Any]] = [
+    {"label": "agent-style workflow", "any": ["agent-style", "agent workflow", "agentic"], "all": []},
+    {"label": "agent-style workflow", "any": [], "all": ["agent", "workflow"]},
+    {"label": "tool-oriented orchestration", "any": ["tool-oriented", "tool orchestration", "orchestration"], "all": []},
+    {"label": "job parsing", "any": ["job parsing", "job-description parsing", "jd parsing", "job analysis"], "all": []},
+    {"label": "project ranking", "any": ["project ranking", "project-ranking", "rank_projects"], "all": []},
+    {"label": "candidate generation", "any": ["candidate generation"], "all": []},
+    {"label": "candidate generation", "any": [], "all": ["candidate", "generation"]},
+    {"label": "validation loop", "any": ["validation loop", "claim validation", "validation"], "all": []},
+    {"label": "final merge", "any": ["final merge", "section merge", "merge workflow"], "all": []},
+    {"label": "Tech Ontology usage", "any": ["tech ontology", "ontology"], "all": []},
+    {"label": "prompt compression", "any": ["prompt compression", "compact payload", "compact evidence"], "all": []},
+    {"label": "prompt compression", "any": [], "all": ["prompt", "compression"]},
+    {"label": "context-window retry", "any": ["context-window retry", "context retry"], "all": []},
+    {"label": "context-window retry", "any": [], "all": ["context", "retry"]},
+    {"label": "model provider configuration", "any": ["model provider", "provider config"], "all": []},
+    {"label": "Project Memory", "any": ["project memory", "project_memory"], "all": []},
+    {"label": "GitHub evidence", "any": ["github evidence", "github context"], "all": []},
+    {"label": "allowed/forbidden claim boundaries", "any": ["unsupported claim"], "all": []},
+    {"label": "allowed/forbidden claim boundaries", "any": [], "all": ["allowed", "forbidden"]},
+    {"label": "data import", "any": ["data import"], "all": ["import", "data"]},
+    {"label": "database queries", "any": ["database query", "database queries", "pymongo", "sql query"], "all": []},
+    {"label": "pagination", "any": ["pagination", "paginated"], "all": []},
+    {"label": "category browsing", "any": ["category browsing", "category loading"], "all": ["category", "browse"]},
+    {"label": "sorting/filtering", "any": ["sorting", "filtering", "price-descending"], "all": []},
+    {"label": "update workflow", "any": ["update workflow"], "all": ["update", "workflow"]},
+    {"label": "validation checks", "any": ["required-field validation", "unique id validation", "validation checks"], "all": []},
+    {"label": "duplicate handling", "any": ["duplicate handling", "duplicate-name"], "all": ["duplicate"]},
+    {"label": "CLI integration", "any": ["cli integration", "menu-driven cli", "command line"], "all": []},
+]
+
+
+PROJECT_ANGLE_RULES: list[dict[str, Any]] = [
+    {
+        "angle": "ai_agent_automation",
+        "use_when_roles": ["ai_engineer", "automation_engineer", "software_engineering", "developer_tools", "infrastructure_devops"],
+        "role_terms": ["ai", "llm", "agent", "automation", "developer tools", "devtools", "tooling", "workflow"],
+        "evidence_terms": [
+            "agent", "orchestration", "retrieval", "candidate generation", "validation", "prompt",
+            "context", "retry", "model provider", "allowed", "forbidden",
+        ],
+        "focus": [
+            "agent-style workflow", "tool-oriented orchestration", "evidence retrieval",
+            "candidate generation", "validation loop", "prompt compression", "context-window retry",
+        ],
+    },
+    {
+        "angle": "backend_workflow_system",
+        "use_when_roles": ["software_engineering", "backend_engineering", "developer_tools"],
+        "role_terms": ["backend", "api", "software", "developer", "fastapi", "database", "workflow"],
+        "evidence_terms": [
+            "fastapi", "api", "react", "vite", "sqlite", "chroma", "database", "configuration",
+            "merge", "backend", "route", "endpoint",
+        ],
+        "focus": [
+            "FastAPI backend APIs", "React/Vite workflows", "SQLite persistence", "Chroma retrieval",
+            "configuration management", "section merge workflow", "backend modularity",
+        ],
+    },
+    {
+        "angle": "it_support_process_automation",
+        "use_when_roles": ["it_analyst", "technology_analyst", "technical_support", "infrastructure_devops"],
+        "role_terms": ["it", "support", "technical support", "troubleshoot", "documentation", "configuration", "setup", "automation"],
+        "evidence_terms": ["automation", "troubleshoot", "debug", "documentation", "configuration", "setup", "support", "logging"],
+        "focus": [
+            "automation workflow", "troubleshooting visibility", "documentation",
+            "configuration workflow", "repeatable setup", "support workflow",
+        ],
+    },
+    {
+        "angle": "operations_validation_workflow",
+        "use_when_roles": [
+            "technical_solutions", "operations", "data_analyst", "business_analyst",
+            "product_business_analyst", "supply_chain_operations",
+        ],
+        "role_terms": ["operations", "solutions", "data", "business analyst", "records", "process", "validation", "review"],
+        "evidence_terms": [
+            "records", "evidence", "validation", "database", "review", "update", "workflow",
+            "tracking", "pagination", "category", "filter", "sort",
+        ],
+        "focus": [
+            "structured records", "evidence tracking", "validation boundaries", "process consistency",
+            "repeatable workflow", "database-backed workflow", "review and update workflows",
+        ],
+    },
+]
+
+
+def evidence_term_present(text: str, term: Any) -> bool:
+    lower = str(text or "").lower()
+    needle = str(term or "").strip().lower()
+    if not needle:
+        return False
+    if re.fullmatch(r"[a-z0-9+#./-]{2,4}", needle):
+        return bool(re.search(rf"(?<![a-z0-9+#./-]){re.escape(needle)}(?![a-z0-9+#./-])", lower))
+    return needle in lower
+
+
+def evidence_terms_present(text: str, terms: list[Any] | tuple[Any, ...]) -> bool:
+    return any(evidence_term_present(text, term) for term in terms)
+
+
+def project_rule_matches(text: str, rule: dict[str, Any]) -> bool:
+    any_terms = listish(rule.get("any", []))
+    all_terms = listish(rule.get("all", []))
+    if any_terms and evidence_terms_present(text, any_terms):
+        return True
+    if all_terms and all(evidence_term_present(text, term) for term in all_terms):
+        return True
+    return not any_terms and not all_terms
+
+
+def project_role_aliases(role_profile: dict[str, Any], jd_profile: dict[str, Any]) -> list[str]:
+    aliases: list[str] = []
+    for family in [role_profile.get("role_family")] + listish(role_profile.get("secondary_role_families", [])):
+        append_limited_unique(aliases, family, 12, 80)
+    profile_text = json.dumps(
+        {
+            "role_profile": compact_value_for_prompt(role_profile, 260, 8),
+            "jd_profile": compact_value_for_prompt(jd_profile, 360, 8),
+        },
+        ensure_ascii=False,
+    ).lower()
+    alias_rules = [
+        ("ai_engineer", ["ai", "llm", "machine learning", "agent", "prompt"]),
+        ("automation_engineer", ["automation", "automated", "workflow automation", "scripting"]),
+        ("developer_tools", ["developer tools", "devtools", "tooling", "internal tools"]),
+        ("backend_engineering", ["backend", "api", "server", "fastapi"]),
+        ("technology_analyst", ["technology analyst", "systems analyst", "technical analyst"]),
+        ("technical_support", ["technical support", "service desk", "application support", "troubleshoot"]),
+        ("technical_solutions", ["technical solutions", "solution engineer", "solutions analyst"]),
+        ("operations", ["operations", "process", "workflow", "records", "inventory"]),
+        ("business_analyst", ["business analyst", "requirements", "stakeholder"]),
+    ]
+    for alias, terms in alias_rules:
+        if evidence_terms_present(profile_text, terms):
+            append_limited_unique(aliases, alias, 12, 80)
+    return aliases[:12]
+
+
+def project_evidence_signal_values(
+    project_card: dict[str, Any],
+    tech_context: list[dict[str, Any]] | None = None,
+    limit: int = 100,
+) -> list[str]:
+    keys = [
+        "tech_stack", "tools", "workflows", "confirmed_features", "features", "methods",
+        "artifacts", "allowed_claims", "forbidden_claims", "business_or_user_value",
+        "inferred_results", "testing_signals", "debugging_signals", "documentation_signals",
+        "automation_signals", "keyModules", "userContributionSignals", "resumeRelevantClaims",
+        "technicalStack", "projectSummary", "recent_changes", "star_facts",
+    ]
+    values: list[str] = []
+    for key in keys:
+        for item in project_card_values(project_card, [key], limit):
+            append_limited_unique(values, item, limit, 220)
+    depth_profile = project_card.get("bullet_depth_profile") if isinstance(project_card.get("bullet_depth_profile"), dict) else {}
+    for key in ["mechanisms", "implemented_functions", "problems_solved", "role_relevance"]:
+        for item in listish(depth_profile.get(key, [])):
+            append_limited_unique(values, item, limit, 220)
+    for entry in tech_context or []:
+        if not isinstance(entry, dict):
+            continue
+        append_limited_unique(values, entry.get("term"), limit, 120)
+        for phrase in listish(entry.get("safe_resume_phrases", [])):
+            append_limited_unique(values, phrase, limit, 160)
+    return values[:limit]
+
+
+def project_signals_matching_terms(
+    project_card: dict[str, Any],
+    terms: list[Any],
+    limit: int = 6,
+) -> list[str]:
+    matches: list[str] = []
+    for value in project_evidence_signal_values(project_card, limit=100):
+        if evidence_terms_present(value, terms):
+            append_limited_unique(matches, value, limit, 170)
+    return matches[:limit]
+
+
+def extract_project_modules(
+    project_card: dict,
+    role_profile: dict | None = None,
+    jd_profile: dict | None = None,
+    tech_context: list[dict] | None = None,
+) -> list[dict]:
+    card = project_card if isinstance(project_card, dict) else {}
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, tech_context, 80)).lower()
+    if tech_context:
+        evidence_text += " " + json.dumps(compact_value_for_prompt(tech_context, 300, 8), ensure_ascii=False).lower()
+    role_terms = role_depth_terms(role_profile or {}, jd_profile or {})
+    modules: list[dict[str, Any]] = []
+    for rule in PROJECT_MODULE_RULES:
+        terms = listish(rule.get("terms", []))
+        matched_terms = [str(term) for term in terms if evidence_term_present(evidence_text, term)]
+        if not matched_terms:
+            continue
+        evidence = project_signals_matching_terms(card, terms, 5)
+        mechanisms: list[str] = []
+        for focus in listish(rule.get("focus", [])):
+            append_limited_unique(mechanisms, focus, 4, 140)
+        role_hits = [term for term in role_terms if evidence_term_present(evidence_text, term)]
+        score = bounded_score(24 + len(matched_terms) * 7 + len(evidence) * 4 + len(role_hits) * 5)
+        modules.append(
+            {
+                "module": rule.get("module"),
+                "label": rule.get("label"),
+                "score": score,
+                "matched_terms": matched_terms[:6],
+                "evidence": (evidence or matched_terms)[:5],
+                "mechanisms": mechanisms[:4],
+                "role_relevance": role_hits[:3],
+            }
+        )
+    modules.sort(key=lambda item: (-int(item.get("score", 0)), str(item.get("module") or "")))
+    return modules[:MAX_PROJECT_MODULES]
+
+
+def project_high_value_mechanisms(
+    project_card: dict[str, Any],
+    modules: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    card = project_card if isinstance(project_card, dict) else {}
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, limit=80)).lower()
+    mechanisms: list[str] = []
+    for rule in PROJECT_HIGH_VALUE_MECHANISM_RULES:
+        if project_rule_matches(evidence_text, rule):
+            append_limited_unique(mechanisms, rule.get("label"), MAX_PROJECT_HIGH_VALUE_MECHANISMS, 120)
+    for module in modules or []:
+        if not isinstance(module, dict):
+            continue
+        for mechanism in listish(module.get("mechanisms", [])):
+            append_limited_unique(mechanisms, mechanism, MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    for mechanism in listish(depth_profile.get("mechanisms", [])):
+        if evidence_terms_present(mechanism, ["workflow", "retrieval", "validation", "retry", "ranking", "merge", "query", "pagination", "configuration", "debug"]):
+            append_limited_unique(mechanisms, mechanism, MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    return mechanisms[:MAX_PROJECT_HIGH_VALUE_MECHANISMS]
+
+
+def angle_focus_from_evidence(
+    rule: dict[str, Any],
+    project_card: dict[str, Any],
+    modules: list[dict[str, Any]],
+    high_value_mechanisms: list[str],
+) -> list[str]:
+    focus: list[str] = []
+    evidence_text = project_card_signal_text(project_card)
+    evidence_terms = listish(rule.get("evidence_terms", []))
+    for item in listish(rule.get("focus", [])):
+        item_text = str(item)
+        if any(normalize_match_text(item_text) == normalize_match_text(mechanism) for mechanism in high_value_mechanisms):
+            append_limited_unique(focus, item, 8, 130)
+        elif evidence_terms_present(evidence_text, [item]) or evidence_terms_present(evidence_text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", item_text)):
+            append_limited_unique(focus, item, 8, 130)
+    for mechanism in high_value_mechanisms:
+        if evidence_terms_present(mechanism, evidence_terms + listish(rule.get("focus", []))):
+            append_limited_unique(focus, mechanism, 8, 130)
+    for module in modules:
+        module_text = json.dumps(compact_value_for_prompt(module, 180, 5), ensure_ascii=False).lower()
+        if evidence_terms_present(module_text, evidence_terms):
+            for mechanism in listish(module.get("mechanisms", [])):
+                append_limited_unique(focus, mechanism, 8, 130)
+    if not focus:
+        for signal in project_signals_matching_terms(project_card, evidence_terms, 4):
+            append_limited_unique(focus, signal, 8, 130)
+    return focus[:8]
+
+
+def build_project_angle_profile(
+    project_card: dict,
+    role_profile: dict,
+    jd_profile: dict,
+    tech_context: list[dict] | None = None,
+) -> dict:
+    card = project_card if isinstance(project_card, dict) else {}
+    modules = extract_project_modules(card, role_profile, jd_profile, tech_context)
+    high_value = project_high_value_mechanisms(card, modules)
+    evidence_text = project_card_signal_text(card) + " " + " ".join(project_evidence_signal_values(card, tech_context, 80)).lower()
+    role_text = json.dumps(
+        {
+            "role_profile": compact_value_for_prompt(role_profile or {}, 260, 8),
+            "jd_profile": compact_value_for_prompt(jd_profile or {}, 360, 8),
+        },
+        ensure_ascii=False,
+    ).lower()
+    aliases = project_role_aliases(role_profile or {}, jd_profile or {})
+    available: list[dict[str, Any]] = []
+    for rule in PROJECT_ANGLE_RULES:
+        evidence_terms = listish(rule.get("evidence_terms", []))
+        role_terms = listish(rule.get("role_terms", []))
+        role_hits = [term for term in role_terms if evidence_term_present(role_text, term)]
+        evidence_hits = [term for term in evidence_terms if evidence_term_present(evidence_text, term)]
+        focus = angle_focus_from_evidence(rule, card, modules, high_value)
+        role_match = any(alias in listish(rule.get("use_when_roles", [])) for alias in aliases)
+        module_hits = [
+            module
+            for module in modules
+            if evidence_terms_present(json.dumps(module, ensure_ascii=False).lower(), evidence_terms)
+        ]
+        score = bounded_score(
+            28
+            + (28 if role_match else 0)
+            + min(18, len(role_hits) * 5)
+            + min(24, len(evidence_hits) * 4)
+            + min(22, len(focus) * 5)
+            + min(12, len(module_hits) * 4)
+        )
+        if not focus and not evidence_hits:
+            score = bounded_score(score - 24)
+        if score < 35 and not focus:
+            continue
+        available.append(
+            {
+                "angle": rule.get("angle"),
+                "fit_score": score,
+                "focus": focus[:8],
+                "use_when_roles": listish(rule.get("use_when_roles", []))[:6],
+            }
+        )
+    if not available:
+        fallback_focus = high_value[:6] or [
+            clean_resume_signal(value, 130)
+            for value in project_evidence_signal_values(card, tech_context, 6)
+            if clean_resume_signal(value, 130)
+        ][:4]
+        available.append(
+            {
+                "angle": "implementation_workflow",
+                "fit_score": 55 if fallback_focus else 40,
+                "focus": fallback_focus,
+                "use_when_roles": aliases[:4] or ["software_engineering"],
+            }
+        )
+    available.sort(key=lambda item: (-int(item.get("fit_score", 0)), str(item.get("angle") or "")))
+    available = available[:MAX_PROJECT_ANGLE_CANDIDATES]
+    selected = available[0]
+    reason_focus = selected.get("focus", [])[:3] or high_value[:3]
+    reason_role = [
+        alias.replace("_", " ")
+        for alias in aliases
+        if alias in listish(selected.get("use_when_roles", []))
+    ][:2]
+    if not reason_role:
+        reason_role = [str(role_profile.get("role_family") or "target role").replace("_", " ")]
+    reason = (
+        "Selected because the JD/profile emphasizes "
+        + sentence_join(reason_role)
+        + (" and project evidence supports " + sentence_join(reason_focus) if reason_focus else ".")
+    )
+    if not reason.endswith("."):
+        reason += "."
+    return {
+        "project_name": project_display_name(card) if card else "",
+        "available_angles": available,
+        "selected_angle": selected.get("angle"),
+        "selected_focus": selected.get("focus", [])[:8],
+        "high_value_mechanisms": high_value[:MAX_PROJECT_HIGH_VALUE_MECHANISMS],
+        "project_modules": modules[:MAX_PROJECT_MODULES],
+        "role_families_considered": aliases[:8],
+        "reason": reason,
+    }
+
+
+def bullet_budget_from_extra_rules(extra_rules: Any) -> int:
+    match = re.search(r'"bullet_budget"\s*:\s*(\d+)', str(extra_rules or ""))
+    return int(match.group(1)) if match else 0
+
+
+def project_card_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    return {
+        "project_id": candidate.get("project_id"),
+        "project_name": candidate.get("project_name") or candidate.get("source_name"),
+        "evidence_card": candidate.get("evidence_card") if isinstance(candidate.get("evidence_card"), dict) else {},
+        "role_lens": candidate.get("role_lens") if isinstance(candidate.get("role_lens"), dict) else {},
+        "bullet_depth_profile": candidate.get("bullet_depth_profile") if isinstance(candidate.get("bullet_depth_profile"), dict) else {},
+        "current_project_compact_facts": candidate.get("current_project_compact_facts") if isinstance(candidate.get("current_project_compact_facts"), dict) else {},
+        "project_modules": candidate.get("project_modules") if isinstance(candidate.get("project_modules"), list) else [],
+        "project_rank": candidate.get("project_rank"),
+    }
+
+
+def generate_role_angle_bullet_candidates(
+    project_card: dict,
+    angle_profile: dict,
+    role_profile: dict,
+    jd_profile: dict,
+    bullet_budget: int,
+) -> list[dict]:
+    card = project_card if isinstance(project_card, dict) else {}
+    profile = angle_profile if isinstance(angle_profile, dict) else build_project_angle_profile(card, role_profile, jd_profile)
+    modules = profile.get("project_modules") if isinstance(profile.get("project_modules"), list) else extract_project_modules(card, role_profile, jd_profile)
+    high_value = listish(profile.get("high_value_mechanisms", []))
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    evidence_card = card.get("evidence_card") if isinstance(card.get("evidence_card"), dict) else {}
+    module_evidence: list[Any] = []
+    for module in modules:
+        if isinstance(module, dict):
+            module_evidence.extend(listish(module.get("evidence", [])))
+    functions = clean_signal_list(
+        listish(depth_profile.get("implemented_functions", []))
+        + module_evidence
+        + project_card_values(card, ["features", "methods", "confirmed_features", "keyModules"], 30),
+        12,
+        130,
+    )
+    values = clean_signal_list(
+        listish(depth_profile.get("problems_solved", []))
+        + listish(depth_profile.get("role_relevance", []))
+        + project_card_values(card, ["business_or_user_value", "inferred_results", "projectSummary"], 20),
+        10,
+        140,
+    )
+    if not values:
+        values = ["supporting a traceable and repeatable workflow"]
+    selected_angle = str(profile.get("selected_angle") or "")
+    available = listish(profile.get("available_angles", []))
+    available.sort(key=lambda item: (0 if isinstance(item, dict) and item.get("angle") == selected_angle else 1, -int(item.get("fit_score", 0)) if isinstance(item, dict) else 0))
+    limit = max(1, int(bullet_budget or 3)) + 3
+    candidates: list[dict[str, Any]] = []
+    verb_by_angle = {
+        "ai_agent_automation": "Automated",
+        "backend_workflow_system": "Implemented",
+        "it_support_process_automation": "Organized",
+        "operations_validation_workflow": "Validated",
+        "implementation_workflow": "Built",
+    }
+    for angle in available[:MAX_PROJECT_ANGLE_CANDIDATES]:
+        if not isinstance(angle, dict):
+            continue
+        angle_name = str(angle.get("angle") or "")
+        focus_items = clean_signal_list(listish(angle.get("focus", [])) + high_value, 10, 130)
+        verb = verb_by_angle.get(angle_name, "Implemented")
+        for index, mechanism in enumerate(focus_items):
+            function = functions[index % len(functions)] if functions else mechanism
+            value = values[index % len(values)] if values else "supporting a traceable workflow"
+            bullet = normalize_resume_bullet_sentence(
+                f"{verb} {mechanism} for {function}, supporting {value}"
+            )
+            metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+            bullet = normalize_resume_bullet_sentence(metric_validation.get("rewritten_bullet") or bullet)
+            if unsupported_claims_in_project_block(bullet, listish(depth_profile.get("forbidden_claims", [])) + listish(evidence_card.get("forbidden_claims", []))):
+                continue
+            if not bullet:
+                continue
+            candidates.append(
+                {
+                    "angle": angle_name,
+                    "bullet": bullet,
+                    "evidence": "project_angle_profile",
+                    "confidence": "medium",
+                    "supported_mechanism": mechanism,
+                    "implemented_function": function,
+                    "value": value,
+                }
+            )
+            if len(candidates) >= limit:
+                return candidates[:limit]
+    return candidates[:limit]
+
+
+def role_angle_candidate_bullet_texts(candidate: dict[str, Any] | None, limit: int = 8) -> list[str]:
+    if not isinstance(candidate, dict):
+        return []
+    role_profile = candidate.get("role_profile") if isinstance(candidate.get("role_profile"), dict) else {}
+    jd_profile = candidate.get("jd_requirements") if isinstance(candidate.get("jd_requirements"), dict) else {}
+    project_card = project_card_from_candidate(candidate)
+    angle_profile = candidate.get("project_angle_profile") if isinstance(candidate.get("project_angle_profile"), dict) else {}
+    if not angle_profile:
+        angle_profile = build_project_angle_profile(project_card, role_profile, jd_profile, candidate.get("tech_ontology_context") if isinstance(candidate.get("tech_ontology_context"), list) else None)
+    budget = int(candidate.get("bullet_budget") or max(1, limit - 3))
+    bullets: list[str] = []
+    for item in generate_role_angle_bullet_candidates(project_card, angle_profile, role_profile, jd_profile, budget):
+        append_resume_budget_bullet_unique(bullets, item.get("bullet"), limit, 360)
+    return bullets[:limit]
+
+
+def validate_project_value_preservation(
+    project_bullets: list[str],
+    project_card: dict,
+    angle_profile: dict,
+    bullet_budget: int,
+) -> dict:
+    bullets = [clean_resume_signal(bullet, 420) for bullet in project_bullets if clean_resume_signal(bullet, 420)]
+    text = " ".join(bullets).lower()
+    card = project_card if isinstance(project_card, dict) else {}
+    profile = angle_profile if isinstance(angle_profile, dict) else {}
+    modules = profile.get("project_modules") if isinstance(profile.get("project_modules"), list) else extract_project_modules(card)
+    high_value = clean_signal_list(profile.get("high_value_mechanisms", []), MAX_PROJECT_HIGH_VALUE_MECHANISMS, 140)
+    selected_focus = clean_signal_list(profile.get("selected_focus", []), 8, 140)
+    selected_angle = str(profile.get("selected_angle") or "")
+    depth_profile = card.get("bullet_depth_profile") if isinstance(card.get("bullet_depth_profile"), dict) else {}
+    evidence_card = card.get("evidence_card") if isinstance(card.get("evidence_card"), dict) else {}
+    if (
+        not selected_angle
+        and not selected_focus
+        and not high_value
+        and not modules
+        and not listish(depth_profile.get("mechanisms", []))
+    ):
+        return {
+            "valid": True,
+            "selected_angle": "",
+            "selected_angle_reflected": True,
+            "high_value_mechanism_hits": [],
+            "function_hits": [],
+            "bullet_count": len(bullets),
+            "bullet_budget": bullet_budget,
+            "high_mechanism_depth": False,
+            "issues": [],
+            "unsupported_claims": [],
+            "unsupported_metrics": [],
+            "suggested_fixes": [],
+        }
+    module_mechanisms: list[Any] = []
+    module_evidence: list[Any] = []
+    for module in modules:
+        if isinstance(module, dict):
+            module_mechanisms.extend(listish(module.get("mechanisms", [])))
+            module_evidence.extend(listish(module.get("evidence", [])))
+    mechanism_terms = clean_signal_list(
+        selected_focus
+        + high_value
+        + listish(depth_profile.get("mechanisms", []))
+        + module_mechanisms,
+        18,
+        140,
+    )
+    function_terms = clean_signal_list(
+        listish(depth_profile.get("implemented_functions", []))
+        + module_evidence,
+        18,
+        140,
+    )
+    value_terms = clean_signal_list(
+        listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])),
+        12,
+        140,
+    )
+    mechanism_hits = [term for term in mechanism_terms if evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])]
+    function_hits = [term for term in function_terms if evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])]
+    value_hit = any(word in text for word in ["reduce", "improve", "preserve", "prevent", "support", "traceable", "repeatable", "maintain", "organize", "consistent", "reliable"]) or any(
+        evidence_terms_present(text, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term])
+        for term in value_terms
+    )
+    rank = int(card.get("project_rank") or profile.get("project_rank") or 0)
+    high_depth = len(high_value) >= 4 or len(modules) >= 4 or len(mechanism_terms) >= 6
+    issues: list[str] = []
+    suggested_fixes: list[str] = []
+    if selected_angle and selected_focus and not any(focus in mechanism_hits for focus in selected_focus):
+        issues.append(f"Selected project angle `{selected_angle}` is not reflected in bullets.")
+        suggested_fixes.append("Rewrite one bullet around the selected project angle and supported focus terms.")
+    if high_depth and rank in {1, 2} and not mechanism_hits:
+        issues.append("Top-ranked complex project lost evidence-supported high-value mechanisms.")
+        suggested_fixes.append("Restore at least one high-value mechanism from the selected angle profile.")
+    if high_depth and rank == 1 and bullet_budget and len(bullets) < min(4, bullet_budget):
+        issues.append("Top-ranked complex project receives too few bullets for its mechanism depth.")
+        suggested_fixes.append("Use the project bullet budget before trimming lower-ranked project details.")
+    if bullets and len(mechanism_hits) == 0 and any(word in text for word in ["project", "workspace", "application", "system"]):
+        issues.append("Project is described as a product rather than a system of mechanisms.")
+        suggested_fixes.append("Name the implementation mechanism, function/process, and workflow value.")
+    weak_bullets = []
+    for bullet in bullets:
+        lower = bullet.lower()
+        has_mechanism = any(evidence_terms_present(lower, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term]) for term in mechanism_terms)
+        has_function = any(evidence_terms_present(lower, re.findall(r"[A-Za-z][A-Za-z0-9+./-]{3,}", term) or [term]) for term in function_terms)
+        bullet_has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "traceable", "repeatable", "maintain", "organize", "consistent", "reliable"])
+        if sum([has_mechanism, has_function, bullet_has_value or value_hit]) < 2:
+            weak_bullets.append(bullet)
+    if bullets and len(weak_bullets) == len(bullets):
+        issues.append("Bullets do not consistently include mechanism + function + value.")
+        suggested_fixes.append("Rewrite using action verb + supported mechanism/tool + implemented function/process + value.")
+    unsupported_claims = unsupported_claims_in_project_block(
+        " ".join(bullets),
+        listish(depth_profile.get("forbidden_claims", [])) + listish(evidence_card.get("forbidden_claims", [])),
+    )
+    if unsupported_claims:
+        issues.append("Project bullets include unsupported or forbidden claims: " + ", ".join(unsupported_claims[:6]))
+        suggested_fixes.append("Remove unsupported claim terms or replace them with allowed evidence-backed wording.")
+    metric_issues: list[str] = []
+    for bullet in bullets:
+        metric_validation = validate_metric_support(bullet, evidence_card, depth_profile)
+        if not metric_validation.get("valid"):
+            metric_issues.extend(metric_validation.get("unsupported_metrics", []))
+    if metric_issues:
+        issues.append("Project bullets may invent unsupported metrics: " + ", ".join(sorted(set(metric_issues))[:6]))
+        suggested_fixes.append("Rewrite metric-like claims as conservative qualitative value unless supported metrics exist.")
+    return {
+        "valid": not issues,
+        "selected_angle": selected_angle,
+        "selected_angle_reflected": bool(not selected_focus or mechanism_hits),
+        "high_value_mechanism_hits": mechanism_hits[:8],
+        "function_hits": function_hits[:8],
+        "bullet_count": len(bullets),
+        "bullet_budget": bullet_budget,
+        "high_mechanism_depth": high_depth,
+        "issues": issues,
+        "unsupported_claims": unsupported_claims,
+        "unsupported_metrics": sorted(set(metric_issues)),
+        "suggested_fixes": suggested_fixes,
+    }
+
+
+def metric_support_text(evidence_card: dict[str, Any], depth_profile: dict) -> str:
+    return json.dumps(
+        {
+            "supported_metrics": listish(depth_profile.get("supported_metrics", [])),
+            "data_or_scale": listish(evidence_card.get("data_or_scale", [])),
+            "metrics": listish(evidence_card.get("metrics", [])),
+            "allowed_claims": listish(depth_profile.get("allowed_claims", [])),
+        },
+        ensure_ascii=False,
+    ).lower()
+
+
+def metric_like_claims(bullet: str) -> list[str]:
+    text = str(bullet or "")
+    claims = [match.group(0) for match in METRIC_CLAIM_RE.finditer(text)]
+    lower = text.lower()
+    for term in METRIC_CONCEPT_TERMS:
+        if term in lower:
+            append_limited_unique(claims, term, 12, 80)
+    return claims
+
+
+def qualitative_metric_replacement(depth_profile: dict) -> str:
+    for value in listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", [])):
+        text = short_signal(value, 140)
+        if text:
+            return text
+    return SAFE_QUALITATIVE_VALUES[0]
+
+
+def remove_unsupported_metric_phrases(bullet: str, qualitative_value: str) -> str:
+    text = str(bullet or "")
+    text = METRIC_CLAIM_RE.sub("", text)
+    text = re.sub(
+        r"\b(?:latency|response[- ]time|accuracy|adoption|production scale|cost savings|revenue|uptime|throughput|qps|p99)\b"
+        r"(?:\s+(?:improvement|reduction|increase|gain|impact|rate))?",
+        "workflow",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b(?:by|from|to|with|through)\s*(?=,|\.|;|$)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(?:reduced|cut|decreased|improved|boosted|increased|optimized)\b", "Supported", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;")
+    if not text:
+        text = "Implemented evidence-grounded workflow logic"
+    if qualitative_value and qualitative_value.lower() not in text.lower():
+        connector = ", " if re.match(r"^\w+ing\b", qualitative_value, flags=re.IGNORECASE) else ", supporting "
+        text = f"{text}{connector}{qualitative_value}"
+    return text.rstrip(".") + "."
+
+
+def validate_metric_support(
+    bullet: str,
+    evidence_card: dict,
+    depth_profile: dict,
+) -> dict:
+    """
+    Detect metric-like claims and verify that they are supported by evidence.
+    Remove or rewrite unsupported metrics.
+    """
+
+    claims = metric_like_claims(bullet)
+    if not claims:
+        return {
+            "valid": True,
+            "metric_claims": [],
+            "unsupported_metrics": [],
+            "rewritten_bullet": str(bullet or ""),
+            "notes": [],
+        }
+    support = metric_support_text(evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
+    unsupported = []
+    for claim in claims:
+        normalized = str(claim or "").lower().strip()
+        if not normalized:
+            continue
+        if normalized not in support:
+            append_limited_unique(unsupported, claim, 12, 80)
+    if not unsupported:
+        return {
+            "valid": True,
+            "metric_claims": claims,
+            "unsupported_metrics": [],
+            "rewritten_bullet": str(bullet or ""),
+            "notes": [],
+        }
+    rewritten = remove_unsupported_metric_phrases(str(bullet or ""), qualitative_metric_replacement(depth_profile))
+    return {
+        "valid": False,
+        "metric_claims": claims,
+        "unsupported_metrics": unsupported,
+        "rewritten_bullet": rewritten,
+        "notes": ["Unsupported metric-like claim rewritten as qualitative value."],
+    }
+
+
 def build_bullet_depth_profile(
     evidence_card: dict,
     role_profile: dict,
@@ -7479,7 +10064,9 @@ def build_bullet_depth_profile(
     tech_context: list[dict] | None = None,
 ) -> dict:
     """
-    Identify resume-usable technical depth signals.
+    Build a compact technical depth profile for one project or experience.
+    Use project evidence, role profile, JD profile, and Tech Ontology context.
+    Do not invent unsupported technologies or metrics.
     """
 
     card = evidence_card if isinstance(evidence_card, dict) else {}
@@ -7488,50 +10075,113 @@ def build_bullet_depth_profile(
     implemented_functions: list[str] = []
     problems_solved: list[str] = []
     role_relevance: list[str] = []
-    unsupported_metrics: list[str] = ["percentage improvement", "latency reduction", "accuracy improvement"]
+    unsupported_metrics: list[str] = [
+        "percentage improvement",
+        "latency reduction",
+        "accuracy improvement",
+        "user adoption count",
+        "production scale",
+        "cost savings",
+        "revenue impact",
+        "uptime",
+        "response-time improvement",
+    ]
+    allowed_claims: list[str] = []
+    forbidden_claims: list[str] = []
 
-    for entry in tech_context or []:
+    for entry in (tech_context or [])[:MAX_TECH_ONTOLOGY_BULLET_ENTRIES]:
         term = str(entry.get("term") or "")
-        if term and term.lower() in evidence_text:
+        if term and evidence_has_any(evidence_text, term):
             for phrase in listish(entry.get("safe_resume_phrases", []))[:3]:
                 append_limited_unique(mechanisms, phrase, MAX_BULLET_DEPTH_MECHANISMS, 140)
-    for value in listish(card.get("technologies", [])) + listish(card.get("methods", [])):
-        lower = str(value).lower()
-        if any(term in lower for term in ["api", "route", "endpoint", "backend", "fastapi", "flask"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["sqlite", "sql", "mongodb", "postgres", "mysql", "firestore", "database"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["retrieval", "chroma", "embedding", "semantic", "rag", "vector"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["validation", "schema", "lookup", "matching", "ranking", "filter"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["script", "powershell", "bash", "automation", "setup"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        elif any(term in lower for term in ["test", "debug", "logging", "error", "retry"]):
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
-        else:
-            append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
+            for claim in listish(entry.get("do_not_claim_without_evidence", []))[:MAX_TECH_ONTOLOGY_FORBIDDEN_CLAIMS]:
+                append_limited_unique(forbidden_claims, claim, 10, 160)
+
+    append_if_signal(mechanisms, evidence_text, "FastAPI backend route handling", "fastapi")
+    append_if_all(mechanisms, evidence_text, "React/Vite workflow screens", "react", "vite")
+    append_if_signal(mechanisms, evidence_text, "React frontend workflow screens", "react")
+    append_if_signal(mechanisms, evidence_text, "Vite frontend build workflow", "vite")
+    append_if_signal(mechanisms, evidence_text, "SQLite-backed application tracking", "sqlite")
+    append_if_signal(mechanisms, evidence_text, "Chroma retrieval", "chroma")
+    append_if_all(mechanisms, evidence_text, "agent-style workflow stages", "agent", "workflow")
+    append_if_signal(mechanisms, evidence_text, "tool-oriented orchestration", "orchestration", "tool orchestration")
+    append_if_signal(mechanisms, evidence_text, "job parsing", "job parsing", "job analysis", "job-description parsing")
+    append_if_signal(mechanisms, evidence_text, "project ranking", "project ranking", "rank_projects")
+    append_if_signal(mechanisms, evidence_text, "candidate generation", "candidate generation")
+    append_if_signal(mechanisms, evidence_text, "validation loop", "validation loop", "claim validation")
+    append_if_signal(mechanisms, evidence_text, "final merge workflow", "final merge", "section merge")
+    append_if_signal(mechanisms, evidence_text, "Tech Ontology usage", "tech ontology", "ontology")
+    append_if_signal(mechanisms, evidence_text, "Project Memory factual storage", "project memory", "project_memory")
+    append_if_signal(mechanisms, evidence_text, "GitHub evidence separation", "github evidence", "github context")
+    append_if_all(mechanisms, evidence_text, "prompt compression", "prompt", "compact")
+    append_if_all(mechanisms, evidence_text, "context-window retry", "context", "retry")
+    append_if_signal(mechanisms, evidence_text, "model provider configuration", "model provider", "provider config")
+    append_if_signal(mechanisms, evidence_text, "allowed/forbidden claim validation", "allowed_claim", "forbidden_claim", "unsupported claim")
+    append_if_signal(mechanisms, evidence_text, "error handling and logging", "error", "logging", "exception")
+    append_if_signal(mechanisms, evidence_text, "PowerShell setup scripts", "powershell", ".ps1")
+    append_if_signal(mechanisms, evidence_text, "local setup scripts", "setup script", "local setup")
+
+    append_if_signal(mechanisms, evidence_text, "MongoDB-backed storage", "mongodb")
+    append_if_signal(mechanisms, evidence_text, "PyMongo queries", "pymongo")
+    append_if_signal(mechanisms, evidence_text, "data import workflow", "import")
+    append_if_signal(mechanisms, evidence_text, "database queries", "database query", "query")
+    append_if_signal(mechanisms, evidence_text, "pagination", "pagination", "paginated")
+    append_if_signal(mechanisms, evidence_text, "category browsing", "category")
+    append_if_all(mechanisms, evidence_text, "dynamic category loading", "category", "load")
+    append_if_all(mechanisms, evidence_text, "price-descending sorting", "price", "sort")
+    append_if_signal(mechanisms, evidence_text, "sorting/filtering", "filter", "sort")
+    append_if_signal(mechanisms, evidence_text, "discount lookup", "discount")
+    append_if_all(mechanisms, evidence_text, "item update workflow", "update", "item")
+    append_if_signal(mechanisms, evidence_text, "database insertion logic", "insert", "insertion")
+    append_if_all(mechanisms, evidence_text, "required-field validation", "required", "field")
+    append_if_all(mechanisms, evidence_text, "unique item ID validation", "unique", "item id")
+    append_if_all(mechanisms, evidence_text, "duplicate-name selection", "duplicate", "name")
+    append_if_all(mechanisms, evidence_text, "shared database utilities", "database", "util")
+    append_if_all(mechanisms, evidence_text, "shared pagination utilities", "pagination", "util")
+    append_if_all(mechanisms, evidence_text, "menu-driven CLI integration", "menu", "cli")
+
+    append_if_signal(mechanisms, evidence_text, "Firebase Firestore-backed records", "firestore", "firebase firestore")
+    append_if_signal(mechanisms, evidence_text, "Firebase Auth sign-in workflows", "firebase auth")
+    append_if_signal(mechanisms, evidence_text, "Firebase Messaging notification workflows", "firebase messaging", "fcm")
+
+    direct_mechanism_values = (
+        listish(card.get("technologies", []))
+        + listish(card.get("methods", []))
+        + listish(card.get("testing_signals", []))
+        + listish(card.get("debugging_signals", []))
+        + listish(card.get("automation_signals", []))
+    )
+    for value in direct_mechanism_values:
+        append_limited_unique(mechanisms, value, MAX_BULLET_DEPTH_MECHANISMS, 140)
 
     for value in listish(card.get("features", [])) + listish(card.get("methods", [])):
-        append_limited_unique(implemented_functions, value, 12, 140)
+        append_limited_unique(implemented_functions, value, MAX_BULLET_DEPTH_FUNCTIONS, 140)
     for value in listish(card.get("business_or_user_value", [])) + listish(card.get("inferred_results", [])):
         append_limited_unique(problems_solved, value, MAX_BULLET_DEPTH_PROBLEMS, 160)
-    for value in listish(role_profile.get("high_priority_keywords", [])) + listish(role_profile.get("role_focus", [])):
-        if str(value).lower() in evidence_text or len(role_relevance) < 4:
-            append_limited_unique(role_relevance, value, 10, 80)
+    for value in role_depth_terms(role_profile, jd_profile):
+        if str(value).lower() in evidence_text or len(role_relevance) < 5:
+            append_limited_unique(role_relevance, value, MAX_BULLET_DEPTH_ROLE_SIGNALS, 90)
 
     supported_metrics = []
-    for value in listish(card.get("data_or_scale", [])):
+    for value in listish(card.get("data_or_scale", [])) + listish(card.get("metrics", [])) + listish(card.get("real_metrics", [])):
         append_limited_unique(supported_metrics, value, 6, 140)
+    for claim in listish(card.get("allowed_claims", [])):
+        append_limited_unique(allowed_claims, claim, 12, 180)
+    for claim in listish(card.get("forbidden_claims", [])) + listish(jd_profile.get("forbidden_unsupported_claims", []) if isinstance(jd_profile, dict) else []):
+        append_limited_unique(forbidden_claims, claim, 10, 180)
+    for mechanism in mechanisms[:8]:
+        append_limited_unique(allowed_claims, f"Implemented {mechanism}", 12, 180)
 
     return {
-        "project_name": card.get("name", ""),
+        "project_name": card.get("name") or card.get("project_name") or card.get("source_name") or "",
         "mechanisms": mechanisms[:MAX_BULLET_DEPTH_MECHANISMS],
-        "implemented_functions": implemented_functions[:12],
+        "implemented_functions": implemented_functions[:MAX_BULLET_DEPTH_FUNCTIONS],
         "problems_solved": problems_solved[:MAX_BULLET_DEPTH_PROBLEMS],
-        "role_relevance": role_relevance[:10],
+        "role_relevance": role_relevance[:MAX_BULLET_DEPTH_ROLE_SIGNALS],
         "supported_metrics": supported_metrics,
         "unsupported_metrics": unsupported_metrics,
+        "allowed_claims": allowed_claims[:12],
+        "forbidden_claims": forbidden_claims[:10],
         "metric_rule": "Never include percentage, latency, accuracy, user, scale, or cost metrics unless supported_metrics contains them.",
     }
 
@@ -7541,26 +10191,46 @@ def validate_bullet_depth(
     evidence_card: dict,
     depth_profile: dict,
     role_profile: dict,
+    jd_profile: dict | None = None,
+    previous_bullets: list[str] | None = None,
 ) -> dict:
     """
-    Validate whether a bullet is technically substantial and evidence-grounded.
+    Validate whether a bullet is technically substantial, specific, role-relevant,
+    and evidence-grounded.
     """
 
     text = str(bullet or "")
     lower = text.lower()
-    evidence_text = json.dumps(evidence_card or {}, ensure_ascii=False).lower()
+    evidence_text = evidence_text_for_depth(evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
     mechanism_terms = [str(item).lower() for item in listish(depth_profile.get("mechanisms", []))]
     function_terms = [str(item).lower() for item in listish(depth_profile.get("implemented_functions", []))]
     value_terms = [str(item).lower() for item in listish(depth_profile.get("problems_solved", []))]
-    role_terms = [str(item).lower() for item in listish(depth_profile.get("role_relevance", [])) + listish(role_profile.get("high_priority_keywords", []))]
+    role_terms = [
+        str(item).lower()
+        for item in listish(depth_profile.get("role_relevance", []))
+        + role_depth_terms(role_profile if isinstance(role_profile, dict) else {}, jd_profile)
+    ]
     has_mechanism = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in mechanism_terms)
     has_function = any(term and (term in lower or any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3])) for term in function_terms)
-    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "track", "traceable", "accuracy", "repeatable", "maintain"])
+    has_value = any(word in lower for word in ["reduce", "improve", "preserve", "prevent", "support", "track", "traceable", "accuracy", "repeatable", "maintain", "organize", "persistent"])
     if not has_value:
         has_value = any(term and any(token in lower for token in re.findall(r"[a-z0-9+#./-]{4,}", term)[:3]) for term in value_terms)
     has_role = not role_terms or any(term and term in lower for term in role_terms)
-    unsupported_metric = bool(re.search(r"\b\d+%|\$\d+|\b\d+x\b|\b\d+\s*(?:users|qps|ms|seconds|hours)\b", lower)) and not depth_profile.get("supported_metrics")
-    vague_terms = ["various", "multiple", "improved", "helped", "worked on", "responsible for", "used technology", "developed system"]
+    metric_validation = validate_metric_support(text, evidence_card if isinstance(evidence_card, dict) else {}, depth_profile if isinstance(depth_profile, dict) else {})
+    vague_terms = [
+        "various",
+        "multiple",
+        "improved",
+        "helped",
+        "worked on",
+        "contributed to",
+        "built a system",
+        "developed features",
+        "used technologies",
+        "used technology",
+        "enhanced functionality",
+        "responsible for",
+    ]
     issues = []
     if not has_mechanism:
         issues.append("contains function/value without a specific implementation mechanism")
@@ -7568,36 +10238,698 @@ def validate_bullet_depth(
         issues.append("contains tools or value without a clear implemented function/process")
     if not has_value:
         issues.append("does not explain the solved problem or role-relevant value")
-    if any(term in lower for term in vague_terms):
+    if any(term in lower for term in vague_terms) and (not has_mechanism or not has_function):
         issues.append("uses vague or generic filler wording")
-    if unsupported_metric:
+    if not metric_validation.get("valid"):
         issues.append("may invent unsupported metrics")
+    unsupported_claims = []
     for tool in PROTECTED_UNSUPPORTED_TOOLS:
         if tool.lower() in lower and tool.lower() not in evidence_text:
+            append_limited_unique(unsupported_claims, tool, 20, 80)
             issues.append(f"mentions unsupported technology: {tool}")
+    for claim in listish(depth_profile.get("forbidden_claims", [])):
+        claim_text = str(claim or "").strip().lower()
+        if len(claim_text) >= 10 and claim_text in lower:
+            append_limited_unique(unsupported_claims, claim, 20, 140)
+            issues.append("uses forbidden unsupported claim")
+    normalized_current = normalize_match_text(text)
+    for previous in previous_bullets or []:
+        if normalized_current and normalized_current == normalize_match_text(previous):
+            issues.append("duplicates another bullet")
+            break
+    if re.search(r"\b(?:ai-powered|robust|seamless|comprehensive|innovative|powerful)\b", lower) and not has_mechanism:
+        issues.append("sounds like generic AI filler")
 
-    return {
-        "valid": not issues,
+    element_count = sum([has_mechanism, has_function, bool(metric_validation.get("valid")), has_value, has_role])
+    scores = {
         "mechanism_specificity": 90 if has_mechanism else 35,
         "implemented_function_clarity": 90 if has_function else 35,
         "problem_value_clarity": 90 if has_value else 45,
         "jd_relevance": 85 if has_role else 55,
-        "evidence_support": 90 if not any("unsupported technology" in issue for issue in issues) else 25,
-        "metric_truthfulness": 40 if unsupported_metric else 100,
+        "evidence_support": 95 if not unsupported_claims else 25,
+        "metric_truthfulness": 100 if metric_validation.get("valid") else 40,
+    }
+    if element_count < 3:
+        issues.append("does not include at least 3 of mechanism, function, metric/value, role relevance, and evidence support")
+    suggested_fix = None
+    if issues:
+        suggested_fix = "Rewrite with action verb + supported mechanism/tool + implemented function/process + solved problem/value."
+    return {
+        "is_strong": not issues,
+        "valid": not issues,
         "issues": issues,
+        "scores": scores,
+        "suggested_fix": suggested_fix,
+        "unsupported_claims": unsupported_claims + listish(metric_validation.get("unsupported_metrics", [])),
+        "metric_validation": metric_validation,
+        **scores,
     }
 
 
-def rewrite_bullet_with_depth(bullet: str, depth_profile: dict) -> str:
+def rewrite_bullet_mechanism_first(
+    bullet: str,
+    depth_profile: dict,
+    role_profile: dict,
+    jd_profile: dict,
+) -> str:
+    """
+    Rewrite weak feature-description bullets into mechanism-first bullets.
+    Do not invent unsupported claims.
+    """
+
     mechanisms = listish(depth_profile.get("mechanisms", []))
     functions = listish(depth_profile.get("implemented_functions", []))
     values = listish(depth_profile.get("problems_solved", [])) + listish(depth_profile.get("role_relevance", []))
     if not mechanisms or not functions:
-        return str(bullet or "")
-    mechanism = short_signal(mechanisms[0], 140)
-    function = short_signal(functions[0], 140)
-    value = short_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
-    return f"Implemented {mechanism} for {function}, supporting {value}."
+        metric_validation = validate_metric_support(bullet, {}, depth_profile)
+        return str(metric_validation.get("rewritten_bullet") or bullet or "")
+    mechanism = clean_resume_signal(mechanisms[0], 140)
+    function_values = []
+    for item in functions:
+        append_clean_resume_signal_unique(function_values, item, 3, 90)
+    function = ", ".join(function_values[:3]) or clean_resume_signal(functions[0], 140)
+    value = clean_resume_signal(values[0], 140) if values else "supporting a more traceable and maintainable workflow"
+    role_terms = role_depth_terms(role_profile if isinstance(role_profile, dict) else {}, jd_profile if isinstance(jd_profile, dict) else {})
+    role_suffix = ""
+    if role_terms:
+        role_suffix = f" for {clean_resume_signal(role_terms[0], 80)}"
+    action = "Built"
+    if evidence_has_any(mechanism, "validation", "lookup", "query", "retrieval", "routing", "authentication"):
+        action = "Implemented"
+    rewritten = f"{action} {mechanism} for {function}, supporting {value}{role_suffix}."
+    metric_validation = validate_metric_support(rewritten, {}, depth_profile)
+    return str(metric_validation.get("rewritten_bullet") or rewritten)
+
+
+def rewrite_bullet_with_depth(bullet: str, depth_profile: dict) -> str:
+    return rewrite_bullet_mechanism_first(bullet, depth_profile, {}, {})
+
+
+RESUME_ACTION_VERBS = {
+    "added", "architected", "automated", "built", "collaborated", "configured", "coordinated",
+    "created", "debugged", "delivered", "designed", "developed", "engineered", "generated",
+    "guided", "implemented", "integrated", "led", "maintained", "managed", "optimized",
+    "organized", "prioritized", "refactored", "supported", "tested", "translated",
+}
+
+# Word stems that indicate a bullet was cut off mid-word (e.g. "generated documen.").
+BULLET_TRUNCATION_STEMS = {
+    "documen", "gener", "implemen", "retriev", "applicatio", "configur", "orchestr",
+    "integrat", "persisten", "workflo", "analysi", "authenticatio", "notificatio",
+}
+
+# Concrete engineering / process mechanism markers. Bare "api" is intentionally excluded
+# so a plain stack list does not read as a real mechanism.
+BULLET_MECHANISM_KEYWORDS = [
+    "workflow", "retrieval", "routing", "validation", "persistence", "pipeline", "caching",
+    "authentication", "mapping", "orchestration", "compilation", "parsing", "indexing",
+    "schema", "fallback", "retry", "logging", "error handling", "normalization", "ranking",
+    "generation", "synchronization", "search", "compile", "export", "migration", "tracking",
+    "storage", "handling", "integration", "coordination", "collaboration", "requirements",
+    "debugging", "delivery", "prototyping", "onboarding", "recovery", "sign-in", "login",
+]
+
+# Raw project-memory / background fragments that must never survive into a bullet.
+BULLET_RAW_FRAGMENT_MARKERS = [
+    "supporting connects", "job applications require", "supporting job", "require coordinating",
+    "supporting tailored", "supporting implemented", "supporting automated", "supporting generated",
+    "supporting built", "applications require",
+]
+
+_TECHNICAL_PROPER_TOKENS = {"API", "LaTeX", "JD", "SQLite", "GitHub", "LLM", "PDF", "REST", "AI", "UI", "CI"}
+
+BULLET_VALUE_KEYWORDS = [
+    "improve", "improving", "reduce", "reducing", "prevent", "preserve", "traceable",
+    "repeatable", "reliable", "maintainable", "recover", "debug", "debuggable",
+    "validate", "validation", "supporting", "enabling", "connecting", "organizing",
+    "coordination", "collaboration", "stability", "reliability", "visibility",
+    "workflow quality", "data handling", "integration", "user", "engineering",
+]
+
+BULLET_RAW_LIST_VERBS = [
+    "supporting", "routes", "route", "connecting", "including", "configuration-driven",
+    "provider", "model", "token", "prompt", "setup",
+]
+
+PROJECT_BULLET_TOPIC_GROUPS = [
+    ("data_persistence", ["persistence", "persistent", "database", "sqlite", "firestore", "mongodb", "storage", "records"]),
+    ("backend_api", ["api", "backend", "route", "request", "server", "fastapi", "endpoint"]),
+    ("frontend_mobile", ["frontend", "interface", "screen", "react", "mobile", "android", "ui flow"]),
+    ("validation_error_handling", ["validation", "validate", "retry", "fallback", "error", "logging", "debug", "recover"]),
+    ("evidence_mapping", ["evidence", "mapping", "github", "repository", "metadata", "source files", "implementation signals"]),
+    ("retrieval_ranking", ["retrieval", "vector", "search", "ranking", "semantic", "matching"]),
+    ("generation_merge", ["generation", "generated", "merge", "latex", "export", "pdf", "candidate"]),
+    ("parsing_normalization", ["parsing", "parse", "normalization", "normalize", "schema", "input"]),
+    ("configuration", ["configuration", "provider", "model", "token", "settings"]),
+    ("build_test_debug", ["test", "automation", "build", "debugging", "diagnostic", "quality gate"]),
+    ("user_workflow", ["user workflow", "onboarding", "notification", "management", "review steps"]),
+    ("workflow_orchestration", ["workflow", "orchestration", "routing", "pipeline", "agent-style"]),
+]
+
+
+def _bullet_token_overlap(a: str, b: str) -> float:
+    tokens_a = set(re.findall(r"[a-z0-9]+", str(a or "").lower()))
+    tokens_b = set(re.findall(r"[a-z0-9]+", str(b or "").lower()))
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def validate_resume_bullet_quality(
+    bullet: str,
+    entry_name: str = "",
+    entry_type: str = "",
+    peer_bullets: list[str] | None = None,
+    mechanism_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Deterministic quality gate that rejects field-concatenated, truncated, list-only,
+    duplicated, or ungrammatical resume bullets."""
+    # Backward compatibility for older positional calls:
+    # validate_resume_bullet_quality(bullet, entry_name, peer_bullets, mechanism_cards)
+    if isinstance(entry_type, list):
+        if mechanism_cards is None and isinstance(peer_bullets, list):
+            mechanism_cards = peer_bullets
+        peer_bullets = entry_type
+        entry_type = ""
+
+    raw = str(bullet or "").strip()
+    lower = raw.lower()
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#./-]*", raw)
+    issues: list[str] = []
+
+    if len(words) < 4:
+        issues.append("bullet is empty or too short to be a complete statement")
+
+    if "..." in raw or "…" in raw:
+        issues.append("bullet contains an ellipsis / truncation marker")
+    last_word = re.sub(r"[^A-Za-z]", "", words[-1]).lower() if words else ""
+    if last_word in BULLET_TRUNCATION_STEMS:
+        issues.append("bullet ends with a truncated word")
+    if last_word in {"to", "for", "with", "and", "or", "via", "using", "through", "supporting"}:
+        issues.append("bullet ends with a broken phrase")
+    for stem in BULLET_TRUNCATION_STEMS:
+        if re.search(rf"\b{stem}\.(?:\s|$)", lower):
+            issues.append("bullet contains a truncated word before punctuation")
+            break
+
+    for marker in BULLET_RAW_FRAGMENT_MARKERS:
+        if marker in lower:
+            issues.append("bullet looks like concatenated raw project-memory fields")
+            break
+    generic_bad_patterns = [
+        r"\bbuilt\s+scripting\s+to\s+support\s+workflow\b",
+        r"\bbuilt\s+(?:[a-z0-9+#./-]+\s+){0,3}scripting\s+to\s+support\b",
+        r"\bimplemented\s+system\s+for\s+\w+\s*,?\s+supporting\b",
+        r"\bimplemented\s+(?:an?\s+)?[a-z0-9-]+\s+workflow\s+that\s+routes?\s+[^.]*,\s*[^.]*,\s*[^.]*",
+        r"\bbuilt\s+.+\bworkflow\s+support\s+for\s+[^.]*,\s*[^.]*",
+        r"\bautomated\s+workflow\s+for\s+workflow\b",
+        r"\bused\s+technology\s+stack\s+to\s+build\s+system\b",
+        r"\bimplemented\s+backend,\s*frontend,\s*and\s*database\b",
+    ]
+    if any(re.search(pattern, lower) for pattern in generic_bad_patterns):
+        issues.append("bullet is generic, placeholder-like, or workflow-repetitive instead of mechanism-backed")
+    if re.search(r"\b(?:for|supporting)\s+[A-Z](?:\s*,|\s*$)", raw):
+        issues.append("bullet contains placeholder variables instead of resume evidence")
+    fragment_match = re.search(r"supporting\s+([A-Z][A-Za-z]+)", raw)
+    if fragment_match and fragment_match.group(1) not in _TECHNICAL_PROPER_TOKENS:
+        issues.append("bullet appends a raw capitalized fragment after 'supporting'")
+
+    first = words[0].lower() if words else ""
+    if first not in RESUME_ACTION_VERBS:
+        issues.append("bullet does not start with a resume action verb")
+
+    if len(re.findall(r"\bworkflow\b", lower)) >= 2:
+        issues.append("bullet repeats 'workflow' without a distinct concrete mechanism")
+
+    tech_tokens = extract_skill_names_with_ontology(raw, 20)
+    has_mechanism_phrase = any(keyword in lower for keyword in BULLET_MECHANISM_KEYWORDS)
+    has_stack_signal = bool(tech_tokens)
+    has_mechanism = has_mechanism_phrase
+    describes_purpose = any(
+        marker in lower
+        for marker in [" to ", " that ", "connecting ", "enabling ", "reducing ", "through ", "by ", "for "]
+    )
+    has_value_signal = any(keyword in lower for keyword in BULLET_VALUE_KEYWORDS)
+    comma_count = raw.count(",")
+    raw_list_signal = comma_count >= 2 and any(term in lower for term in BULLET_RAW_LIST_VERBS)
+    if raw_list_signal and not has_value_signal:
+        issues.append("bullet looks like a raw feature or workflow list instead of an engineered mechanism")
+    if re.search(r"^\s*supporting\b", lower):
+        issues.append("bullet starts with a fragment instead of an action")
+    if re.search(r"\bsupporting\s+[^.]*,\s*[^.]*,\s*[^.]*", lower) and not (
+        has_mechanism_phrase and has_value_signal
+    ):
+        issues.append("bullet appends a supporting-list fragment without mechanism and value")
+    if not (has_mechanism_phrase or describes_purpose):
+        if re.search(r"\b(application|system|app|features?|project|dashboard|page|button|screen)s?\.?\s*$", lower):
+            issues.append("bullet only names components/stack without an implemented mechanism or value")
+    if has_stack_signal and not has_mechanism_phrase and not describes_purpose:
+        issues.append("bullet contains stack names but no implemented mechanism")
+    if not has_mechanism and len(words) < 12:
+        issues.append("bullet has no concrete technical mechanism or process")
+    if has_mechanism and not has_value_signal and len(words) < 18:
+        issues.append("bullet lacks engineering or user value")
+    if re.search(r"\b(?:backend|frontend|database|api|ui|module|modules|components?)\b(?:\s*,\s*|\s+and\s+){1,}", lower) and not has_value_signal:
+        issues.append("bullet is only a module list")
+    if re.search(r"\b(?:users?|customers?)\s+can\b|\b(?:application|platform|system)\s+(?:allows|provides|helps)\b", lower) and not has_mechanism_phrase:
+        issues.append("bullet reads like a product summary instead of engineering evidence")
+    if metric_like_claims(raw):
+        issues.append("bullet contains metric-like claims that require explicit evidence")
+
+    if len(raw) > 340 or len(words) > 48:
+        issues.append("bullet is too long for a resume line")
+
+    normalized = normalize_match_text(raw)
+    for peer in peer_bullets or []:
+        peer_norm = normalize_match_text(peer)
+        if not peer_norm or peer_norm == normalized:
+            if peer_norm and peer_norm == normalized:
+                issues.append("bullet duplicates another bullet in the same section")
+                break
+            continue
+        if _bullet_token_overlap(normalized, peer_norm) >= 0.72:
+            issues.append("bullet is highly duplicative of another bullet in the same section")
+            break
+
+    ok = not issues
+    severity = "pass" if ok else "blocking"
+    rewrite_hint = "" if ok else "Rewrite from a safe mechanism card as action + mechanism + workflow/function + value."
+    return {
+        "ok": ok,
+        "valid": ok,
+        "issues": sorted(set(issues)),
+        "severity": severity,
+        "rewrite_hint": rewrite_hint,
+        "has_mechanism": has_mechanism,
+        "action_verb": first,
+        "entry_name": entry_name,
+        "entry_type": entry_type,
+    }
+
+
+def build_project_mechanism_cards(
+    project_context: dict[str, Any],
+    jd_profile: dict[str, Any],
+    evidence_card: dict[str, Any],
+    project_memory: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Turn project evidence into concrete mechanism cards before any bullet is written.
+    Bullets may only be generated from cards with safeToWrite=True."""
+    context = project_context if isinstance(project_context, dict) else {}
+    depth = context.get("bullet_depth_profile") if isinstance(context.get("bullet_depth_profile"), dict) else {}
+    card = evidence_card if isinstance(evidence_card, dict) else {}
+    project_name = str(
+        card.get("name")
+        or card.get("project_name")
+        or context.get("project_name")
+        or depth.get("project_name")
+        or "Project"
+    )
+    mechanisms = clean_signal_list(listish(depth.get("mechanisms", [])), 12, 140)
+    functions = clean_signal_list(
+        listish(depth.get("implemented_functions", []))
+        + project_card_values(card, ["features", "methods", "confirmed_features"], 20),
+        12,
+        150,
+    )
+    values = clean_signal_list(
+        listish(depth.get("problems_solved", []))
+        + listish(depth.get("role_relevance", []))
+        + project_card_values(card, ["business_or_user_value", "inferred_results"], 12),
+        10,
+        160,
+    )
+    if not values and mechanisms:
+        values = ["improving traceability, maintainability, or recovery for repeated tasks"]
+    stack: list[str] = []
+    for skill in extract_skill_names_with_ontology(project_text_for_tech_matching(card), 24):
+        cleaned_skill = clean_resume_skill_name(skill)
+        if cleaned_skill:
+            append_unique(stack, cleaned_skill, 12)
+    evidence_sources = clean_signal_list(
+        project_card_values(card, ["evidence_sources", "source_refs", "keyModules", "diff_signals"], 12)
+        or ["project_memory"],
+        8,
+        150,
+    )
+    if not evidence_sources:
+        evidence_sources = ["project_memory"]
+    cards: list[dict[str, Any]] = []
+    for index, mechanism in enumerate(mechanisms):
+        function = functions[index % len(functions)] if functions else ""
+        value = values[index % len(values)] if values else ""
+        mechanism_lower = mechanism.lower()
+        mechanism_stack = [skill for skill in stack if skill.lower() in mechanism_lower] or stack[:3]
+        safe = bool(mechanism and function and value and evidence_sources)
+        cards.append(
+            {
+                "projectName": project_name,
+                "entryName": project_name,
+                "entryType": "project",
+                "mechanism": mechanism,
+                "implementedFunction": function,
+                "technicalStack": mechanism_stack[:5],
+                "engineeringValue": value,
+                "evidenceSources": evidence_sources[:5],
+                "safeToWrite": safe,
+                "riskFlags": [] if safe else ["missing mechanism, function, value, or evidence source"],
+            }
+        )
+    return cards
+
+
+def build_resume_mechanism_cards(
+    entry_context: dict[str, Any],
+    jd_profile: dict[str, Any],
+    evidence_card: dict[str, Any],
+    memory_facts: dict[str, Any] | None = None,
+    entry_type: str = "project",
+) -> list[dict[str, Any]]:
+    """Generic mechanism-card API for project and experience bullet generation."""
+    cards = build_project_mechanism_cards(
+        entry_context if isinstance(entry_context, dict) else {},
+        jd_profile if isinstance(jd_profile, dict) else {},
+        evidence_card if isinstance(evidence_card, dict) else {},
+        memory_facts if isinstance(memory_facts, dict) else {},
+    )
+    normalized_cards: list[dict[str, Any]] = []
+    for card in cards:
+        entry_name = (
+            card.get("entryName")
+            or card.get("projectName")
+            or (entry_context or {}).get("entryName")
+            or (entry_context or {}).get("project_name")
+            or "Entry"
+        )
+        normalized_cards.append(
+            {
+                "entryName": entry_name,
+                "entryType": entry_type if entry_type in {"project", "experience"} else "project",
+                "mechanism": card.get("mechanism", ""),
+                "implementedFunction": card.get("implementedFunction", ""),
+                "technicalStack": card.get("technicalStack", []),
+                "engineeringValue": card.get("engineeringValue", ""),
+                "evidenceSources": card.get("evidenceSources", []),
+                "safeToWrite": bool(card.get("safeToWrite")),
+                "riskFlags": card.get("riskFlags", []),
+            }
+        )
+    return normalized_cards
+
+
+_MECHANISM_BASE_VERBS = {
+    "connect", "store", "generate", "handle", "manage", "validate", "retrieve", "route", "map",
+    "orchestrate", "track", "coordinate", "compile", "export", "parse", "index", "cache", "reduce",
+    "improve", "prevent", "support", "persist", "detect", "normalize", "rank", "recover",
+}
+
+
+def _mechanism_purpose_clause(text: str) -> str:
+    clause = clean_resume_signal(text, 170)
+    if not clause:
+        return ""
+    clause = clause.rstrip(".")
+    first = re.match(r"\s*([A-Za-z]+)", clause)
+    lead = first.group(1).lower() if first else ""
+    if lead not in _MECHANISM_BASE_VERBS:
+        clause = "support " + clause[0].lower() + clause[1:] if clause else clause
+    else:
+        clause = clause[0].lower() + clause[1:]
+    return clause
+
+
+def conservative_bullet_from_mechanism_card(card: dict[str, Any], action: str = "") -> str:
+    """Build one clean, grammatical, evidence-backed bullet from a safeToWrite mechanism card."""
+    if not isinstance(card, dict) or not card.get("safeToWrite"):
+        return ""
+    mechanism = clean_resume_signal(card.get("mechanism"), 150)
+    if not mechanism:
+        return ""
+    mechanism_lower = mechanism.lower()
+    stack = [
+        str(skill).strip()
+        for skill in listish(card.get("technicalStack", []))[:4]
+        if str(skill).strip() and str(skill).strip().lower() not in mechanism_lower
+    ][:3]
+    verb = action or (
+        "Implemented"
+        if re.search(r"validation|retrieval|routing|authentication|mapping|logic|handling|persistence", mechanism.lower())
+        else "Built"
+    )
+    sentence = f"{verb} {mechanism}"
+    if stack:
+        if len(stack) == 1:
+            sentence += f" using {stack[0]}"
+        else:
+            sentence += " using " + ", ".join(stack[:-1]) + f", and {stack[-1]}"
+    purpose = _mechanism_purpose_clause(card.get("implementedFunction") or card.get("engineeringValue") or "")
+    if purpose:
+        sentence += f" to {purpose}"
+    return normalize_resume_bullet_sentence(sentence)
+
+
+def project_bullet_topic(text: Any, mechanism_cards: list[dict[str, Any]] | None = None) -> str:
+    lower = str(text or "").lower()
+    hits: list[tuple[str, int]] = []
+    for topic, terms in PROJECT_BULLET_TOPIC_GROUPS:
+        score = sum(1 for term in terms if term in lower)
+        if score:
+            hits.append((topic, score))
+    if hits:
+        hits.sort(key=lambda item: (-item[1], item[0]))
+        return hits[0][0]
+    for card in mechanism_cards or []:
+        if not isinstance(card, dict):
+            continue
+        mechanism = str(card.get("mechanism") or "").lower()
+        if mechanism and _bullet_token_overlap(lower, mechanism) >= 0.24:
+            return normalize_match_text(mechanism)[:40] or "mechanism"
+    return normalize_match_text(lower)[:40] or "general"
+
+
+def dedupe_project_bullet_topics(
+    bullets: list[str],
+    mechanism_cards: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Keep project bullets on distinct mechanisms instead of repeating one workflow topic."""
+    cleaned = [normalize_resume_bullet_sentence(bullet) for bullet in bullets if str(bullet or "").strip()]
+    retained: list[str] = []
+    topic_counts: dict[str, int] = {}
+    for bullet in cleaned:
+        topic = project_bullet_topic(bullet, mechanism_cards)
+        broad_workflow = topic in {"workflow_orchestration", "configuration"}
+        duplicate_topic = topic_counts.get(topic, 0) >= (1 if broad_workflow else 2)
+        near_duplicate = any(_bullet_token_overlap(bullet, peer) >= 0.62 for peer in retained)
+        if duplicate_topic or near_duplicate:
+            continue
+        retained.append(bullet)
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        if len(retained) >= 5:
+            break
+    return retained
+
+
+def dedupe_experience_bullet_topics(bullets: list[str]) -> list[str]:
+    retained: list[str] = []
+    verb_counts: dict[str, int] = {}
+    for bullet in bullets:
+        text = normalize_resume_bullet_sentence(bullet)
+        if not text:
+            continue
+        verb = leading_resume_verb(text).lower()
+        if verb:
+            verb_counts[verb] = verb_counts.get(verb, 0) + 1
+            if verb == "implemented" and verb_counts[verb] > 2:
+                text = replace_leading_resume_verb(text, choose_experience_action_verb(text, len(retained)))
+        if any(_bullet_token_overlap(text, peer) >= 0.66 for peer in retained):
+            continue
+        retained.append(text)
+        if len(retained) >= 5:
+            break
+    return retained
+
+
+def apply_bullet_quality_gate(
+    final_bullets: list[Any],
+    project_name: str,
+    mechanism_cards: list[dict[str, Any]] | None,
+    depth_profile: dict[str, Any] | None = None,
+    role_profile: dict[str, Any] | None = None,
+    jd_profile: dict[str, Any] | None = None,
+    entry_type: str = "project",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Reject low-quality bullets, rewrite via mechanism-first repair (max 2 tries),
+    fall back to a conservative mechanism-card bullet, and drop only if nothing survives."""
+    result: list[dict[str, Any]] = []
+    peer: list[str] = []
+    report = {"rewritten": 0, "fallback": 0, "dropped": 0, "issues": []}
+    safe_cards = [c for c in (mechanism_cards or []) if isinstance(c, dict) and c.get("safeToWrite")]
+    card_index = 0
+    for item in final_bullets or []:
+        bullet = item.get("bullet") if isinstance(item, dict) else str(item)
+        text = str(bullet or "").strip()
+        quality = validate_resume_bullet_quality(text, project_name, entry_type, peer, mechanism_cards)
+        attempts = 0
+        while not quality.get("valid") and attempts < 2:
+            rewritten = normalize_resume_bullet_sentence(
+                rewrite_bullet_mechanism_first(text, depth_profile or {}, role_profile or {}, jd_profile or {})
+            )
+            attempts += 1
+            if rewritten and rewritten != text:
+                text = rewritten
+                quality = validate_resume_bullet_quality(text, project_name, entry_type, peer, mechanism_cards)
+                if quality.get("valid"):
+                    report["rewritten"] += 1
+            else:
+                break
+        if not quality.get("valid"):
+            fallback = ""
+            while card_index < len(safe_cards):
+                candidate = conservative_bullet_from_mechanism_card(safe_cards[card_index])
+                card_index += 1
+                if candidate and validate_resume_bullet_quality(candidate, project_name, entry_type, peer, mechanism_cards).get("valid"):
+                    fallback = candidate
+                    break
+            if fallback:
+                text = fallback
+                report["fallback"] += 1
+            else:
+                report["dropped"] += 1
+                report["issues"].extend(quality.get("issues", []))
+                continue
+        if isinstance(item, dict):
+            new_item = dict(item)
+            new_item["bullet"] = text
+        else:
+            new_item = {"bullet": text, "evidence": "bullet_quality_gate", "confidence": "medium"}
+        result.append(new_item)
+        peer.append(text)
+    if entry_type == "project":
+        deduped_texts = dedupe_project_bullet_topics([item.get("bullet", "") for item in result], safe_cards)
+        deduped_keys = {normalize_match_text(text) for text in deduped_texts}
+        before = len(result)
+        result = [item for item in result if normalize_match_text(item.get("bullet", "")) in deduped_keys]
+        if len(result) < before:
+            report["dropped"] += before - len(result)
+            report["issues"].append("duplicate project bullet topics were removed")
+        existing_texts = [item.get("bullet", "") for item in result]
+        for card in safe_cards:
+            if len(result) >= 3:
+                break
+            candidate = conservative_bullet_from_mechanism_card(card)
+            if not candidate:
+                continue
+            if project_bullet_topic(candidate, safe_cards) in {project_bullet_topic(text, safe_cards) for text in existing_texts}:
+                continue
+            if not validate_resume_bullet_quality(candidate, project_name, entry_type, existing_texts, safe_cards).get("valid"):
+                continue
+            result.append({"bullet": candidate, "evidence": "mechanism_card_fallback", "confidence": "medium"})
+            existing_texts.append(candidate)
+            report["fallback"] += 1
+    elif entry_type == "experience":
+        deduped_texts = dedupe_experience_bullet_topics([item.get("bullet", "") for item in result])
+        deduped_keys = {normalize_match_text(text) for text in deduped_texts}
+        before = len(result)
+        result = [item for item in result if normalize_match_text(item.get("bullet", "")) in deduped_keys][:5]
+        if len(result) < before:
+            report["dropped"] += before - len(result)
+            report["issues"].append("duplicate or overlong experience bullets were removed")
+    report["final_count"] = len(result)
+    report["issues"] = sorted(set(report["issues"]))
+    return result, report
+
+
+def resume_section_bullet_quality_issues(resume_latex: str) -> dict[str, Any]:
+    """Re-run the bullet quality gate against the merged resume (report only)."""
+    issues: list[str] = []
+    checked = 0
+    for section_key in ["projects", "experience"]:
+        section = find_latex_section(resume_latex, section_key)
+        if not section:
+            continue
+        bullets = resume_item_contents(section.get("text", ""))
+        peer: list[str] = []
+        for bullet in bullets:
+            checked += 1
+            quality = validate_resume_bullet_quality(bullet, section_key, "project" if section_key == "projects" else "experience", peer)
+            peer.append(bullet)
+            for issue in quality.get("issues", []):
+                append_unique(issues, f"{section_key}: {issue}", 30)
+    return {"valid": not issues, "issues": issues, "bullets_checked": checked}
+
+
+def leading_resume_verb(text: Any) -> str:
+    match = re.match(r"^\s*(?:[-–—]\s*)?([A-Za-z]+)\b", str(text or ""))
+    return match.group(1) if match else ""
+
+
+def choose_experience_action_verb(bullet: str, fallback_index: int = 0) -> str:
+    lower = str(bullet or "").lower()
+    signals = [
+        ("Coordinated", ["team", "12-person", "requirements", "break", "breakdown", "integration", "programming work"]),
+        ("Managed", ["git", "github", "version", "code changes", "collaborative development", "workflow"]),
+        ("Delivered", ["demo", "deadline", "milestone", "public-facing", "reservation", "release"]),
+        ("Tested", ["test", "tested", "qa", "playable", "feedback"]),
+        ("Debugged", ["debug", "issue", "bug", "integration issue", "root cause"]),
+        ("Collaborated", ["designer", "artist", "stakeholder", "collaborat", "communication"]),
+        ("Organized", ["organized", "task", "backlog", "priorit", "schedule"]),
+        ("Supported", ["support", "troubleshoot", "help", "guided"]),
+        ("Maintained", ["maintain", "consistent", "project versions", "repository"]),
+        ("Translated", ["translated", "requirement", "design", "technical requirement"]),
+    ]
+    for verb, needles in signals:
+        if any(needle in lower for needle in needles):
+            return verb
+    return EXPERIENCE_PREFERRED_ACTION_VERBS[fallback_index % len(EXPERIENCE_PREFERRED_ACTION_VERBS)]
+
+
+def replace_leading_resume_verb(bullet: str, verb: str) -> str:
+    text = str(bullet or "").strip()
+    return re.sub(r"^([-–—]\s*)?[A-Za-z]+\b", lambda match: f"{match.group(1) or ''}{verb}", text, count=1)
+
+
+def enforce_experience_verb_diversity(final_bullets: list[Any]) -> dict[str, Any]:
+    implemented_indexes = []
+    verbs = []
+    for index, item in enumerate(final_bullets if isinstance(final_bullets, list) else []):
+        text = item.get("bullet") if isinstance(item, dict) else item
+        verb = leading_resume_verb(text)
+        if verb:
+            verbs.append(verb)
+        if verb.lower() == "implemented":
+            implemented_indexes.append(index)
+    validation = {
+        "implemented_start_count": len(implemented_indexes),
+        "rewritten_bullets": 0,
+        "valid": len(implemented_indexes) <= 1 or len(implemented_indexes) <= max(1, len(final_bullets) // 3),
+        "issues": [],
+    }
+    if validation["valid"]:
+        return validation
+    validation["issues"].append("Experience bullets overuse `Implemented` as the leading verb.")
+    for rewrite_number, index in enumerate(implemented_indexes[1:], start=1):
+        item = final_bullets[index]
+        text = item.get("bullet") if isinstance(item, dict) else str(item)
+        verb = choose_experience_action_verb(str(text or ""), rewrite_number)
+        rewritten = replace_leading_resume_verb(str(text or ""), verb)
+        if rewritten and rewritten != text:
+            if isinstance(item, dict):
+                item["bullet"] = rewritten
+                item["evidence"] = item.get("evidence") or "experience_verb_diversity"
+            else:
+                final_bullets[index] = {
+                    "bullet": rewritten,
+                    "evidence": "experience_verb_diversity",
+                    "confidence": "medium",
+                }
+            validation["rewritten_bullets"] += 1
+    remaining = [
+        leading_resume_verb(item.get("bullet") if isinstance(item, dict) else item).lower()
+        for item in final_bullets
+    ].count("implemented")
+    validation["implemented_start_count_after"] = remaining
+    validation["valid"] = remaining <= 1 or remaining <= max(1, len(final_bullets) // 3)
+    return validation
 
 
 def structured_star_facts(source_facts: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -7771,18 +11103,45 @@ def build_compact_bullet_writer_input(
         or tech_context_for_texts(
             job_description,
             project_text_for_tech_matching(evidence_card),
-            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+            top_k=MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
         ),
-        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
     )
     depth_profile = build_bullet_depth_profile(evidence_card, role_profile, ontology_jd_profile, prompt_tech_context)
+    project_card_for_angle = {
+        **(source_facts if isinstance(source_facts, dict) else {}),
+        "project_name": source_name,
+        "evidence_card": evidence_card,
+        "role_lens": role_lens,
+        "bullet_depth_profile": depth_profile,
+        "current_project_compact_facts": current_project_facts,
+    }
+    project_modules: list[dict[str, Any]] = []
+    project_angle_profile: dict[str, Any] = {}
+    role_angle_bullet_candidates: list[dict[str, Any]] = []
+    if section_type == "project":
+        bullet_budget = bullet_budget_from_extra_rules(extra_rules)
+        project_modules = extract_project_modules(project_card_for_angle, role_profile, ontology_jd_profile, prompt_tech_context)
+        project_angle_profile = build_project_angle_profile(project_card_for_angle, role_profile, ontology_jd_profile, prompt_tech_context)
+        project_angle_profile["project_modules"] = project_modules
+        role_angle_bullet_candidates = generate_role_angle_bullet_candidates(
+            project_card_for_angle,
+            project_angle_profile,
+            role_profile,
+            ontology_jd_profile,
+            bullet_budget or 3,
+        )
     return {
         "section_type": section_type,
         "source_name": source_name,
+        "prompt_policies": stage_policy_payload(section_type),
         "compact_jd_requirements": compact_bullet_writer_value(ontology_jd_profile, 350, 8),
         "role_profile": compact_bullet_writer_value(role_profile, 300, 5),
         "tech_ontology_context": prompt_tech_context,
         "bullet_depth_profile": compact_bullet_writer_value(depth_profile, 320, 8),
+        "project_angle_profile": compact_bullet_writer_value(project_angle_profile, 420, 8),
+        "project_modules": compact_bullet_writer_value(project_modules, 260, MAX_PROJECT_MODULES),
+        "role_angle_bullet_candidates": compact_bullet_writer_value(role_angle_bullet_candidates, 320, max(3, (bullet_budget_from_extra_rules(extra_rules) or 3) + 3)),
         "current_project_compact_facts": current_project_facts,
         "current_project_evidence_summary": {
             "evidenceSources": shortest_evidence_sources(listish(evidence_card.get("source_refs", [])) + listish(evidence_card.get("artifacts", [])), 10),
@@ -7798,7 +11157,7 @@ def build_compact_bullet_writer_input(
         "existing_bullets": compact_bullet_writer_value(existing_bullets, 280, 5),
         "bullet_constraints": {
             "language": language,
-            "output_language_instruction": output_language_instruction(language),
+            "output_language_instruction": truncate_text(output_language_instruction(language), 500),
             "must_return_json": True,
             "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
             "star_required": True,
@@ -7873,6 +11232,16 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
         trim_list_field(depth_profile, "mechanisms", 8 if mode == "retry" else 5)
         trim_list_field(depth_profile, "implemented_functions", 6 if mode == "retry" else 4)
         trim_list_field(depth_profile, "problems_solved", 5 if mode == "retry" else 3)
+    angle_profile = reduced.get("project_angle_profile", {})
+    if isinstance(angle_profile, dict):
+        trim_list_field(angle_profile, "available_angles", MAX_PROJECT_ANGLE_CANDIDATES)
+        trim_list_field(angle_profile, "selected_focus", 6 if mode == "retry" else 4)
+        trim_list_field(angle_profile, "high_value_mechanisms", MAX_PROJECT_HIGH_VALUE_MECHANISMS if mode == "retry" else 8)
+        trim_list_field(angle_profile, "project_modules", MAX_PROJECT_MODULES if mode == "retry" else 6)
+    if isinstance(reduced.get("project_modules"), list):
+        reduced["project_modules"] = reduced["project_modules"][:MAX_PROJECT_MODULES if mode == "retry" else 6]
+    if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+        reduced["role_angle_bullet_candidates"] = reduced["role_angle_bullet_candidates"][:7 if mode == "retry" else 5]
     if isinstance(reduced.get("tech_ontology_context"), list):
         reduced["tech_ontology_context"] = reduced["tech_ontology_context"][:6 if mode == "retry" else 4]
     reduced["compact_jd_requirements"] = trim_compact_jd_requirements(
@@ -7884,7 +11253,8 @@ def apply_bullet_writer_retry_mode(payload: dict[str, Any], retry_mode: str) -> 
     snippet = reduced.get("existing_resume_snippet")
     if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
         lines = [line for line in snippet["latex"].splitlines() if line.strip()]
-        snippet["latex"] = "\n".join(lines[:8 if mode == "retry" else 4])
+        line_chars = 320 if mode == "retry" else 220
+        snippet["latex"] = "\n".join(truncate_text(line, line_chars) for line in lines[:8 if mode == "retry" else 4])
     if isinstance(constraints, dict):
         constraints["retry_mode"] = mode
         constraints["max_final_bullets"] = 5 if mode == "retry" else 4
@@ -7912,7 +11282,7 @@ def build_compact_final_merge_input(payload: dict[str, Any], max_chars: int = PR
 
 def build_compact_bullet_writer_prompt(payload: dict[str, Any]) -> str:
     return f"""
-You are the compact WorkAgent resume bullet writer.
+You are the compact resume bullet writer for this resume generation system.
 
 Use only the compact payload below. Do not request or infer raw repo context, full code, unrelated projects, or full chat history.
 
@@ -7929,15 +11299,27 @@ Return ONLY valid JSON with exactly these keys:
 Rules:
 - Write only for payload.source_name and payload.section_type.
 - Do not use unrelated projects.
-- For project bullets, follow this prioritization rule: {PROJECT_PRIORITY_INSTRUCTION}
-- Do not merely describe what the project is. For each bullet, explain the implementation mechanism. Prefer bullets that combine a tool or method, a concrete function, and a solved problem or role-relevant value. A strong bullet should read like engineering evidence, not a product summary. Do not invent metrics or unsupported technologies.
+- Treat payload.prompt_policies as authoritative. They are the single source of truth for evidence boundaries,
+  project budgets, bullet depth, metric safety, skills gating, and Experience style.
+- For project bullets, apply payload.prompt_policies.project and payload.prompt_policies.bullet_depth.
+- Do not merely describe what the project is. For each bullet, explain the implementation mechanism.
 - Use payload.bullet_depth_profile and payload.tech_ontology_context only as compact guidance; ontology explains terminology and does not prove candidate experience.
+- Use payload.project_angle_profile, payload.project_modules, and payload.role_angle_bullet_candidates to select
+  the role-appropriate angle. Do not use a single fixed description for a complex project, and do not flatten
+  mechanism-rich bullets into generic product summaries.
+- Prioritize bullets that include at least 3 of these 5 elements: concrete technical mechanism/tool, implemented function/process, technical/workflow problem solved, user/business/engineering value, and target-role relevance.
+- Use payload.bullet_depth_profile.role_relevance to shift emphasis by role; do not write every project in the same style.
+- If payload.section_type is "experience", apply payload.prompt_policies.experience.
 - Do not invent metrics, technologies, files, commits, dates, ownership, deployment, users, or business impact.
 - Use STAR analysis before final bullets.
 - If a metric/result is unsupported, list it in missing_star_fields and write a conservative qualitative result.
 - Final bullets must combine a concrete method, a substantive workflow/business capability, and an evidence-grounded result/value.
 - Avoid stack-only, CRUD-only, and shallow UI-only bullets.
 - When payload.bullet_constraints.max_final_bullets is present, keep final_bullets at or below that count.
+- For project candidates, when payload.bullet_constraints.extra_rules or ranking context specifies a bullet_budget,
+  return that many final_bullets when supported evidence exists. If you return fewer, risks must explain the
+  specific evidence or page-space reason. A top-ranked project must not receive fewer bullets than lower-ranked
+  selected projects.
 
 Compact bullet writer payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -7953,6 +11335,8 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
     facts = reduced.get("current_project_compact_facts", {})
     evidence_summary = reduced.get("current_project_evidence_summary", {})
     constraints = reduced.get("bullet_constraints", {})
+    if isinstance(reduced.get("prompt_policies"), dict):
+        reduced["prompt_policies"] = compact_value_for_prompt(reduced["prompt_policies"], 220, 6)
 
     if isinstance(facts, dict):
         facts["resumeRelevantClaims"] = sorted(
@@ -7968,7 +11352,14 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
         ("existing_bullets", 4),
         ("existing_resume_snippet.latex_lines", 14),
         ("tech_ontology_context", 8),
+        ("project_angle_profile.available_angles", MAX_PROJECT_ANGLE_CANDIDATES),
+        ("project_angle_profile.high_value_mechanisms", MAX_PROJECT_HIGH_VALUE_MECHANISMS),
+        ("project_angle_profile.project_modules", MAX_PROJECT_MODULES),
+        ("project_modules", MAX_PROJECT_MODULES),
+        ("role_angle_bullet_candidates", 8),
         ("bullet_depth_profile.mechanisms", 10),
+        ("bullet_depth_profile.allowed_claims", 10),
+        ("bullet_depth_profile.forbidden_claims", 8),
         ("current_project_evidence_summary.safeClaims", 8),
         ("current_project_compact_facts.resumeRelevantClaims", 10),
         ("current_project_compact_facts.metricCandidates", 5),
@@ -7991,7 +11382,7 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             snippet = reduced.get("existing_resume_snippet", {})
             if isinstance(snippet, dict) and isinstance(snippet.get("latex"), str):
                 lines = [line for line in snippet["latex"].splitlines() if line.strip()]
-                snippet["latex"] = "\n".join(lines[:limit])
+                snippet["latex"] = "\n".join(truncate_text(line, 280) for line in lines[:limit])
             continue
         parent = reduced
         parts = path.split(".")
@@ -8035,6 +11426,18 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
             depth_profile["problems_solved"] = depth_profile.get("problems_solved", [])[:2]
             depth_profile["role_relevance"] = depth_profile.get("role_relevance", [])[:3]
             depth_profile["unsupported_metrics"] = depth_profile.get("unsupported_metrics", [])[:2]
+            depth_profile["allowed_claims"] = depth_profile.get("allowed_claims", [])[:5]
+            depth_profile["forbidden_claims"] = depth_profile.get("forbidden_claims", [])[:5]
+        angle_profile = reduced.get("project_angle_profile", {})
+        if isinstance(angle_profile, dict):
+            angle_profile["available_angles"] = angle_profile.get("available_angles", [])[:MAX_PROJECT_ANGLE_CANDIDATES]
+            angle_profile["selected_focus"] = angle_profile.get("selected_focus", [])[:4]
+            angle_profile["high_value_mechanisms"] = angle_profile.get("high_value_mechanisms", [])[:8]
+            angle_profile["project_modules"] = angle_profile.get("project_modules", [])[:5]
+        if isinstance(reduced.get("project_modules"), list):
+            reduced["project_modules"] = reduced["project_modules"][:5]
+        if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+            reduced["role_angle_bullet_candidates"] = reduced["role_angle_bullet_candidates"][:5]
         if isinstance(reduced.get("tech_ontology_context"), list):
             reduced["tech_ontology_context"] = compact_value_for_prompt(reduced["tech_ontology_context"][:3], 160, 3)
         reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 180, 3)
@@ -8052,8 +11455,143 @@ def reduce_compact_bullet_payload_for_limit(payload: dict[str, Any], max_chars: 
                 "implemented_functions": reduced["bullet_depth_profile"].get("implemented_functions", [])[:2],
                 "problems_solved": reduced["bullet_depth_profile"].get("problems_solved", [])[:1],
                 "supported_metrics": reduced["bullet_depth_profile"].get("supported_metrics", [])[:1],
+                "allowed_claims": reduced["bullet_depth_profile"].get("allowed_claims", [])[:2],
+                "forbidden_claims": reduced["bullet_depth_profile"].get("forbidden_claims", [])[:2],
                 "metric_rule": "Do not invent metrics.",
             }
+        angle_profile = reduced.get("project_angle_profile", {})
+        if isinstance(angle_profile, dict):
+            reduced["project_angle_profile"] = {
+                "selected_angle": angle_profile.get("selected_angle"),
+                "selected_focus": angle_profile.get("selected_focus", [])[:3],
+                "high_value_mechanisms": angle_profile.get("high_value_mechanisms", [])[:5],
+                "reason": short_signal(angle_profile.get("reason"), 160),
+            }
+        if isinstance(reduced.get("project_modules"), list):
+            reduced["project_modules"] = compact_value_for_prompt(reduced["project_modules"][:4], 120, 4)
+        if isinstance(reduced.get("role_angle_bullet_candidates"), list):
+            reduced["role_angle_bullet_candidates"] = compact_value_for_prompt(reduced["role_angle_bullet_candidates"][:3], 120, 3)
+
+    if prompt_size() > max_chars:
+        snippet = reduced.get("existing_resume_snippet", {})
+        if isinstance(snippet, dict):
+            snippet["latex"] = truncate_text(snippet.get("latex"), 600)
+        if isinstance(constraints, dict):
+            constraints["output_language_instruction"] = truncate_text(constraints.get("output_language_instruction"), 220)
+            constraints["extra_rules"] = short_signal(constraints.get("extra_rules"), 90)
+            constraints["do_not_invent"] = ["metrics", "tools", "deployment", "users", "business impact"]
+            constraints["forbidden_unsupported_claims"] = constraints.get("forbidden_unsupported_claims", [])[:2]
+        if isinstance(facts, dict):
+            facts["projectSummary"] = short_signal(facts.get("projectSummary"), 220)
+            facts["resumeRelevantClaims"] = compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 90, 2)
+            facts["metricCandidates"] = compact_value_for_prompt(facts.get("metricCandidates", []), 90, 1)
+            facts["starFacts"] = compact_value_for_prompt(facts.get("starFacts", {}), 80, 1)
+        if isinstance(evidence_summary, dict):
+            evidence_summary["safeClaims"] = compact_value_for_prompt(evidence_summary.get("safeClaims", []), 90, 2)
+            evidence_summary["evidenceSources"] = shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 2)
+            evidence_summary["keyModules"] = shortest_evidence_sources(evidence_summary.get("keyModules", []), 2)
+            evidence_summary["riskFlags"] = shortest_evidence_sources(evidence_summary.get("riskFlags", []), 2)
+        reduced["compact_jd_requirements"] = compact_value_for_prompt(reduced.get("compact_jd_requirements"), 90, 2)
+        reduced["role_profile"] = compact_value_for_prompt(reduced.get("role_profile"), 90, 2)
+        reduced["prompt_policies"] = compact_value_for_prompt(reduced.get("prompt_policies", {}), 120, 3)
+        reduced["role_lens_priorities"] = compact_value_for_prompt(reduced.get("role_lens_priorities"), 90, 2)
+        reduced["existing_bullets"] = compact_value_for_prompt(reduced.get("existing_bullets", []), 100, 1)
+
+    if prompt_size() > max_chars:
+        facts = reduced.get("current_project_compact_facts", {}) if isinstance(reduced.get("current_project_compact_facts"), dict) else {}
+        evidence_summary = reduced.get("current_project_evidence_summary", {}) if isinstance(reduced.get("current_project_evidence_summary"), dict) else {}
+        depth_profile = reduced.get("bullet_depth_profile", {}) if isinstance(reduced.get("bullet_depth_profile"), dict) else {}
+        constraints = reduced.get("bullet_constraints", {}) if isinstance(reduced.get("bullet_constraints"), dict) else {}
+        reduced = {
+            "section_type": reduced.get("section_type"),
+            "source_name": reduced.get("source_name"),
+            "prompt_policies": compact_value_for_prompt(reduced.get("prompt_policies", {}), 80, 2),
+            "compact_jd_requirements": compact_value_for_prompt(reduced.get("compact_jd_requirements"), 70, 1),
+            "role_profile": compact_value_for_prompt(reduced.get("role_profile"), 70, 1),
+            "tech_ontology_context": [],
+            "bullet_depth_profile": {
+                "mechanisms": depth_profile.get("mechanisms", [])[:2],
+                "implemented_functions": depth_profile.get("implemented_functions", [])[:2],
+                "problems_solved": depth_profile.get("problems_solved", [])[:1],
+                "role_relevance": depth_profile.get("role_relevance", [])[:1],
+                "supported_metrics": depth_profile.get("supported_metrics", [])[:1],
+                "allowed_claims": depth_profile.get("allowed_claims", [])[:1],
+                "forbidden_claims": depth_profile.get("forbidden_claims", [])[:1],
+                "metric_rule": "Do not invent metrics.",
+            },
+            "project_angle_profile": compact_value_for_prompt(reduced.get("project_angle_profile", {}), 100, 3),
+            "project_modules": compact_value_for_prompt(reduced.get("project_modules", []), 100, 3),
+            "role_angle_bullet_candidates": compact_value_for_prompt(reduced.get("role_angle_bullet_candidates", []), 100, 2),
+            "current_project_compact_facts": {
+                "projectName": facts.get("projectName"),
+                "projectSummary": short_signal(facts.get("projectSummary"), 160),
+                "technicalStack": facts.get("technicalStack", [])[:4],
+                "keyModules": facts.get("keyModules", [])[:3],
+                "userContributionSignals": facts.get("userContributionSignals", [])[:3],
+                "resumeRelevantClaims": compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 80, 1),
+                "metricCandidates": compact_value_for_prompt(facts.get("metricCandidates", []), 80, 1),
+                "riskFlags": facts.get("riskFlags", [])[:2],
+            },
+            "current_project_evidence_summary": {
+                "evidenceSources": shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 2),
+                "technologies": evidence_summary.get("technologies", [])[:4],
+                "keyModules": evidence_summary.get("keyModules", [])[:2],
+                "safeClaims": compact_value_for_prompt(evidence_summary.get("safeClaims", []), 80, 1),
+                "riskFlags": evidence_summary.get("riskFlags", [])[:2],
+            },
+            "role_lens_priorities": compact_value_for_prompt(reduced.get("role_lens_priorities"), 70, 1),
+            "relevant_star_facts": {},
+            "existing_resume_snippet": {
+                "scope": "resume_excerpt",
+                "section_name": "Project-section" if reduced.get("section_type") == "project" else "Experience-section",
+                "block_hint": reduced.get("source_name"),
+                "latex": truncate_text((reduced.get("existing_resume_snippet") or {}).get("latex"), 320)
+                if isinstance(reduced.get("existing_resume_snippet"), dict)
+                else "",
+            },
+            "existing_bullets": compact_value_for_prompt(reduced.get("existing_bullets", []), 80, 1),
+            "bullet_constraints": {
+                "language": constraints.get("language"),
+                "output_language_instruction": truncate_text(constraints.get("output_language_instruction"), 160),
+                "must_return_json": True,
+                "required_keys": ["section_type", "source_name", "job_alignment", "star_analysis", "react_analysis", "final_bullets", "skills_to_emphasize", "risks"],
+                "do_not_invent": ["metrics", "tools", "deployment", "users", "business impact"],
+                "style": "mechanism-first evidence-grounded bullets",
+                "extra_rules": short_signal(constraints.get("extra_rules"), 60),
+                "tech_ontology_rule": "Ontology is terminology only; evidence controls claims.",
+                "forbidden_unsupported_claims": constraints.get("forbidden_unsupported_claims", [])[:1],
+            },
+        }
+
+    if prompt_size() > max_chars:
+        facts = reduced.get("current_project_compact_facts", {}) if isinstance(reduced.get("current_project_compact_facts"), dict) else {}
+        evidence_summary = reduced.get("current_project_evidence_summary", {}) if isinstance(reduced.get("current_project_evidence_summary"), dict) else {}
+        reduced["compact_jd_requirements"] = {}
+        reduced["prompt_policies"] = compact_value_for_prompt(reduced.get("prompt_policies", {}), 60, 1)
+        reduced["role_profile"] = compact_value_for_prompt(reduced.get("role_profile"), 50, 1)
+        reduced["role_lens_priorities"] = {}
+        reduced["existing_bullets"] = []
+        reduced["relevant_star_facts"] = {}
+        if isinstance(reduced.get("existing_resume_snippet"), dict):
+            reduced["existing_resume_snippet"]["latex"] = truncate_text(reduced["existing_resume_snippet"].get("latex"), 160)
+        if isinstance(facts, dict):
+            facts["projectSummary"] = short_signal(facts.get("projectSummary"), 90)
+            facts["keyModules"] = facts.get("keyModules", [])[:2]
+            facts["userContributionSignals"] = facts.get("userContributionSignals", [])[:2]
+            facts["resumeRelevantClaims"] = compact_value_for_prompt(facts.get("resumeRelevantClaims", []), 50, 1)
+            facts["metricCandidates"] = []
+            facts["riskFlags"] = facts.get("riskFlags", [])[:1]
+        if isinstance(evidence_summary, dict):
+            evidence_summary["evidenceSources"] = shortest_evidence_sources(evidence_summary.get("evidenceSources", []), 1)
+            evidence_summary["keyModules"] = evidence_summary.get("keyModules", [])[:1]
+            evidence_summary["safeClaims"] = compact_value_for_prompt(evidence_summary.get("safeClaims", []), 50, 1)
+            evidence_summary["riskFlags"] = evidence_summary.get("riskFlags", [])[:1]
+        if isinstance(reduced.get("bullet_constraints"), dict):
+            reduced["bullet_constraints"]["output_language_instruction"] = truncate_text(
+                reduced["bullet_constraints"].get("output_language_instruction"),
+                80,
+            )
+            reduced["bullet_constraints"]["required_keys"] = ["section_type", "source_name", "final_bullets", "risks"]
 
     return reduced
 
@@ -8087,9 +11625,9 @@ def run_resume_bullet_writer_tool(
         tech_context_for_texts(
             job_description,
             project_text_for_tech_matching(evidence_card),
-            top_k=MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+            top_k=MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
         ),
-        MAX_TECH_ONTOLOGY_PROMPT_ENTRIES,
+        MAX_TECH_ONTOLOGY_BULLET_ENTRIES,
     )
     depth_profile = build_bullet_depth_profile(evidence_card, role_profile, jd_requirements, tech_context)
     allowed_claims = []
@@ -8107,6 +11645,44 @@ def run_resume_bullet_writer_tool(
         append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
     for claim in listish(jd_requirements.get("forbidden_unsupported_claims", [])) + tech_forbidden_claims(tech_context, MAX_PROMPT_CLAIMS):
         append_unique(forbidden_claims, claim, MAX_PROMPT_CLAIMS)
+    current_project_facts = build_current_project_compact_facts(
+        source_name,
+        source_facts,
+        evidence_card,
+        allowed_claims,
+        forbidden_claims,
+        job_description,
+    )
+    project_card_for_angle = {
+        **(source_facts if isinstance(source_facts, dict) else {}),
+        "project_name": source_name,
+        "evidence_card": evidence_card,
+        "role_lens": role_lens,
+        "bullet_depth_profile": depth_profile,
+        "current_project_compact_facts": current_project_facts,
+    }
+    mechanism_cards = build_resume_mechanism_cards(
+        project_card_for_angle,
+        jd_requirements,
+        evidence_card,
+        source_facts,
+        entry_type=section_type if section_type in {"project", "experience"} else "project",
+    )
+    project_modules: list[dict[str, Any]] = []
+    project_angle_profile: dict[str, Any] = {}
+    role_angle_bullet_candidates: list[dict[str, Any]] = []
+    if section_type == "project":
+        bullet_budget = bullet_budget_from_extra_rules(extra_rules)
+        project_modules = extract_project_modules(project_card_for_angle, role_profile, jd_requirements, tech_context)
+        project_angle_profile = build_project_angle_profile(project_card_for_angle, role_profile, jd_requirements, tech_context)
+        project_angle_profile["project_modules"] = project_modules
+        role_angle_bullet_candidates = generate_role_angle_bullet_candidates(
+            project_card_for_angle,
+            project_angle_profile,
+            role_profile,
+            jd_requirements,
+            bullet_budget or 3,
+        )
     prompt = f"""
 {RESUME_BULLET_WRITER_PROMPT}
 
@@ -8135,6 +11711,9 @@ Extra rules:
 Role profile:
 {json.dumps(role_profile, ensure_ascii=False, indent=2)}
 
+Prompt policies:
+{json.dumps(stage_policy_payload(section_type), ensure_ascii=False, indent=2)}
+
 Structured JD requirements:
 {json.dumps(jd_requirements, ensure_ascii=False, indent=2)}
 
@@ -8156,6 +11735,18 @@ Tech ontology context:
 Bullet depth profile:
 {json.dumps(depth_profile, ensure_ascii=False, indent=2)}
 
+Project angle profile:
+{json.dumps(compact_value_for_prompt(project_angle_profile, 900, 8), ensure_ascii=False, indent=2)}
+
+Compact project modules:
+{json.dumps(compact_value_for_prompt(project_modules, 700, MAX_PROJECT_MODULES), ensure_ascii=False, indent=2)}
+
+Role-specific angle bullet candidates:
+{json.dumps(compact_value_for_prompt(role_angle_bullet_candidates, 900, max(3, (bullet_budget_from_extra_rules(extra_rules) or 3) + 3)), ensure_ascii=False, indent=2)}
+
+Project mechanism cards (write bullets only from safeToWrite=true cards; never concatenate raw project-memory fields):
+{json.dumps(compact_value_for_prompt(mechanism_cards, 700, 10), ensure_ascii=False, indent=2)}
+
 Existing bullets:
 {json.dumps(existing_bullets, ensure_ascii=False, indent=2)}
 
@@ -8166,16 +11757,27 @@ Forbidden / unsupported resume claims:
 {json.dumps(forbidden_claims, ensure_ascii=False, indent=2)}
 
 STAR enforcement:
+- Treat Prompt policies as authoritative. The bullet writer writes within the project/experience budget and evidence boundaries;
+  final merge is only an editor.
 - Populate star_analysis before final_bullets.
 - If a metric, ownership level, business scale, or result is not supported, list it in missing_star_fields.
 - final_bullets must not include unsupported numbers, inflated ownership, or generic stack-only wording.
-- For Projects-section candidates, follow the ranking context and bullet budget from Extra rules; keep lower-ranked
-  projects concise and reserve the most detailed treatment for the highest-ranked project.
+- For Projects-section candidates, follow PROJECT_SECTION_POLICY from Prompt policies plus the ranking context and bullet budget from Extra rules.
+- If Extra rules/ranking context specifies a project bullet_budget, produce exactly that many final_bullets when
+  supported evidence exists; returning fewer requires a concrete evidence or explicit length-constraint reason in risks.
+- The highest-ranked selected project must not receive fewer final_bullets than lower-ranked selected projects.
 - evidence_card.inferred_results may be used as conservative qualitative Result evidence from local diff/code
   analysis, but never convert it into verified QPS, P99, latency, cost, accuracy, or percentage claims unless
   data_or_scale or user-confirmed star_facts explicitly supports the number.
 - Tech ontology explains terminology only. It does not prove the candidate knows a tool; project evidence and
   allowed_claims decide whether a technology can appear in bullets.
+- Prioritize bullets that include at least 3 of these 5 elements: concrete technical mechanism/tool,
+  implemented function/process, technical/workflow problem solved, user/business/engineering value,
+  and target-role relevance.
+- Use the bullet_depth_profile role_relevance signals to change emphasis for software engineering, IT analyst,
+  DevOps, data/analytics, business/product analyst, and inventory/operations roles.
+- Use project_angle_profile and compact project modules to select a role-appropriate angle. Do not flatten
+  complex projects into one fixed product description or generic stack summary.
 - Treat live user guidance from the progress modal as user-provided STAR evidence when present.
 """
     compact_payload = None
@@ -8225,14 +11827,50 @@ STAR enforcement:
         if not isinstance(payload.get(key), list):
             payload[key] = []
     depth_validations = []
+    previous_depth_bullets = []
+    depth_debug = {
+        "project": source_name,
+        "rewritten_bullets": 0,
+        "weak_bullets_detected": 0,
+        "unsupported_metrics_removed": 0,
+        "unsupported_technologies_removed": 0,
+    }
     for index, item in enumerate(payload["final_bullets"]):
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
-        depth_validation = validate_bullet_depth(str(bullet or ""), evidence_card, depth_profile, role_profile)
-        if not depth_validation.get("valid") and (
-            depth_validation.get("mechanism_specificity", 0) < 60
-            or depth_validation.get("implemented_function_clarity", 0) < 60
-        ):
-            rewritten = rewrite_bullet_with_depth(str(bullet or ""), depth_profile)
+        current_bullet = str(bullet or "")
+        metric_validation = validate_metric_support(current_bullet, evidence_card, depth_profile)
+        if not metric_validation.get("valid"):
+            current_bullet = str(metric_validation.get("rewritten_bullet") or current_bullet)
+            depth_debug["unsupported_metrics_removed"] += len(metric_validation.get("unsupported_metrics", []))
+            if isinstance(item, dict):
+                item["bullet"] = current_bullet
+                item["evidence"] = item.get("evidence") or "metric_support_validation"
+            else:
+                payload["final_bullets"][index] = {
+                    "bullet": current_bullet,
+                    "evidence": "metric_support_validation",
+                    "confidence": "medium",
+                }
+        before_depth_validation = validate_bullet_depth(
+            current_bullet,
+            evidence_card,
+            depth_profile,
+            role_profile,
+            jd_requirements,
+            previous_depth_bullets,
+        )
+        depth_validation = before_depth_validation
+        if not before_depth_validation.get("is_strong"):
+            depth_debug["weak_bullets_detected"] += 1
+        should_rewrite = not before_depth_validation.get("is_strong") and (
+            before_depth_validation.get("mechanism_specificity", 0) < 70
+            or before_depth_validation.get("implemented_function_clarity", 0) < 70
+            or before_depth_validation.get("problem_value_clarity", 0) < 70
+            or before_depth_validation.get("metric_truthfulness", 100) < 100
+            or before_depth_validation.get("evidence_support", 100) < 70
+        )
+        if should_rewrite:
+            rewritten = rewrite_bullet_mechanism_first(current_bullet, depth_profile, role_profile, jd_requirements)
             if rewritten and rewritten != str(bullet or ""):
                 if isinstance(item, dict):
                     item["bullet"] = rewritten
@@ -8243,11 +11881,42 @@ STAR enforcement:
                         "evidence": "bullet_depth_profile",
                         "confidence": "medium",
                     }
-                depth_validation = validate_bullet_depth(rewritten, evidence_card, depth_profile, role_profile)
+                depth_debug["rewritten_bullets"] += 1
+                after_depth_validation = validate_bullet_depth(
+                    rewritten,
+                    evidence_card,
+                    depth_profile,
+                    role_profile,
+                    jd_requirements,
+                    previous_depth_bullets,
+                )
+                before_unsupported = set(before_depth_validation.get("unsupported_claims", []))
+                after_unsupported = set(after_depth_validation.get("unsupported_claims", []))
+                depth_debug["unsupported_technologies_removed"] += len(
+                    [claim for claim in before_unsupported - after_unsupported if claim in PROTECTED_UNSUPPORTED_TOOLS]
+                )
+                depth_validation = after_depth_validation
                 depth_validation["rewritten_once"] = True
+                depth_validation["pre_rewrite_issues"] = before_depth_validation.get("issues", [])
         current_item = payload["final_bullets"][index]
         current_bullet = current_item.get("bullet") if isinstance(current_item, dict) else current_item
         depth_validations.append({"bullet": str(current_bullet or ""), **depth_validation})
+        if str(current_bullet or "").strip():
+            previous_depth_bullets.append(str(current_bullet or ""))
+    gated_bullets, bullet_quality_gate = apply_bullet_quality_gate(
+        payload["final_bullets"],
+        source_name,
+        mechanism_cards,
+        depth_profile,
+        role_profile,
+        jd_requirements,
+        section_type if section_type in {"project", "experience"} else "project",
+    )
+    if gated_bullets:
+        payload["final_bullets"] = gated_bullets
+    experience_style_validation = {}
+    if section_type == "experience":
+        experience_style_validation = enforce_experience_verb_diversity(payload["final_bullets"])
     bullet_quality = []
     for item in payload["final_bullets"]:
         bullet = item.get("bullet") if isinstance(item, dict) else str(item)
@@ -8275,6 +11944,9 @@ STAR enforcement:
         "role_family": role_profile.get("role_family"),
         "bullet_quality": bullet_quality,
         "bullet_depth": depth_validations,
+        "bullet_depth_validation": depth_debug,
+        "experience_style": experience_style_validation,
+        "bullet_quality_gate": bullet_quality_gate,
     }
     quality_issues = []
     unsupported_claims = []
@@ -8301,6 +11973,12 @@ STAR enforcement:
     payload["role_lens"] = role_lens
     payload["tech_ontology_context"] = tech_context
     payload["bullet_depth_profile"] = depth_profile
+    payload["project_angle_profile"] = project_angle_profile
+    payload["project_modules"] = project_modules
+    payload["role_angle_bullet_candidates"] = role_angle_bullet_candidates
+    payload["current_project_compact_facts"] = current_project_facts
+    payload["bullet_depth_validation"] = depth_debug
+    payload["mechanism_cards"] = mechanism_cards
     return payload
 
 
@@ -8325,7 +12003,7 @@ def build_project_resume_candidate(
         "project_ranking": compact_value_for_prompt(project_ranking or {}, 450, 4),
         "this_project_rank": compact_value_for_prompt(rank_entry or {}, 450, 6),
         "bullet_budget": bullet_budget,
-        "one_page_constraints": constraints,
+        "resume_length_constraints": constraints,
     }
     source_hash = stable_hash(
         {
@@ -8335,12 +12013,29 @@ def build_project_resume_candidate(
             "language": language,
             "progress_guidance": progress_guidance,
             "ranking_context": ranking_context,
+            "project_angle_strategy": "project_angle_profile_v1",
         }
     )
     task_id = current_agent_task_id.get("")
     cached_candidate = get_completed_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash)
     if cached_candidate:
-        return cached_candidate
+        payload = json.loads(json.dumps(cached_candidate, ensure_ascii=False))
+        payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
+        payload["project_name"] = payload.get("project_name") or project.get("project_name") or project.get("name") or ""
+        if rank_entry:
+            payload["project_rank"] = rank_entry.get("rank")
+            payload["bullet_budget"] = bullet_budget
+            payload["focus_areas"] = rank_entry.get("focus_areas", [])
+            payload["project_ranking_context"] = compact_value_for_prompt(rank_entry, 500, 8)
+            selected_entries = project_ranking.get("selected_projects", []) if isinstance(project_ranking, dict) else []
+            total_projects = len(selected_entries) if isinstance(selected_entries, list) else 0
+            payload = ensure_project_candidate_bullet_budget(
+                payload,
+                bullet_budget,
+                int(rank_entry.get("rank") or 0),
+                total_projects,
+            )
+        return payload
     try:
         payload = run_resume_bullet_writer_tool(
             section_type="project",
@@ -8356,7 +12051,7 @@ def build_project_resume_candidate(
                 + PROJECT_PRIORITY_INSTRUCTION
                 + " Generate exactly this project's bullet_budget final_bullets when there is enough supported evidence; "
                 + "do not stop at 3-4 bullets for the top-ranked project by default. Use fewer bullets only when the "
-                + "evidence or one-page constraints truly require it. "
+                + "evidence or explicit one_page length constraints truly require it. "
                 + "For the highest-ranked project, cover multiple dimensions such as core implementation, "
                 + "tools/methods, data/storage/workflow logic, testing/debugging/automation/documentation, "
                 + "and target-role relevance. For lower-ranked projects, keep only the strongest job-relevant evidence. "
@@ -8388,6 +12083,14 @@ def build_project_resume_candidate(
         payload["bullet_budget"] = bullet_budget
         payload["focus_areas"] = rank_entry.get("focus_areas", [])
         payload["project_ranking_context"] = compact_value_for_prompt(rank_entry, 500, 8)
+        selected_entries = project_ranking.get("selected_projects", []) if isinstance(project_ranking, dict) else []
+        total_projects = len(selected_entries) if isinstance(selected_entries, list) else 0
+        payload = ensure_project_candidate_bullet_budget(
+            payload,
+            bullet_budget,
+            int(rank_entry.get("rank") or 0),
+            total_projects,
+        )
     save_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash, "done", candidate_json=payload)
     return payload
 
@@ -8439,8 +12142,8 @@ SKILL_CATEGORY_KEYWORDS = {
     ],
     "AI / Automation": [
         "RAG",
-        "Embedding",
-        "embeddings",
+        "semantic retrieval",
+        "vector search",
         "LLM",
         "OpenAI",
         "prompt",
@@ -8460,6 +12163,17 @@ SKILL_CATEGORY_KEYWORDS = {
 SKILL_ALIASES = {
     "react.js": "React",
     "reactjs": "React",
+    "nodejs": "Node.js",
+    "node js": "Node.js",
+    "javascript": "JavaScript",
+    "java script": "JavaScript",
+    "typescript": "TypeScript",
+    "type script": "TypeScript",
+    "fast api": "FastAPI",
+    "fastapi": "FastAPI",
+    "openai responses api": "OpenAI API",
+    "html and css": "HTML/CSS",
+    "html/css": "HTML/CSS",
     "sqlite3": "SQLite",
     "better-sqlite3": "SQLite",
     "firestore": "Firebase Firestore",
@@ -8472,7 +12186,9 @@ SKILL_ALIASES = {
     "git": "Git/GitHub",
     "git/github": "Git/GitHub",
     "openai api": "OpenAI API",
-    "embeddings": "Embedding",
+    "embedding": "vector search",
+    "embeddings": "vector search",
+    "vector embeddings": "vector search",
     "maps-reduce": "Map-Reduce",
     "map reduce": "Map-Reduce",
     "shell": "Shell scripting",
@@ -8511,8 +12227,11 @@ SKILL_ALIASES = {
 
 
 LOW_VALUE_SKILL_SECTION_NAMES = {
+    "agent",
     "api",
+    "ai",
     "automation",
+    "backend",
     "batch",
     "batchfile",
     "cache",
@@ -8525,19 +12244,121 @@ LOW_VALUE_SKILL_SECTION_NAMES = {
     "database queries",
     "deepseek",
     "documentation",
+    "embedding",
+    "embeddings",
     "firebase analytics",
+    "frontend",
     "gemini",
     "codex",
     "androidx",
+    "admin workflow",
+    "application workflow",
+    "business logic",
+    "candidate generation",
+    "configuration management",
+    "device-based identity",
+    "error handling",
+    "event-management workflows",
+    "generated materials",
+    "job description parsing",
+    "local workflow",
+    "monitoring",
+    "navigation",
+    "notification workflow implementation",
+    "notification workflow logic",
     "openai",
+    "project memory",
     "prompt",
     "qa",
     "reporting",
     "requirements",
+    "retrieval",
+    "role-based flow",
     "stakeholder",
     "testing",
+    "user flow",
     "validation",
+    "workflow coordination",
 }
+
+NON_TECHNICAL_SKILL_TERMS = {
+    "application support",
+    "bug fixing",
+    "code review",
+    "data validation",
+    "debugging",
+    "documentation",
+    "integration testing",
+    "instrumentation testing",
+    "issue diagnosis",
+    "manual testing",
+    "process improvement",
+    "quality assurance",
+    "regression testing",
+    "reporting",
+    "requirements",
+    "requirements analysis",
+    "requirements gathering",
+    "root cause analysis",
+    "root-cause analysis",
+    "stakeholder management",
+    "technical documentation",
+    "testing",
+    "troubleshooting",
+    "unit testing",
+    "unit tests",
+    "validation",
+    "workflow analysis",
+    "workflow automation",
+    "workflow documentation",
+}
+
+LOW_VALUE_SKILL_SECTION_NAMES |= NON_TECHNICAL_SKILL_TERMS
+LOW_VALUE_SKILL_SECTION_NAMES -= {"androidx", "camerax", "firebase analytics"}
+
+DEPRIORITIZED_SPACE_TIGHT_SKILLS = {"cursor"}
+
+STANDALONE_SKILL_BLOCKLIST = {
+    "agent",
+    "api",
+    "backend",
+    "frontend",
+    "embedding",
+    "embeddings",
+    "ai",
+    "llm",
+    "prompt",
+    "cache",
+    "batch",
+    "retrieval",
+}
+
+SKILL_POLLUTION_EXACT = LOW_VALUE_SKILL_SECTION_NAMES | STANDALONE_SKILL_BLOCKLIST | {
+    "application workflow",
+    "workflow coordination",
+    "workflow routing",
+    "admin workflow",
+    "local workflow",
+    "user flow",
+    "role-based flow",
+    "raw feature phrase",
+    "model-generated descriptor",
+}
+
+SKILL_POLLUTION_PHRASE_MARKERS = [
+    " workflow",
+    "workflows",
+    " user flow",
+    " business logic",
+    " error handling",
+    " requirements",
+    " documentation",
+    " generated material",
+    " candidate generation",
+    " configuration management",
+    " implementation",
+    " coordination",
+]
 
 BAD_SKILL_TEXT_MARKERS = [
     "...",
@@ -8577,13 +12398,98 @@ def canonical_skill_name(value: Any) -> str:
     return normalized
 
 
+def is_blocked_standalone_skill_name(name: Any) -> bool:
+    lower = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not lower:
+        return True
+    if lower in STANDALONE_SKILL_BLOCKLIST:
+        return True
+    category_labels = set()
+    for category in list(SKILL_CATEGORY_KEYWORDS) + sum(ROLE_TECHNICAL_SKILL_CATEGORIES.values(), []):
+        clean = re.sub(r"[/,&]+", " ", str(category or "").lower())
+        for token in re.findall(r"[a-z0-9+#.-]+", clean):
+            if token in {"backend", "frontend", "embedding"}:
+                category_labels.add(token)
+    if lower in category_labels:
+        return True
+    return False
+
+
+def is_skill_pollution_name(name: Any) -> bool:
+    lower = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not lower:
+        return True
+    concrete_exceptions = {
+        "openai api",
+        "github api",
+        "rest api",
+        "firebase firestore",
+        "firebase auth",
+        "firebase messaging",
+        "firebase analytics",
+        "vector search",
+        "semantic retrieval",
+    }
+    if lower in concrete_exceptions:
+        return False
+    if lower in SKILL_POLLUTION_EXACT:
+        return True
+    if lower.endswith((" workflow", " workflows", " flow", " flows")):
+        return True
+    if any(marker in f" {lower}" for marker in SKILL_POLLUTION_PHRASE_MARKERS):
+        return True
+    if "parsing" in lower and any(term in lower for term in ["job", "description", "resume", "workflow"]):
+        return True
+    if "management" in lower and lower not in {"package management"}:
+        return True
+    word_parts = re.findall(r"[A-Za-z0-9+#./-]+", lower)
+    if len(word_parts) >= 3 and not tech_entry_for_skill(lower):
+        process_terms = {"workflow", "implementation", "coordination", "business", "logic", "generated", "candidate"}
+        if any(term in word_parts for term in process_terms):
+            return True
+    return False
+
+
 def clean_resume_skill_name(value: Any) -> str:
     name = canonical_skill_name(value)
     name = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", name)
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     if not name:
         return ""
+    if is_skill_pollution_name(name):
+        return ""
     if is_truncated_placeholder_text(name):
+        return ""
+    lower = name.lower()
+    if is_blocked_standalone_skill_name(name):
+        return ""
+    if lower in LOW_VALUE_SKILL_SECTION_NAMES:
+        return ""
+    if any(marker in lower for marker in BAD_SKILL_TEXT_MARKERS):
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", name):
+        return ""
+    if re.search(r"\s/\s", name):
+        return ""
+    if any(char in name for char in [",", ";", "，", "；", "。", "！", "？"]):
+        return ""
+    if len(name) > 44:
+        return ""
+    word_parts = re.findall(r"[A-Za-z0-9+#./-]+", name)
+    if len(word_parts) > 4:
+        return ""
+    return name
+
+
+def clean_rendered_skill_name(value: Any) -> str:
+    name = clean_skill_display_name(value)
+    name = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", name)
+    name = re.sub(r"\s+", " ", name).strip(" ,.;:")
+    if not name or is_truncated_placeholder_text(name):
+        return ""
+    if is_skill_pollution_name(name):
+        return ""
+    if is_blocked_standalone_skill_name(name):
         return ""
     lower = name.lower()
     if lower in LOW_VALUE_SKILL_SECTION_NAMES:
@@ -8594,12 +12500,12 @@ def clean_resume_skill_name(value: Any) -> str:
         return ""
     if re.search(r"\s/\s", name):
         return ""
-    if re.search(r"[,;，；。！？]", name):
+    if any(char in name for char in [",", ";", "，", "；", "。", "！", "？"]):
         return ""
-    if len(name) > 44:
+    if len(name) > 54:
         return ""
     word_parts = re.findall(r"[A-Za-z0-9+#./-]+", name)
-    if len(word_parts) > 4:
+    if len(word_parts) > 5:
         return ""
     return name
 
@@ -8623,8 +12529,18 @@ def base_skill_category(skill: str) -> str:
     return "Tools / Methods"
 
 
+FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA = [
+    "Languages",
+    "Frontend & Mobile",
+    "Backend & Databases",
+    "AI & Automation",
+    "Testing, Build & Debugging",
+    "Tools",
+]
+
+
 ROLE_TECHNICAL_SKILL_CATEGORIES = {
-    "software_engineering": ["Languages", "Backend, Web & Databases", "Testing, Build & Debugging", "Tools & Workflow"],
+    "software_engineering": FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA,
     "it_analyst": [
         "Languages & Scripting",
         "Application & Automation",
@@ -8645,8 +12561,8 @@ ROLE_TECHNICAL_SKILL_CATEGORIES = {
     "supply_chain_operations": [
         "Languages & Scripting",
         "Backend, Data & Inventory Systems",
+        "Testing, Build & Debugging",
         "Tools & Workflow",
-        "Troubleshooting & Documentation",
     ],
 }
 
@@ -8685,10 +12601,10 @@ def skill_category(skill: str, role_family: str = "") -> str:
             term in lower for term in ["inventory", "procurement", "supply chain"]
         ):
             return "Backend, Data & Inventory Systems"
-        if base in {"Testing / Quality", "Collaboration / Documentation"} or any(
-            term in lower for term in ["troubleshoot", "documentation", "logging", "monitoring"]
+        if base == "Testing / Quality" or any(
+            term in lower for term in ["troubleshoot", "debug", "validation", "testing", "gradle", "android studio"]
         ):
-            return "Troubleshooting & Documentation"
+            return "Testing, Build & Debugging"
         return "Tools & Workflow"
     if role == "it_analyst":
         if base == "Languages" or lower in {"powershell", "shell scripting", "bash"}:
@@ -8743,6 +12659,71 @@ def skill_category(skill: str, role_family: str = "") -> str:
     if base in {"Testing / Quality", "Cloud / DevOps / Infrastructure"} and lower not in {"aws", "azure", "kubernetes", "terraform"}:
         return "Testing, Build & Debugging"
     return "Tools & Workflow"
+
+
+def normalize_resume_skill_category(category: Any, skill: Any = "") -> str:
+    raw = str(category or "").strip()
+    lower = raw.lower()
+    skill_name = clean_resume_skill_name(skill) if skill else ""
+    skill_lower = skill_name.lower()
+    if raw in FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA:
+        return raw
+    if raw in {"Languages", "Languages & Scripting", "Languages & Querying"}:
+        return "Languages"
+    if skill_lower:
+        if skill_lower in {
+            "openai api",
+            "chroma",
+            "langchain",
+            "langgraph",
+            "vector search",
+            "semantic retrieval",
+        }:
+            return "AI & Automation"
+        if skill_lower in {
+            "gradle",
+            "maven",
+            "gradle kotlin dsl",
+            "github actions",
+            "ci/cd",
+            "npm",
+            "vite",
+            "webpack",
+            "rollup",
+            "package managers",
+        }:
+            return "Testing, Build & Debugging"
+        if skill_lower in {"android studio", "intellij", "cursor", "vs code", "visual studio code"}:
+            return "Tools"
+        base = base_skill_category(skill_name)
+        if base == "Languages":
+            return "Languages"
+        if base in {"Frontend / UI", "Mobile / Game"}:
+            return "Frontend & Mobile"
+        if base in {"Backend / API", "Database / Storage"}:
+            return "Backend & Databases"
+        if base == "AI / Automation":
+            return "AI & Automation"
+        if base == "Testing / Quality":
+            return "Testing, Build & Debugging"
+    if "frontend" in lower or "mobile" in lower or raw in {"Frontend / UI", "Mobile / Game"}:
+        return "Frontend & Mobile"
+    if "backend" in lower or "database" in lower or raw in {"Backend / API", "Database / Storage", "Data / Reporting"}:
+        return "Backend & Databases"
+    if "ai" in lower or "automation" in lower or raw == "AI / Automation":
+        return "AI & Automation"
+    if "testing" in lower or "debug" in lower or "build" in lower or raw == "Testing / Quality":
+        return "Testing, Build & Debugging"
+    return "Tools"
+
+
+def normalize_resume_skill_category_schema(category_schema: Any) -> list[str]:
+    normalized: list[str] = []
+    for category in listish(category_schema):
+        append_unique(normalized, normalize_resume_skill_category(category), len(FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA))
+    for category in FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA:
+        append_unique(normalized, category, len(FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA))
+    return normalized
 
 
 def skill_relevance(skill: str, jd_terms: list[str]) -> str:
@@ -8976,7 +12957,7 @@ def project_tech_stack_rows_from_context(context: dict[str, Any]) -> list[dict[s
         append_unique(detected, skill, 80)
     rows = []
     for skill in detected:
-        name = canonical_skill_name(skill)
+        name = clean_resume_skill_name(skill)
         if not name:
             continue
         rows.append(
@@ -9389,6 +13370,15 @@ def skills_section_text(skills_section: dict | str) -> str:
     return str(skills_section or "")
 
 
+def standalone_skill_tokens_in_text(text: str, blocked: set[str]) -> list[str]:
+    found = []
+    skill_text = re.sub(r"\\textbf\{[^}]+\}", "", str(text or ""))
+    for token in blocked:
+        if re.search(rf"(?<![A-Za-z0-9+#./-]){re.escape(token)}(?![A-Za-z0-9+#./-])", skill_text, re.IGNORECASE):
+            append_unique(found, token, 20)
+    return found
+
+
 def validate_technical_skills(
     skills_section: dict | str,
     skill_candidates: dict,
@@ -9420,7 +13410,11 @@ def validate_technical_skills(
 
     role_profile = jd_profile.get("role_profile") if isinstance(jd_profile.get("role_profile"), dict) else {}
     role_family = str(role_profile.get("role_family") or jd_profile.get("role_family") or skill_candidates.get("role_family") or "software_engineering")
-    allowed_categories = set(ROLE_TECHNICAL_SKILL_CATEGORIES.get(role_family, ROLE_TECHNICAL_SKILL_CATEGORIES["software_engineering"]))
+    allowed_categories = set(
+        normalize_resume_skill_category_schema(
+            ROLE_TECHNICAL_SKILL_CATEGORIES.get(role_family, ROLE_TECHNICAL_SKILL_CATEGORIES["software_engineering"])
+        )
+    )
     found_categories = re.findall(r"\\textbf\{([^}]+)\}", text)
     category_notes = []
     for category in found_categories:
@@ -9448,6 +13442,23 @@ def validate_technical_skills(
     notes = []
     if len(included_skills) > 32:
         notes.append("Technical Skills may be too broad; keep it below roughly 25-32 skills.")
+    contaminated = standalone_skill_tokens_in_text(
+        text,
+        NON_TECHNICAL_SKILL_TERMS
+        | {term.title() for term in SKILL_POLLUTION_EXACT if term not in {"api", "ai"}}
+        | {"Backend", "Frontend", "Embedding", "embeddings", "Cursor", "Agent", "Retrieval"},
+    )
+    if contaminated:
+        for skill in contaminated:
+            append_unique(unsupported, skill, 40)
+        notes.append("Technical Skills contains ontology/category, generic practice, or low-priority standalone terms: " + ", ".join(contaminated))
+    if re.search(r"(?<![A-Za-z0-9+#./-])OpenAI API(?![A-Za-z0-9+#./-])", skill_text, re.IGNORECASE):
+        openai_candidate = candidate_map.get("openai api")
+        openai_sources = set(openai_candidate.get("sources", [])) if openai_candidate else set()
+        openai_relevance = str(openai_candidate.get("jd_relevance", openai_candidate.get("jdRelevance", ""))) if openai_candidate else ""
+        if openai_relevance != "high" or not (openai_sources & USER_SPECIFIC_SKILL_SOURCE_LABELS):
+            append_unique(unsupported, "OpenAI API", 40)
+            notes.append("OpenAI API should be omitted unless strongly role-relevant and supported by project evidence.")
     if category_notes:
         notes.extend(category_notes)
     jd_only_count = sum(
@@ -9660,6 +13671,7 @@ def build_compact_skills_input(
         )
     )
     return {
+        "promptPolicies": stage_policy_payload("skills"),
         "compactJdSkillRequirements": jd_requirements,
         "candidateSkills": candidate_skills[:MAX_SKILL_CANDIDATES_FOR_PROMPT],
         "skill_candidates": broad_candidate_skills[:MAX_SKILL_CANDIDATES_FOR_PROMPT],
@@ -9688,6 +13700,9 @@ def build_compact_skills_input(
             "Merge aliases such as SQLite/better-sqlite3 and React/React.js.",
             "Move unsupported JD-only skills into gap_report instead of the Technical Skills section.",
             "Tech ontology explains terminology but does not prove the candidate knows a technology.",
+            "Do not include Backend, Frontend, Embedding, or ontology category labels as standalone skills.",
+            "Do not include generic practice/activity labels such as debugging, testing, documentation, requirements, reporting, or validation as skill items.",
+            "Use vector search or semantic retrieval instead of standalone Embedding when retrieval evidence supports it.",
         ],
     }
 
@@ -9706,6 +13721,7 @@ Return ONLY valid JSON with exactly these keys:
   "risks": array of strings
 
 Rules:
+- Treat payload.promptPolicies as authoritative for Technical Skills evidence gating and ontology contamination.
 - Generate the Technical Skills section using the JD, selected resume evidence, current resume skills, user memory, known project technology stack, GitHub evidence summaries, project database rows, and tech ontology context. Do not limit the skills section only to technologies mentioned in the final project bullets. Include skills that are truthful, relevant, and supported by at least one user-specific source. Do not add unsupported JD-only or ontology-only skills. Use cautious wording such as "fundamentals", "familiarity", or "concepts" when evidence is weaker.
 - Tech ontology explains what a technology is; it does not prove the candidate knows that technology.
 - Use only compactJdSkillRequirements, candidateSkills, skill_candidates, existingResumeSkills, projectSkillEvidence, projectDatabaseSkillEvidence, techOntologyContext, and gap_report.
@@ -9714,6 +13730,8 @@ Rules:
 - Merge duplicate or alias skills.
 - Prefer high JD relevance and high confidence.
 - Keep the section concise and role-targeted: use categorySchema, at most 5 categories, and 8 skills per category.
+- Do not include ontology category labels or generic category words as standalone skills; use payload.promptPolicies.skills for the blocked/rewritten cases.
+- Do not include generic practices or work activities as skill items, including debugging, troubleshooting, testing, unit testing, documentation, requirements, reporting, or validation. Keep those in bullets only when evidence supports them.
 - Put unsupported JD-only tools in gap_report / risks instead of recommended_skills_section.
 - Do not read or infer raw repo context, full project memory, code, or chat history.
 
@@ -9738,6 +13756,8 @@ def reduce_compact_skills_payload_for_limit(payload: dict[str, Any], max_chars: 
                 item.get("skill", "").lower(),
             )
         )
+    if isinstance(reduced.get("promptPolicies"), dict):
+        reduced["promptPolicies"] = compact_value_for_prompt(reduced["promptPolicies"], 160, 4)
     for limit in [36, 28, 22, 16, 12]:
         if prompt_size() <= max_chars:
             break
@@ -9813,6 +13833,19 @@ def select_skill_candidates_for_section(compact_payload: dict[str, Any]) -> list
         if str(candidate.get("confidence", "medium")) == "low":
             continue
         jd_relevance = str(candidate.get("jd_relevance", candidate.get("jdRelevance", "low")))
+        candidate_sources = set(candidate.get("sources", []))
+        confidence = str(candidate.get("confidence", "medium"))
+        if skill_name.lower() in DEPRIORITIZED_SPACE_TIGHT_SKILLS and not (
+            jd_relevance == "high"
+            and confidence == "high"
+            and bool(candidate_sources & USER_SPECIFIC_SKILL_SOURCE_LABELS)
+        ):
+            continue
+        if skill_name.lower() == "openai api" and not (
+            jd_relevance == "high"
+            and bool(candidate_sources & USER_SPECIFIC_SKILL_SOURCE_LABELS)
+        ):
+            continue
         if not is_known_resume_skill_name(skill_name) and jd_relevance != "high":
             continue
         if jd_relevance == "low" and skill_name.lower() in JD_MATCH_REQUIRED_SECTION_SKILLS:
@@ -9852,14 +13885,17 @@ def select_skill_candidates_for_section(compact_payload: dict[str, Any]) -> list
 
 def render_technical_skills_section(selected_candidates: list[dict[str, Any]], category_schema: list[str]) -> str:
     grouped: dict[str, list[str]] = {}
+    normalized_schema = normalize_resume_skill_category_schema(category_schema)
     for candidate in selected_candidates:
-        category = str(candidate.get("category") or "Tools & Workflow")
-        grouped.setdefault(category, [])
-        skill_name = clean_skill_display_name(cautious_skill_wording(candidate))
-        if is_truncated_placeholder_text(skill_name):
+        if not clean_resume_skill_name(candidate.get("skill")):
             continue
+        skill_name = clean_rendered_skill_name(cautious_skill_wording(candidate))
+        if not skill_name or is_truncated_placeholder_text(skill_name):
+            continue
+        category = normalize_resume_skill_category(candidate.get("category") or "Tools", skill_name)
+        grouped.setdefault(category, [])
         append_resume_output_unique(grouped[category], skill_name, 12)
-    ordered_categories = [category for category in category_schema if category in grouped]
+    ordered_categories = [category for category in normalized_schema if category in grouped]
     ordered_categories.extend(category for category in grouped if category not in ordered_categories)
     skill_lines = []
     for category in ordered_categories:
@@ -9887,58 +13923,412 @@ def render_technical_skills_section(selected_candidates: list[dict[str, Any]], c
     return "\n".join(lines)
 
 
-def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dict[str, Any]:
-    selected = select_skill_candidates_for_section(compact_payload)
-    category_schema = compact_payload.get("categorySchema") or []
-    selected_skill_names = [
-        clean_resume_skill_name(candidate.get("skill"))
-        for candidate in selected
-        if clean_resume_skill_name(candidate.get("skill"))
+def full_inventory_skill_sort_key(entry: dict[str, Any]) -> tuple[Any, ...]:
+    """Ordering only — never used to drop a real skill.
+
+    1. JD high relevance first, 2. skills in a selected/current project first,
+    3. user-memory / existing-resume / project-tech-stack source first,
+    4. confidence high first, then score / category / name.
+    """
+    sources = set(entry.get("sources", []))
+    in_selected_project = bool(entry.get("in_selected_project"))
+    strong_source = bool(
+        sources & {"current_resume", "project_evidence", "github_evidence", "project_database", "user_memory"}
+    )
+    return (
+        {"high": 0, "medium": 1, "low": 2}.get(str(entry.get("jd_relevance", "low")), 2),
+        0 if in_selected_project else 1,
+        0 if strong_source else 1,
+        {"high": 0, "medium": 1, "low": 2}.get(str(entry.get("confidence", "low")), 2),
+        -int(entry.get("score", 0)),
+        str(entry.get("category", "")),
+        str(entry.get("skill", "")).lower(),
+    )
+
+
+def build_full_technical_skill_inventory(compact_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Full "technical skill overview" inventory for the Technical Skills section.
+
+    Every skill backed by at least one user-specific source is kept. JD relevance and
+    selected-project membership only influence ordering; they never remove a real skill.
+    """
+    role_family = str(
+        (compact_payload.get("roleProfile") or {}).get("role_family")
+        or compact_payload.get("roleFamily")
+        or "software_engineering"
+    )
+    selected_project_terms = set()
+    for evidence in compact_payload.get("projectSkillEvidence", []):
+        if not isinstance(evidence, dict):
+            continue
+        for skill in listish(evidence.get("technicalStack", [])):
+            normalized = canonical_skill_name(skill).lower()
+            if normalized:
+                selected_project_terms.add(normalized)
+
+    inventory: dict[str, dict[str, Any]] = {}
+
+    def register(raw_skill: Any, extra_sources: list[str], candidate: dict[str, Any] | None) -> None:
+        name = clean_resume_skill_name(raw_skill)
+        if not name:
+            return
+        normalized = canonical_skill_name(name)
+        key = normalized.lower()
+        sources = set(extra_sources)
+        confidence = "medium"
+        jd_relevance = "low"
+        score = 0
+        safe = None
+        if isinstance(candidate, dict):
+            sources |= set(candidate.get("sources", []))
+            confidence = str(candidate.get("confidence") or "medium")
+            jd_relevance = str(candidate.get("jd_relevance", candidate.get("jdRelevance", "low")))
+            score = int(candidate.get("score", 0) or 0)
+            safe = candidate.get("safe_to_include", candidate.get("safeToInclude"))
+        entry = inventory.get(key)
+        if entry is None:
+            entry = {
+                "skill": normalized,
+                "normalized_skill": normalized,
+                "category": normalize_resume_skill_category(
+                    (candidate or {}).get("category") or skill_category(normalized, role_family),
+                    normalized,
+                ),
+                "sources": [],
+                "confidence": confidence,
+                "jd_relevance": jd_relevance,
+                "score": score,
+                "in_selected_project": key in selected_project_terms,
+                "_candidate": candidate if isinstance(candidate, dict) else {"skill": normalized, "sources": []},
+                "_safe": safe,
+            }
+            inventory[key] = entry
+        for source in sources:
+            append_unique(entry["sources"], source, 12)
+        if {"high": 0, "medium": 1, "low": 2}.get(confidence, 2) < {"high": 0, "medium": 1, "low": 2}.get(entry["confidence"], 2):
+            entry["confidence"] = confidence
+        if {"high": 0, "medium": 1, "low": 2}.get(jd_relevance, 2) < {"high": 0, "medium": 1, "low": 2}.get(entry["jd_relevance"], 2):
+            entry["jd_relevance"] = jd_relevance
+        entry["score"] = max(int(entry.get("score", 0)), score)
+        if safe is False and entry.get("_safe") is None:
+            entry["_safe"] = False
+        elif safe:
+            entry["_safe"] = True
+
+    candidate_lists = []
+    for key in ("skill_candidates", "candidateSkills"):
+        candidate_lists.append(compact_payload.get(key) or [])
+    sources_payload = compact_payload.get("skillCandidateSources")
+    if isinstance(sources_payload, dict):
+        candidate_lists.append(sources_payload.get("skill_candidates") or [])
+    for candidates in candidate_lists:
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get("skill"):
+                register(candidate.get("skill"), [], candidate)
+
+    # Project tech-stack database rows are user-specific evidence.
+    for row in compact_payload.get("projectDatabaseSkillEvidence", []):
+        if isinstance(row, dict):
+            register(row.get("skill") or row.get("normalized_skill") or row.get("name"), ["project_database"], None)
+
+    # Existing resume skills are always user-specific and must never be dropped.
+    for skill in compact_payload.get("existingResumeSkills", []):
+        register(skill, ["current_resume"], None)
+
+    result = []
+    for entry in inventory.values():
+        sources = set(entry.get("sources", []))
+        if not (sources & USER_SPECIFIC_SKILL_SOURCE_LABELS):
+            continue  # JD-only / ontology-only skills stay out of Technical Skills
+        if entry.get("_safe") is False:
+            continue
+        entry.pop("_safe", None)
+        entry["safe_to_include"] = True
+        result.append(entry)
+    result.sort(key=full_inventory_skill_sort_key)
+    return clean_skill_inventory_pollution(result)
+
+
+def clean_skill_inventory_pollution(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove non-technical feature/process phrases while preserving real user-backed skills."""
+    cleaned: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_entry in inventory or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        skill = clean_resume_skill_name(entry.get("skill") or entry.get("normalized_skill"))
+        if not skill or is_skill_pollution_name(skill):
+            continue
+        sources = set(entry.get("sources", []))
+        if not (sources & USER_SPECIFIC_SKILL_SOURCE_LABELS):
+            continue
+        if sources.issubset(TECH_ONTOLOGY_NON_EVIDENCE_SOURCES):
+            continue
+        key = canonical_skill_name(skill).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entry["skill"] = canonical_skill_name(skill)
+        entry["normalized_skill"] = canonical_skill_name(skill)
+        entry["category"] = normalize_resume_skill_category("", skill)
+        entry["safe_to_include"] = True
+        cleaned.append(entry)
+    cleaned.sort(key=full_inventory_skill_sort_key)
+    return cleaned
+
+
+def render_full_technical_skills_section(inventory: list[dict[str, Any]], category_schema: list[str]) -> str:
+    """Render the full inventory as the compact no-bullet Technical Skills section.
+
+    Preserves the existing single-\\item, comma-separated LaTeX layout. Ordering within
+    each category follows the (already sorted) inventory order.
+    """
+    grouped: dict[str, list[str]] = {}
+    category_order: list[str] = []
+    normalized_schema = normalize_resume_skill_category_schema(category_schema)
+    for entry in inventory:
+        candidate = entry.get("_candidate") if isinstance(entry.get("_candidate"), dict) else entry
+        skill_name = clean_rendered_skill_name(cautious_skill_wording(candidate))
+        if not skill_name or is_truncated_placeholder_text(skill_name):
+            continue
+        category = normalize_resume_skill_category(entry.get("category") or "Tools", skill_name)
+        if category not in grouped:
+            grouped[category] = []
+            category_order.append(category)
+        append_resume_output_unique(grouped[category], skill_name, 24)
+    ordered_categories = [category for category in normalized_schema if category in grouped]
+    ordered_categories.extend(category for category in category_order if category not in ordered_categories)
+    skill_lines = []
+    for category in ordered_categories:
+        skills = grouped.get(category, [])
+        if not skills:
+            continue
+        rendered_skills = ", ".join(latex_escape_text(skill) for skill in skills)
+        skill_lines.append(f"    \\textbf{{{latex_escape_text(category)}:}} {rendered_skills}")
+    lines = [
+        "\\section{Technical Skills}",
+        "\\begin{itemize}[leftmargin=0.15in, label={}]",
+        "\\small{",
+        "  \\item{",
     ]
+    for index, skill_line in enumerate(skill_lines):
+        suffix = r" \\" if index < len(skill_lines) - 1 else ""
+        lines.append(f"{skill_line}{suffix}")
+    lines.extend(["  }", "}", "\\end{itemize}"])
+    return "\n".join(lines)
+
+
+def parse_rendered_technical_skills(section: str) -> tuple[dict[str, list[str]], list[str]]:
+    """Parse a rendered Technical Skills section into {category: [skills]} + category order."""
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for match in re.finditer(r"\\textbf\{([^}]+)\}\s*:?\s*([^\n]*)", section):
+        category = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", match.group(1)).strip().rstrip(":")
+        category = (
+            category.replace(r"\&", "&").replace(r"\#", "#").replace(r"\_", "_").replace(r"\%", "%").replace(r"\$", "$")
+        )
+        rest = match.group(2)
+        rest = re.sub(r"\\\\\s*$", "", rest).strip()
+        if not category:
+            continue
+        if category not in grouped:
+            grouped[category] = []
+            order.append(category)
+        for raw in rest.split(","):
+            skill = re.sub(r"\\[A-Za-z]+\{?|[{}]", "", raw)
+            skill = skill.replace(r"\&", "&").replace(r"\#", "#").replace(r"\_", "_").replace(r"\%", "%").replace(r"\$", "$")
+            skill = skill.strip(" ,.;:")
+            if skill:
+                append_unique(grouped[category], skill, 40)
+    return grouped, order
+
+
+def audit_technical_skills_completeness(recommended_section: str, inventory: list[dict[str, Any]]) -> dict[str, Any]:
+    """Ensure no real inventory skill silently disappeared from the rendered section.
+
+    Missing skills are added back locally (string/render only, no model call). Alias
+    equivalence counts as covered.
+    """
+    grouped, order = parse_rendered_technical_skills(recommended_section)
+    final_normalized = set()
+    for skills in grouped.values():
+        for skill in skills:
+            final_normalized.add(canonical_skill_name(skill).lower())
+
+    missing_skills = []
+    added_back = []
+    covered_by_aliases = []
+    for entry in inventory:
+        display = clean_rendered_skill_name(
+            cautious_skill_wording(entry.get("_candidate") if isinstance(entry.get("_candidate"), dict) else entry)
+        )
+        if not display:
+            continue
+        normalized = canonical_skill_name(display).lower()
+        if normalized in final_normalized:
+            if display.lower() != normalized:
+                covered_by_aliases.append(display)
+            continue
+        # Missing — add it back to its category.
+        missing_skills.append(display)
+        category = normalize_resume_skill_category(entry.get("category") or "Tools", display)
+        if category not in grouped:
+            grouped[category] = []
+            order.append(category)
+        append_unique(grouped[category], display, 40)
+        final_normalized.add(normalized)
+        added_back.append(display)
+
+    section = recommended_section
+    if added_back:
+        category_schema = [c for c in order]
+        rebuilt = [
+            {"skill": skill, "category": category, "_candidate": {"skill": skill, "sources": []}}
+            for category in order
+            for skill in grouped.get(category, [])
+        ]
+        section = render_full_technical_skills_section(rebuilt, category_schema)
+
+    final_count = sum(len(v) for v in grouped.values())
+    return {
+        "section": section,
+        "inventorySkillsCount": len(inventory),
+        "finalSkillsCount": final_count,
+        "missingSkills": missing_skills,
+        "addedBackSkills": added_back,
+        "coveredByAliases": covered_by_aliases,
+    }
+
+
+def validate_technical_skills_section(section: dict | str, inventory: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    text = skills_section_text(section)
+    grouped, _order = parse_rendered_technical_skills(text)
+    inventory_list = clean_skill_inventory_pollution(inventory or []) if inventory else []
+    inventory_map = {
+        canonical_skill_name(entry.get("skill")).lower(): entry
+        for entry in inventory_list
+        if isinstance(entry, dict) and entry.get("skill")
+    }
+    issues: list[str] = []
+    pollution: list[str] = []
+    unsupported: list[str] = []
+    duplicates: list[str] = []
+    category_errors: list[str] = []
+    seen: set[str] = set()
+
+    for category, skills in grouped.items():
+        normalized_category = normalize_resume_skill_category(category)
+        if normalized_category not in FULL_TECHNICAL_SKILL_CATEGORY_SCHEMA:
+            category_errors.append(f"Unknown Technical Skills category: {category}")
+        for raw_skill in skills:
+            skill = clean_rendered_skill_name(raw_skill)
+            raw_lower = re.sub(r"\s+", " ", str(raw_skill or "").strip().lower())
+            if not skill or is_skill_pollution_name(raw_skill):
+                append_unique(pollution, str(raw_skill), 30)
+                continue
+            key = canonical_skill_name(skill).lower()
+            if key in seen:
+                append_unique(duplicates, skill, 30)
+            seen.add(key)
+            expected_category = normalize_resume_skill_category("", skill)
+            if expected_category != normalized_category:
+                category_errors.append(f"{skill} is categorized under {category}, expected {expected_category}.")
+            if inventory_map:
+                entry = inventory_map.get(key)
+                sources = set(entry.get("sources", [])) if entry else set()
+                if not entry or not (sources & USER_SPECIFIC_SKILL_SOURCE_LABELS) or sources.issubset(TECH_ONTOLOGY_NON_EVIDENCE_SOURCES):
+                    append_unique(unsupported, skill, 30)
+
+    missing_inventory = []
+    if inventory_list:
+        audit = audit_technical_skills_completeness(text, inventory_list)
+        missing_inventory = list(audit.get("missingSkills", []))
+
+    if pollution:
+        issues.append("Technical Skills contains pollution/process phrases: " + ", ".join(pollution))
+    if unsupported:
+        issues.append("Technical Skills contains skills without user-specific evidence: " + ", ".join(unsupported))
+    if duplicates:
+        issues.append("Technical Skills contains duplicate/alias skill entries: " + ", ".join(duplicates))
+    if category_errors:
+        issues.extend(category_errors[:8])
+    if missing_inventory:
+        issues.append("Technical Skills omitted user-backed inventory skills: " + ", ".join(missing_inventory[:12]))
+
+    return {
+        "ok": not issues,
+        "valid": not issues,
+        "issues": sorted(set(issues)),
+        "pollution": pollution,
+        "unsupported_skills": unsupported,
+        "duplicate_skills": duplicates,
+        "category_errors": category_errors,
+        "missing_inventory_skills": missing_inventory,
+        "skills_checked": sum(len(skills) for skills in grouped.values()),
+    }
+
+
+def build_deterministic_skills_candidate(compact_payload: dict[str, Any]) -> dict[str, Any]:
+    category_schema = compact_payload.get("categorySchema") or []
+    # Full inventory drives the final Technical Skills section (JD only affects order).
+    inventory = build_full_technical_skill_inventory(compact_payload)
+    recommended_section = render_full_technical_skills_section(inventory, category_schema)
+    audit = audit_technical_skills_completeness(recommended_section, inventory)
+    recommended_section = audit["section"]
+
+    inventory_skill_names = [entry["skill"] for entry in inventory]
     existing = {canonical_skill_name(skill).lower() for skill in compact_payload.get("existingResumeSkills", [])}
     additions = [
         {
-            "skill": clean_resume_skill_name(candidate.get("skill")),
-            "supporting_source": ", ".join(candidate.get("sources", [])),
-            "confidence": candidate.get("confidence", "medium"),
-            "safe_to_include": bool(candidate.get("safe_to_include", candidate.get("safeToInclude", True))),
-            "wording": clean_skill_display_name(cautious_skill_wording(candidate)),
+            "skill": entry["skill"],
+            "supporting_source": ", ".join(entry.get("sources", [])),
+            "confidence": entry.get("confidence", "medium"),
+            "safe_to_include": True,
+            "wording": clean_skill_display_name(
+                cautious_skill_wording(entry.get("_candidate") if isinstance(entry.get("_candidate"), dict) else entry)
+            ),
         }
-        for candidate in selected
-        if clean_resume_skill_name(candidate.get("skill"))
-        and clean_resume_skill_name(candidate.get("skill")).lower() not in existing
+        for entry in inventory
+        if entry["skill"].lower() not in existing
     ]
+    # Only unsupported JD-only / ontology-only skills belong in the remove/avoid list.
     unsupported = compact_payload.get("gap_report", {}).get("jd_skills_not_supported", [])
-    recommended_section = render_technical_skills_section(selected, category_schema)
     jd_profile = {
         "role_profile": compact_payload.get("roleProfile", {}),
         "requirements": compact_payload.get("compactJdSkillRequirements", {}),
     }
+    inventory_public = [
+        {k: v for k, v in entry.items() if not k.startswith("_")}
+        for entry in inventory
+    ]
     validation = validate_technical_skills(
         recommended_section,
-        compact_payload.get("skillCandidateSources", {"skill_candidates": compact_payload.get("skill_candidates", [])}),
+        {"skill_candidates": inventory_public, "role_family": compact_payload.get("roleFamily", "software_engineering")},
         jd_profile,
     )
+    section_validation = validate_technical_skills_section(recommended_section, inventory_public)
+    if not section_validation.get("valid"):
+        validation["valid"] = False
+        validation.setdefault("notes", []).extend(section_validation.get("issues", []))
     return {
         "skills_strategy": (
-            "Use a role-targeted skills section sourced from the JD, current resume, selected project evidence, "
-            "memory, project tech-stack database rows, GitHub metadata, coursework, and prior resume versions; "
-            "exclude unsupported JD-only claims."
+            "Technical Skills is a full user technology overview sourced from the current resume, selected and "
+            "unselected project evidence, memory, project tech-stack database rows, GitHub metadata, coursework, "
+            "and prior resume versions. JD relevance only affects ordering; real skills are never dropped for being "
+            "off-JD. Only unsupported JD-only or ontology-only claims are excluded."
         ),
-        "skills_to_emphasize": selected_skill_names,
-        "skills_to_deemphasize": [
-            candidate.get("skill")
-            for candidate in compact_payload.get("skill_candidates", [])
-            if isinstance(candidate, dict)
-            and not candidate.get("safe_to_include")
-            and candidate.get("skill")
-        ][:20],
+        "full_skill_inventory": inventory_public,
+        "skills_to_emphasize": inventory_skill_names,
         "skills_to_add_if_supported": additions,
         "skills_to_remove_or_avoid": unsupported,
         "recommended_skills_section": recommended_section,
         "skill_candidates": compact_payload.get("skill_candidates", []),
+        "skillCandidateSources": {"skill_candidates": inventory_public, "role_family": compact_payload.get("roleFamily", "software_engineering")},
         "gap_report": compact_payload.get("gap_report", {}),
+        "completeness_audit": {k: v for k, v in audit.items() if k != "section"},
         "validation": validation,
+        "section_validation": section_validation,
         "risks": [
             f"Unsupported JD-only skill omitted: {skill}" for skill in unsupported[:10]
         ] + [
@@ -9999,6 +14389,12 @@ def build_experience_resume_candidate(
             "bullets, rewrite them for relevance and clarity, and remove weak or redundant bullets. "
             "Preserve every existing Experience entry unless allow_experience_removal is true. Do not "
             "invent employers, roles, dates, responsibilities, technologies, metrics, seniority, or ownership. "
+            "Use varied, natural Experience action verbs instead of repeating Implemented. Prefer Coordinated, "
+            "Led, Managed, Organized, Translated, Collaborated, Debugged, Delivered, Tested, Supported, "
+            "Maintained, Guided, or Prioritized when supported by the original experience. Emphasize coordination, "
+            "requirements breakdown, teamwork, Git/GitHub collaboration, debugging, delivery under deadlines, "
+            "communication with designers/artists, and iterative feedback; do not turn every Experience bullet "
+            "into a pure coding bullet. "
             "Return experience_strategy, entry_recommendations, bullets_to_emphasize, bullets_to_deemphasize, "
             "and unsupported_claims_to_avoid if possible."
             + job_language_resume_sentence_rule()
@@ -10139,6 +14535,7 @@ def build_compact_summary_input(
         for source in skill.get("evidenceSources", []):
             append_unique(strongest_evidence, source, 16)
     return {
+        "promptPolicies": stage_policy_payload("summary"),
         "targetRole": role_core,
         "compactJdRequirements": compact_bullet_writer_value(jd_requirements_for_prompt(job_description), 260, 6),
         "candidatePositioning": {
@@ -10185,6 +14582,7 @@ Return ONLY valid JSON with exactly these keys:
   "risks": array of strings
 
 Rules:
+- Treat payload.promptPolicies as authoritative for evidence boundaries, unsupported metrics, project evidence, and skills evidence gating.
 - Use only the compact summary payload below.
 - Do not invent years of experience, seniority, production scale, users, QPS, P99, cost, accuracy, or unsupported metrics.
 - Mention only skills and project strengths with evidenceSources or staged candidate support.
@@ -10205,6 +14603,8 @@ def reduce_compact_summary_payload_for_limit(payload: dict[str, Any], max_chars:
 
     if isinstance(reduced.get("topProjectHighlights"), list):
         reduced["topProjectHighlights"].sort(key=lambda item: -int(item.get("fitScore", 0)))
+    if isinstance(reduced.get("promptPolicies"), dict):
+        reduced["promptPolicies"] = compact_value_for_prompt(reduced["promptPolicies"], 160, 4)
     for project_limit, skill_limit, claim_limit in [(3, 16, 3), (3, 14, 2), (2, 12, 2), (2, 10, 1)]:
         if prompt_size() <= max_chars:
             break
@@ -10220,6 +14620,36 @@ def reduce_compact_summary_payload_for_limit(payload: dict[str, Any], max_chars:
         if isinstance(reduced.get("strongestEvidence"), list):
             reduced["strongestEvidence"] = reduced["strongestEvidence"][:10]
     return reduced
+
+
+def clean_recommended_summary_text(summary: Any, max_words: int = 70) -> str:
+    text = re.sub(r"\s+", " ", str(summary or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\b(?:eager to contribute|passionate about contributing|seeking an opportunity to)\b[^.]*\.?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if len(sentences) > 3:
+        text = " ".join(sentences[:3])
+    words = re.findall(r"[A-Za-z0-9+#./-]+|[^\sA-Za-z0-9+#./-]+", text)
+    word_tokens = re.findall(r"[A-Za-z0-9+#./-]+", text)
+    if len(word_tokens) <= max_words:
+        return text
+    kept: list[str] = []
+    count = 0
+    for token in words:
+        if re.fullmatch(r"[A-Za-z0-9+#./-]+", token):
+            count += 1
+        if count > max_words:
+            break
+        kept.append(token)
+    shortened = " ".join(kept)
+    shortened = re.sub(r"\s+([,.;:!?])", r"\1", shortened).strip(" ,;:")
+    return shortened.rstrip(".") + "."
 
 
 class ResumeCompactInputBuilder:
@@ -10319,6 +14749,12 @@ Staged Experience candidate:
     for key in ["keywords_to_include", "claims_to_avoid", "evidence_basis", "risks"]:
         if not isinstance(payload.get(key), list):
             payload[key] = []
+    original_summary = str(payload.get("recommended_summary") or "")
+    cleaned_summary = clean_recommended_summary_text(original_summary)
+    if cleaned_summary:
+        payload["recommended_summary"] = cleaned_summary
+        if cleaned_summary != original_summary.strip():
+            payload["risks"].append("Summary was locally tightened to avoid overlong or boilerplate wording.")
     if "compact_payload" in locals() and isinstance(compact_payload, dict):
         supported_skills = {canonical_skill_name(item.get("skill")).lower() for item in compact_payload.get("compactSkills", []) if isinstance(item, dict)}
         if supported_skills:
@@ -10343,6 +14779,7 @@ def apply_resume_project_candidate(
     constraints = default_resume_constraints(resume_constraints)
     normal_payload = {
         "section_name": "Project-section",
+        "prompt_policies": stage_policy_payload("final_merge"),
         "job_description": job_description,
         "current_resume": current_resume,
         "candidate": project_candidate,
@@ -10378,6 +14815,7 @@ Apply exactly one staged Project-section candidate to the current LaTeX resume.
 Loop step:
 - Project candidate {payload["index"]} of {payload["total"]}.
 - Return the complete updated LaTeX resume.
+- Treat Prompt policies as authoritative; final merge is an editor, not a new writer.
 - Keep all previous edits already present in the current LaTeX resume.
 - Use only this one project candidate for this step.
 - Do not request or infer raw Chroma evidence.
@@ -10392,7 +14830,12 @@ Loop step:
   scale, or results that are not present in star_analysis, final_bullets, user guidance, or evidence.
 - Reject generic stack-only wording such as "used X to develop Y"; keep action + module + technical method + supported result/value.
 - Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
-  Do not simplify strong bullets into vague project descriptions. Do not add unsupported metrics.
+  Do not simplify strong bullets back into vague project descriptions. Do not add unsupported metrics or unsupported technologies.
+  Preserve project ranking, project order, and bullet budgets. When trimming is necessary, cut filler, duplicate
+  wording, and weak lower-ranked bullets before removing important mechanism details from the top-ranked project.
+- Do not flatten complex project value. Preserve this candidate's selected project angle, high-value mechanisms,
+  compact project modules, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic
+  product summaries.
 - Project selection allowed: {payload["allow_project_selection"]}
 - If project selection is not allowed, keep the existing resume project list and only update factual wording.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
@@ -10407,8 +14850,11 @@ Current LaTeX resume:
 One staged Project candidate:
 {json.dumps(prompt_project_candidate, ensure_ascii=False, indent=2)}
 
-Project ranking and one-page constraints:
+Project ranking and length constraints:
 {json.dumps(compact_value_for_prompt({"project_ranking": payload.get("project_ranking"), "project_rank_entry": payload.get("project_rank_entry"), "resume_constraints": payload.get("resume_constraints")}, 900, 8), ensure_ascii=False, indent=2)}
+
+Prompt policies:
+{json.dumps(compact_value_for_prompt(payload.get("prompt_policies", stage_policy_payload("final_merge")), 500, 6), ensure_ascii=False, indent=2)}
 """
         )
         return safe_model_call(
@@ -10434,8 +14880,12 @@ def apply_resume_section_candidate(
     candidate: dict[str, Any],
     body: TailorBody,
 ) -> str:
+    if section_name.lower() in {"skills-section", "technical skills", "skills"} and isinstance(candidate, dict):
+        if candidate.get("recommended_skills_section"):
+            return apply_skills_section_candidate(current_resume, candidate)
     normal_payload = {
         "section_name": section_name,
+        "prompt_policies": stage_policy_payload("final_merge"),
         "job_description": job_description,
         "current_resume": current_resume,
         "candidate": candidate,
@@ -10465,6 +14915,7 @@ Apply exactly one staged {section_name} candidate to the current LaTeX resume.
 
 Rules:
 - Return the complete updated LaTeX resume.
+- Treat Prompt policies as authoritative; final merge is an editor, not a new writer.
 - Keep all previous edits already present in the current LaTeX resume.
 - Use only this staged {section_name} candidate for this step.
 - For Project and Experience bullet wording, use only ReAct bullet writer candidates already present in the staged data.
@@ -10473,6 +14924,9 @@ Rules:
 - Preserve mechanism-rich bullets. Keep concrete tools, implementation mechanisms, and problem/value language.
   Do not simplify strong bullets into vague descriptions. Do not add unsupported metrics.
 - For Experience bullets, keep the user's personal contribution explicit and supported.
+- For Experience-section merges, preserve varied supported action verbs such as Coordinated, Managed,
+  Delivered, Tested, Debugged, Supported, Maintained, Organized, and Collaborated. Do not normalize every
+  Experience bullet back to Implemented, and do not turn coordination/team leadership bullets into pure coding bullets.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Entire Experience entry removal allowed: {payload["allow_experience_removal"]}
 - {job_language_resume_sentence_rule() or "Preserve the output language required above for every user-facing resume sentence."}
@@ -10486,6 +14940,9 @@ Current LaTeX resume:
 
 One staged {section_name} candidate:
 {json.dumps(prompt_candidate, ensure_ascii=False, indent=2)}
+
+Prompt policies:
+{json.dumps(compact_value_for_prompt(payload.get("prompt_policies", stage_policy_payload("final_merge")), 500, 6), ensure_ascii=False, indent=2)}
 """
         )
         return safe_model_call(
@@ -10523,6 +14980,139 @@ def apply_skills_section_candidate(
         return merged.replace("\\end{itemize}\\end{document}", "\\end{itemize}\n\\end{document}")
     except HTTPException:
         return current_resume
+
+
+def resume_item_contents(section_text: str) -> list[str]:
+    contents = []
+    for _, _, item in resume_item_spans(section_text):
+        brace_index = item.find("{")
+        if brace_index != -1 and item.endswith("}"):
+            contents.append(item[brace_index + 1 : -1])
+    return contents
+
+
+def validate_experience_style_in_resume(resume_latex: str) -> dict[str, Any]:
+    section = find_latex_section(resume_latex, "experience")
+    if not section:
+        return {"valid": True, "implemented_start_count": 0, "issues": []}
+    contents = resume_item_contents(section.get("text", ""))
+    implemented_count = sum(1 for item in contents if leading_resume_verb(item).lower() == "implemented")
+    valid = implemented_count <= 1 or implemented_count <= max(1, len(contents) // 3)
+    return {
+        "valid": valid,
+        "implemented_start_count": implemented_count,
+        "bullet_count": len(contents),
+        "issues": [] if valid else ["Experience overuses `Implemented` after final merge."],
+    }
+
+
+def repair_experience_verb_diversity_in_resume(resume_latex: str) -> str:
+    section = find_latex_section(resume_latex, "experience")
+    if not section:
+        return resume_latex
+    section_text = section.get("text", "")
+    spans = resume_item_spans(section_text)
+    if not spans:
+        return resume_latex
+    items = []
+    for _, _, item in spans:
+        brace_index = item.find("{")
+        content = item[brace_index + 1 : -1] if brace_index != -1 and item.endswith("}") else item
+        items.append({"bullet": content})
+    validation = enforce_experience_verb_diversity(items)
+    if validation.get("valid") and not validation.get("rewritten_bullets"):
+        return resume_latex
+    pieces = []
+    cursor = 0
+    for (start, end, _), item in zip(spans, items):
+        pieces.append(section_text[cursor:start])
+        pieces.append(f"\\resumeItem{{{item.get('bullet', '')}}}")
+        cursor = end
+    pieces.append(section_text[cursor:])
+    repaired_section = "".join(pieces)
+    return resume_latex[: section["start"]] + repaired_section + resume_latex[section["end"] :]
+
+
+def validate_final_resume_policy(
+    resume_latex: str,
+    project_ranking: dict[str, Any] | None,
+    skills_candidate: dict[str, Any] | None,
+    resume_constraints: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    section_structure_validation = validate_resume_section_structure(resume_latex)
+    project_validation = validate_project_section_allocation(resume_latex, project_ranking or {}, resume_constraints)
+    skills_validation = {"valid": True, "issues": []}
+    skills_section_validation = {"valid": True, "issues": []}
+    if isinstance(skills_candidate, dict):
+        skills_block = resume_block_for_prompt(resume_latex, "Skills-section")
+        skill_sources = skills_candidate.get("skillCandidateSources") or {"skill_candidates": skills_candidate.get("skill_candidates", [])}
+        skills_validation = validate_technical_skills(skills_block, skill_sources, {})
+        skills_section_validation = validate_technical_skills_section(
+            skills_block.get("latex", "") if isinstance(skills_block, dict) else skills_block,
+            skills_candidate.get("full_skill_inventory", []),
+        )
+    experience_validation = validate_experience_style_in_resume(resume_latex)
+    bullet_quality_validation = resume_section_bullet_quality_issues(resume_latex)
+    summary_quality_validation = validate_summary_quality(resume_latex)
+    issues = []
+    if not section_structure_validation.get("valid"):
+        issues.extend(section_structure_validation.get("issues", []))
+    if not project_validation.get("valid"):
+        issues.extend(project_validation.get("issues", []))
+    if not skills_validation.get("valid"):
+        issues.extend(skills_validation.get("notes", []) or skills_validation.get("unsupported_skills", []))
+    if not skills_section_validation.get("valid"):
+        issues.extend(skills_section_validation.get("issues", []))
+    if not experience_validation.get("valid"):
+        issues.extend(experience_validation.get("issues", []))
+    if not bullet_quality_validation.get("valid"):
+        issues.extend(bullet_quality_validation.get("issues", []))
+    if not summary_quality_validation.get("valid"):
+        issues.extend(summary_quality_validation.get("issues", []))
+    return {
+        "valid": not issues,
+        "issues": issues,
+        "section_structure": section_structure_validation,
+        "project": project_validation,
+        "technical_skills": skills_validation,
+        "technical_skills_section": skills_section_validation,
+        "experience_style": experience_validation,
+        "bullet_quality": bullet_quality_validation,
+        "summary_quality": summary_quality_validation,
+        "policy": compact_value_for_prompt(stage_policy_payload("final_merge"), 160, 4),
+    }
+
+
+def repair_final_resume_policy_once(
+    resume_latex: str,
+    project_ranking: dict[str, Any] | None,
+    project_candidates: list[dict[str, Any]] | None,
+    skills_candidate: dict[str, Any] | None,
+    resume_constraints: dict[str, Any] | None = None,
+    original_resume: str = "",
+    experience_candidate: Any = None,
+) -> str:
+    repaired = repair_missing_section_headings(
+        resume_latex,
+        original_resume=original_resume,
+        staged_experience_candidates=experience_candidate,
+        staged_project_candidates=project_candidates,
+    )
+    repaired = enforce_project_section_allocation(repaired, project_ranking, project_candidates, resume_constraints)
+    if isinstance(skills_candidate, dict):
+        validation = validate_final_resume_policy(repaired, project_ranking, skills_candidate, resume_constraints)
+        if not validation.get("technical_skills", {}).get("valid", True) or not validation.get("technical_skills_section", {}).get("valid", True):
+            repaired = apply_skills_section_candidate(repaired, skills_candidate)
+    if not validate_experience_style_in_resume(repaired).get("valid", True):
+        repaired = repair_experience_verb_diversity_in_resume(repaired)
+    repaired = enforce_project_section_allocation(repaired, project_ranking, project_candidates, resume_constraints)
+    repaired = repair_missing_section_headings(
+        repaired,
+        original_resume=original_resume,
+        staged_experience_candidates=experience_candidate,
+        staged_project_candidates=project_candidates,
+    )
+    return repaired
 
 
 def project_bullet_budget(index: int, total: int) -> int:
@@ -10570,6 +15160,7 @@ def apply_projects_section_layout(
     layout_candidates = project_layout_candidates_for_prompt(project_candidates[:MAX_STAGED_PROJECTS])
     normal_payload = {
         "section_name": "Project-section",
+        "prompt_policies": stage_policy_payload("layout"),
         "job_description": job_description,
         "current_resume": current_resume,
         "candidate": {
@@ -10578,7 +15169,9 @@ def apply_projects_section_layout(
             "preferred_project_count": PREFERRED_RESUME_PROJECTS,
             "maximum_project_count": MAX_STAGED_PROJECTS,
             "ranking_rule": PROJECT_PRIORITY_INSTRUCTION,
-            "one_page_rule": "Prefer a one-page resume; reduce lower-ranked project bullets before cutting top-ranked project bullets.",
+            "length_rule": constraints.get("length_rule"),
+            "trim_order": constraints.get("trim_order"),
+            "one_page_rule": "Apply one-page compression only when resume_constraints.length_mode is one_page.",
             "one_page_cut_order": constraints.get("one_page_cut_order"),
         },
         "project_ranking": compact_value_for_prompt(project_ranking or {}, 900, 8),
@@ -10609,22 +15202,28 @@ Apply final Projects-section layout constraints to the current LaTeX resume.
 
 Rules:
 - Return the complete updated LaTeX resume.
-- Keep the resume optimized for one page.
+- Treat Prompt policies as authoritative; final merge is an editor, not a new writer.
+- Keep the resume concise and relevant. Two pages are allowed unless resume_constraints.length_mode is one_page.
 - {PROJECT_PRIORITY_INSTRUCTION}
 - Preserve selected_project_candidates ranking order from strongest to weakest.
 - Preserve the intended target_bullet_count for each project as much as possible.
-- If space is limited, cut in this order: weak/repetitive third project, lower-ranked project bullets,
-  less relevant Experience bullets, Summary wording, and top-ranked project bullets only as a last resort.
+- If trimming is needed, remove filler, duplicate bullets, and weak generic wording first. Do not remove
+  verified skills, section headings, company names, role titles, dates, or evidence-backed mechanisms solely for page length.
 - Never keep more than {MAX_STAGED_PROJECTS} Projects-section entries.
 - Remove projects that are not in selected_project_candidates when project selection is allowed.
 - Do not re-add omitted projects from project_ranking.omitted_projects.
 - Higher-ranked projects must have more bullets than lower-ranked projects when multiple projects are shown, unless
   the ranking scores are genuinely similar.
 - Lower-ranked project bullets should be compact and only keep the most job-relevant factual claim.
-- Reduce lower-ranked project bullets first when one-page constraints require trimming.
+- Reduce lower-ranked project bullets only when explicit length constraints require trimming.
 - Do not create new bullet wording outside the selected candidates' final_bullets / recommended_bullets.
 - Preserve mechanism-rich bullets from selected candidates. Keep concrete tools, implementation mechanisms,
-  and problem/value language. Do not simplify strong bullets into vague project descriptions.
+  and problem/value language. Do not simplify strong bullets back into vague project descriptions.
+  Do not add unsupported metrics or unsupported technologies. Preserve project ranking, project order, and bullet budgets.
+  When trimming is necessary, cut weaker or duplicate lower-ranked wording before removing important mechanism details from the top-ranked project.
+- Do not flatten complex project value. Preserve each candidate's selected project angle, high-value mechanisms,
+  compact project modules, project ranking, and bullet budget. Do not rewrite mechanism-rich bullets into generic
+  product summaries.
 - Do not invent unsupported metrics, technologies, responsibilities, employers, roles, dates, or repository facts.
 - Preserve LaTeX validity and existing section style.
 - Return only LaTeX code with no Markdown fences and no analysis text.
@@ -10640,6 +15239,9 @@ Projects-section layout candidate data:
 
 Project ranking and constraints:
 {json.dumps(compact_value_for_prompt({"project_ranking": payload.get("project_ranking"), "resume_constraints": payload.get("resume_constraints")}, 1000, 8), ensure_ascii=False, indent=2)}
+
+Prompt policies:
+{json.dumps(compact_value_for_prompt(payload.get("prompt_policies", stage_policy_payload("layout")), 500, 6), ensure_ascii=False, indent=2)}
 """
         )
         return safe_model_call(
@@ -10762,6 +15364,15 @@ def merge_staged_resume(
         project_candidates,
         resume_constraints,
     )
+    current_resume = repair_final_resume_policy_once(
+        current_resume,
+        project_ranking,
+        project_candidates,
+        skills_candidate,
+        resume_constraints,
+        original_resume=resume,
+        experience_candidate=experience_candidate,
+    )
     current_resume = validate_complete_resume_or_raise(
         current_resume,
         "Final deterministic Projects-section enforcement produced invalid LaTeX.",
@@ -10788,7 +15399,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         jd_requirements_for_prompt(job_description),
         job_description,
     )
-    resume_constraints = default_resume_constraints()
+    resume_constraints = default_resume_constraints({"length_mode": body.length_mode})
     selected_projects, project_ranking = select_staged_projects_with_ranking(
         job_description,
         resume,
@@ -10867,6 +15478,12 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     answer = normalize_latex_for_resume_output(answer)
     if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    answer, quality_gate = prepare_tailored_resume_for_save(
+        answer,
+        original_resume=resume,
+        staged_experience_candidates=experience_candidate,
+        staged_project_candidates=candidates,
+    )
     validate_tailored_resume_language_quality_or_raise(answer)
     project_section_validation = validate_project_section_allocation(answer, project_ranking, resume_constraints)
     blocking_project_issues = [
@@ -10878,6 +15495,9 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
                 "Omitted projects were re-added",
                 "Project order does not follow",
                 "over-expanded",
+                "top-ranked but has too few bullets",
+                "highest-ranked project does not receive",
+                "lost selected project-angle value",
             ]
         )
     ]
@@ -10900,6 +15520,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         "staged_project_candidates": candidates,
         "project_ranking": project_ranking,
         "project_section_validation": project_section_validation,
+        "quality_gate": {k: v for k, v in quality_gate.items() if k != "content"},
         "staged_skills_candidate": skills_candidate,
         "staged_experience_candidate": experience_candidate,
         "staged_summary_candidate": summary_candidate,
@@ -11877,6 +16498,7 @@ Project Memory, read first and use as the primary project source:
     answer = normalize_latex_for_resume_output(answer)
     if not agent.looks_like_latex_resume(answer):
         raise HTTPException(status_code=400, detail="Agent did not return valid LaTeX resume code.")
+    answer, quality_gate = prepare_tailored_resume_for_save(answer, original_resume=agent.read_resume())
     validate_tailored_resume_language_quality_or_raise(answer)
     agent.save_tailored_resume(answer, company=application_hint["company"], role=application_hint["role"])
     tailored_resume_outputs = list_output_files(agent.TAILORED_RESUME_OUTPUT_DIR, ".txt", limit=1)
@@ -11886,6 +16508,7 @@ Project Memory, read first and use as the primary project source:
         "output_path": tailored_resume_outputs[0]["path"] if tailored_resume_outputs else None,
         "content": agent.read_tailored_resume(),
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
+        "quality_gate": {k: v for k, v in quality_gate.items() if k != "content"},
     }
     if body.include_application_hint:
         response["application_hint"] = application_hint
@@ -11947,30 +16570,101 @@ def resume_pdf_to_latex_task(body: ResumePdfToLatexBody):
     }
 
 
+def deterministic_resume_export_cleanup(
+    document: str,
+    original_resume: str = "",
+    staged_experience_candidates: Any = None,
+    staged_project_candidates: Any = None,
+) -> tuple[str, dict[str, Any]]:
+    """Local, model-free LaTeX cleanup applied before PDF export."""
+    cleaned = agent.extract_latex_document(document) or document
+    cleaned = normalize_latex_for_resume_output(cleaned)
+    cleaned = normalize_section_titleformat_for_resume_export(cleaned)
+    gate = resume_quality_gate(
+        cleaned,
+        original_resume=original_resume,
+        staged_experience_candidates=staged_experience_candidates,
+        staged_project_candidates=staged_project_candidates,
+        repair=True,
+    )
+    if not gate.get("ok"):
+        raise resume_quality_gate_error(gate, "Tailored resume cannot be exported until blocking structure issues are fixed.")
+    return str(gate.get("content") or cleaned), gate
+
+
 @app.post("/api/resume/tailored/pdf")
 def export_tailored_resume_pdf(body: TailoredResumePdfBody):
     content = body.content.strip()
     application_hint = resolve_saved_application_hint()
+    warnings: list[str] = []
+    saved_tailored_resume = False
+    quality_gate: dict[str, Any] = {}
+    try:
+        original_resume = agent.read_resume()
+    except (FileNotFoundError, ValueError):
+        original_resume = ""
+
     if content:
         document = agent.extract_latex_document(content)
         if not document:
             raise HTTPException(status_code=400, detail="No complete LaTeX document found.")
-        content = document
+        cleaned, quality_gate = deterministic_resume_export_cleanup(document, original_resume=original_resume)
+        warnings = list(quality_gate.get("warnings", []))
+        # Editor content is the newest tailored resume: persist it before exporting.
+        try:
+            agent.save_tailored_resume(
+                cleaned, company=application_hint["company"], role=application_hint["role"]
+            )
+            saved_tailored_resume = True
+        except ValueError as error:
+            failed_gate = {
+                **quality_gate,
+                "ok": False,
+                "blocking_issues": [f"tailored_resume_not_saved: {error}"],
+            }
+            raise resume_quality_gate_error(failed_gate, "Tailored resume content could not be saved before PDF export.") from error
+        content = cleaned
     else:
         try:
-            content = agent.read_tailored_resume()
+            saved_content = agent.read_tailored_resume()
         except (FileNotFoundError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        original_document = agent.extract_latex_document(saved_content) or saved_content
+        cleaned, quality_gate = deterministic_resume_export_cleanup(original_document, original_resume=original_resume)
+        warnings = list(quality_gate.get("warnings", []))
+        # Only persist a new version if deterministic cleanup actually changed the content.
+        if cleaned.strip() != original_document.strip():
+            try:
+                agent.save_tailored_resume(
+                    cleaned, company=application_hint["company"], role=application_hint["role"]
+                )
+                saved_tailored_resume = True
+            except ValueError as error:
+                failed_gate = {
+                    **quality_gate,
+                    "ok": False,
+                    "blocking_issues": [f"tailored_resume_not_saved: {error}"],
+                }
+                raise resume_quality_gate_error(failed_gate, "Cleaned tailored resume could not be saved before PDF export.") from error
+        content = cleaned
 
-    output_pdf = compile_tailored_resume_pdf(
-        content,
-        company=application_hint["company"],
-        role=application_hint["role"],
-    )
+    try:
+        output_pdf = compile_tailored_resume_pdf(
+            content,
+            company=application_hint["company"],
+            role=application_hint["role"],
+        )
+    except PdfCompileError as error:
+        raise HTTPException(status_code=400, detail=error.to_response()) from error
+
     return {
         "saved": True,
+        "saved_pdf": True,
+        "saved_tailored_resume": saved_tailored_resume,
         "path": str(output_pdf),
         "output_path": str(output_pdf),
+        "quality_gate": {k: v for k, v in quality_gate.items() if k != "content"},
+        "warnings": warnings,
     }
 
 
