@@ -404,6 +404,39 @@ export const api = {
       }),
       signal: requestOptions.signal,
     }),
+  getGitHubContextPhase2Status: () => request("/github/context/phase2/status"),
+  getGitHubContextPhase2Health: (projectId = "") => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project_id", projectId);
+    const query = params.toString();
+    return request(`/github/context/phase2/health${query ? `?${query}` : ""}`);
+  },
+  getGitHubContextPhase2Inspect: ({ projectId = "", limit = 10, includeSamples = true } = {}) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project_id", projectId);
+    params.set("limit", String(limit || 10));
+    params.set("include_samples", includeSamples ? "true" : "false");
+    return request(`/github/context/phase2/inspect?${params}`);
+  },
+  buildGitHubContextPhase2: ({
+    projectId = "",
+    stages = null,
+    limit = null,
+    continueOnError = true,
+  } = {}) => {
+    const payload = {
+      project_id: projectId || "",
+      stages: stages && (!Array.isArray(stages) || stages.length) ? stages : null,
+      continue_on_error: continueOnError,
+    };
+    if (limit !== null && limit !== undefined && String(limit).trim() !== "") {
+      payload.limit = Number(limit);
+    }
+    return request("/github/context/phase2/build", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
   getApplications: (status = "", limit = 50) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);

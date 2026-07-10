@@ -64,6 +64,10 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- backend/
 |   |-- main.py              # Core CLI agent, model adapters, tools, GitHub logic
 |   |-- api_server.py        # FastAPI HTTP layer for the frontend
+|   |-- evidence_memory.py   # Phase 2 GitHub evidence JSONL storage
+|   |-- evidence_pipeline.py # Phase 2 evidence build orchestration and inspection
+|   |-- evidence_*.py        # Phase 2 chunk, change-summary, evidence-card helpers
+|   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
 |   |   `-- tech_ontology.jsonl
@@ -240,7 +244,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
-- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, and fetch approved context into Chroma.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, inspect structured context previews, and view or manually build Phase 2 evidence memory when `USE_GITHUB_CONTEXT_PHASE2=1`.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
 - Language Switch: change the Web UI between Chinese and English. This affects interface text only; generated content follows the saved job description's predominant language.
@@ -286,6 +290,22 @@ Main FastAPI endpoints:
 - `GET /api/github/config`
 - `POST /api/github/config`
 - `POST /api/github/context`
+- `GET /api/github/context/status`
+- `GET /api/github/context/phase2/status`
+- `GET /api/github/context/phase2/preview`
+- `POST /api/github/context/phase2/build`
+- `GET /api/github/context/phase2/inspect`
+- `GET /api/github/context/phase2/health`
+- `POST /api/github/context/phase2/chunk`
+- `GET /api/github/context/phase2/chunks/preview`
+- `POST /api/github/context/phase2/summarize-changes`
+- `GET /api/github/context/phase2/change-summaries/preview`
+- `POST /api/github/context/phase2/build-evidence-cards`
+- `GET /api/github/context/phase2/evidence-cards/preview`
+- `POST /api/github/context/phase2/build-capability-facts`
+- `GET /api/github/context/phase2/capability-facts/preview`
+- `GET /api/github/context/preview`
+- `GET /api/github/context/raw`
 - `GET /api/applications`
 - `POST /api/applications`
 - `PATCH /api/applications/{record_id}`
@@ -323,6 +343,10 @@ Agent Chat image requests use data URLs:
 
 `POST /api/cover-letter/generate` also accepts `include_application_hint` and can return the same extracted application fields.
 
+`GET /api/github/context/status` reports the structured GitHub context workspace state and source counts for the current Phase 1 implementation. `GET /api/github/context/preview` returns bounded raw-source and derived-record previews, and `GET /api/github/context/raw` returns a bounded raw-source payload by `source_id`.
+
+GitHub context Phase 2 is controlled by `USE_GITHUB_CONTEXT_PHASE2`. When enabled, GitHub context sync persists raw sources into JSONL storage under `information/phase2_evidence_memory/`, and the Phase 2 pipeline can turn those sources into chunks, raw change summaries, evidence cards, and capability facts. `GET /api/github/context/phase2/status`, `health`, and `inspect` report counts, project summaries, missing stages, safe samples, and the next recommended action. `POST /api/github/context/phase2/build` runs the full ordered pipeline, while the stage-specific endpoints run or preview individual stages.
+
 ## Local Files And Privacy
 
 WorkAgent intentionally uses local files as working state. These files can contain private information and should not be committed:
@@ -336,6 +360,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/memory.json`
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
+- `information/phase2_evidence_memory/`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -625,6 +650,10 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- backend/
 |   |-- main.py              # 核心 CLI agent、模型适配、工具、GitHub 逻辑
 |   |-- api_server.py        # 面向前端的 FastAPI HTTP 层
+|   |-- evidence_memory.py   # Phase 2 GitHub 证据 JSONL 存储
+|   |-- evidence_pipeline.py # Phase 2 证据构建编排和检查
+|   |-- evidence_*.py        # Phase 2 分块、变更摘要、证据卡辅助模块
+|   |-- capability_extractor.py
 |   |-- tech_ontology.py     # 紧凑技术 taxonomy 和安全声明辅助逻辑
 |   |-- data/
 |   |   `-- tech_ontology.jsonl
@@ -797,7 +826,7 @@ background/prompt.example.txt
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
-- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，并把已确认的上下文写入 Chroma。
+- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，把已确认的上下文写入 Chroma，检查结构化上下文预览，并在 `USE_GITHUB_CONTEXT_PHASE2=1` 时查看或手动构建 Phase 2 证据记忆。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话，可以上传图片，也可以删除指定的画像记忆。
 - 语言切换：在中文和英文界面之间切换。该设置只影响界面文字；生成内容使用已保存职位描述的主要语言。
@@ -843,6 +872,22 @@ background/prompt.example.txt
 - `GET /api/github/config`
 - `POST /api/github/config`
 - `POST /api/github/context`
+- `GET /api/github/context/status`
+- `GET /api/github/context/phase2/status`
+- `GET /api/github/context/phase2/preview`
+- `POST /api/github/context/phase2/build`
+- `GET /api/github/context/phase2/inspect`
+- `GET /api/github/context/phase2/health`
+- `POST /api/github/context/phase2/chunk`
+- `GET /api/github/context/phase2/chunks/preview`
+- `POST /api/github/context/phase2/summarize-changes`
+- `GET /api/github/context/phase2/change-summaries/preview`
+- `POST /api/github/context/phase2/build-evidence-cards`
+- `GET /api/github/context/phase2/evidence-cards/preview`
+- `POST /api/github/context/phase2/build-capability-facts`
+- `GET /api/github/context/phase2/capability-facts/preview`
+- `GET /api/github/context/preview`
+- `GET /api/github/context/raw`
 - `GET /api/applications`
 - `POST /api/applications`
 - `PATCH /api/applications/{record_id}`
@@ -878,6 +923,10 @@ Agent Chat 图片请求使用 data URL：
 
 `POST /api/cover-letter/generate` 也接受 `include_application_hint`，并可以返回同样的投递记录字段。
 
+`GET /api/github/context/status` 会返回当前 Phase 1 结构化 GitHub context 工作区状态和来源计数。`GET /api/github/context/preview` 会返回受限数量的 raw sources 和派生记录预览，`GET /api/github/context/raw` 会按 `source_id` 返回受限长度的 raw source 内容。
+
+GitHub context Phase 2 由 `USE_GITHUB_CONTEXT_PHASE2` 控制。启用后，GitHub context 同步会把 raw sources 持久化到 `information/phase2_evidence_memory/` 下的 JSONL 存储，Phase 2 pipeline 可以继续把这些来源构建为 chunks、raw change summaries、evidence cards 和 capability facts。`GET /api/github/context/phase2/status`、`health` 和 `inspect` 会返回计数、项目摘要、缺失阶段、安全样本和下一步建议；`POST /api/github/context/phase2/build` 运行完整有序 pipeline，阶段专用接口则用于单独运行或预览某个阶段。
+
 ## 本地文件与隐私
 
 WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个人信息或密钥，不应提交到 git：
@@ -891,6 +940,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/memory.json`
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
+- `information/phase2_evidence_memory/`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`

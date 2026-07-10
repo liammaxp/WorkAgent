@@ -45,8 +45,22 @@ information/agent_chunk_checkpoints.json
 information/model_call_cache.json
 information/project_compact_facts.json
 information/resume_candidate_checkpoints.json
+
+# Phase 2 evidence memory may contain raw GitHub patches and derived evidence.
+information/phase2_evidence_memory/
+phase2_evidence_memory/
+github_raw_sources.jsonl
+evidence_chunks.jsonl
+raw_change_summaries.jsonl
+evidence_cards.jsonl
+capability_facts.jsonl
+
 information/*.sqlite3
+information/*.sqlite
+information/*.sqlite-*
+information/*.sqlite3-*
 information/*.db
+information/*.db-*
 information/*.pdf
 information/*.docx
 

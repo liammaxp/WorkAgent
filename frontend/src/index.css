@@ -1222,6 +1222,128 @@ th {
   line-height: 1.6;
 }
 
+.phase2-panel .github-status-message {
+  margin-bottom: 8px;
+}
+
+.phase2-status-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.phase2-build-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.7fr) minmax(120px, 0.45fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.phase2-build-result {
+  margin-top: 14px;
+}
+
+.phase2-count-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.phase2-count-box {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.phase2-count-box strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.phase2-count-box div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.phase2-count-box span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.phase2-count-box b {
+  color: var(--text);
+}
+
+.phase2-samples {
+  display: grid;
+  gap: 10px;
+}
+
+.phase2-sample-group {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.phase2-sample-group h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.phase2-sample-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.phase2-sample-item + .phase2-sample-item {
+  margin-top: 8px;
+}
+
+.phase2-sample-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.28fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.phase2-sample-row span {
+  color: var(--text-muted);
+}
+
+.phase2-sample-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.phase2-json-preview {
+  max-height: 240px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.phase2-empty-state {
+  padding: 20px;
+}
+
 .prompt-layout {
   display: grid;
   grid-template-columns: minmax(520px, 1.3fr) minmax(320px, 0.7fr);
@@ -1471,6 +1593,8 @@ th {
   .summary-row,
   .github-status-grid,
   .github-status-sources,
+  .phase2-build-controls,
+  .phase2-count-columns,
   .prompt-layout {
     grid-template-columns: 1fr;
   }

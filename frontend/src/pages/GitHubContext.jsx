@@ -179,6 +179,86 @@ function previewProjectKey(project) {
   return String(project?.project_id || project?.repo || project?.project_name || "").trim();
 }
 
+const PHASE2_STAGE_OPTIONS = [
+  { value: "all", label: "All stages" },
+  { value: "chunk", label: "chunk" },
+  { value: "summarize_changes", label: "summarize_changes" },
+  { value: "build_evidence_cards", label: "build_evidence_cards" },
+  { value: "build_capability_facts", label: "build_capability_facts" },
+];
+
+const PHASE2_SAMPLE_LABELS = {
+  raw_sources: "Raw sources",
+  chunks: "Chunks",
+  raw_change_summaries: "Raw change summaries",
+  evidence_cards: "Evidence cards",
+  capability_facts: "Capability facts",
+};
+
+const PHASE2_SENSITIVE_SAMPLE_KEYS = new Set([
+  "raw_text",
+  "text",
+  "chunk_text",
+  "full_text",
+  "raw",
+  "patch",
+  "content",
+]);
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function truncateDisplayValue(value, limit = 400) {
+  const textValue = String(value ?? "");
+  if (textValue.length <= limit) return textValue;
+  return `${textValue.slice(0, limit - 3).trimEnd()}...`;
+}
+
+function sanitizePhase2SampleForDisplay(sample) {
+  if (Array.isArray(sample)) {
+    return sample.slice(0, 12).map((item) => sanitizePhase2SampleForDisplay(item));
+  }
+  if (sample && typeof sample === "object") {
+    return Object.fromEntries(
+      Object.entries(sample)
+        .filter(([key]) => !PHASE2_SENSITIVE_SAMPLE_KEYS.has(String(key).toLowerCase()))
+        .map(([key, value]) => [key, sanitizePhase2SampleForDisplay(value)]),
+    );
+  }
+  if (typeof sample === "string") {
+    return truncateDisplayValue(sample, 400);
+  }
+  return sample;
+}
+
+function phase2DisplayValue(value) {
+  if (Array.isArray(value)) {
+    if (!value.length) return "-";
+    return value.map((item) => phase2DisplayValue(item)).join(", ");
+  }
+  if (value && typeof value === "object") {
+    return truncateDisplayValue(JSON.stringify(sanitizePhase2SampleForDisplay(value)), 400);
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null || value === undefined || value === "") return "-";
+  return truncateDisplayValue(value, 400);
+}
+
+function phase2ProjectOptions(status, inspect) {
+  const projects = [
+    ...safeArray(status?.projects),
+    ...safeArray(inspect?.projects),
+  ];
+  return Array.from(
+    new Set(
+      projects
+        .map((project) => String(project?.project_id || "").trim())
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
 function GitHubRawPanel({ rawState, onClose, ui }) {
   if (!rawState) return null;
   if (rawState.loading) {
@@ -432,6 +512,314 @@ function GitHubContextStatusPanel({
   );
 }
 
+function Phase2KeyValueGrid({ items }) {
+  return (
+    <div className="github-status-grid phase2-status-grid">
+      {items.map((item) => (
+        <div className="github-status-metric" key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Phase2ProjectSummaries({ projects }) {
+  if (!projects.length) {
+    return <p className="empty-state phase2-empty-state">No Phase 2 project summaries yet.</p>;
+  }
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Project ID</th>
+            <th>Repo</th>
+            <th>Raw sources</th>
+            <th>Chunks</th>
+            <th>Change summaries</th>
+            <th>Evidence cards</th>
+            <th>Capability facts</th>
+            <th>Raw chars</th>
+          </tr>
+        </thead>
+        <tbody>
+          {projects.map((project, index) => (
+            <tr key={`${project.project_id || "project"}-${project.repo || "repo"}-${index}`}>
+              <td>{project.project_id || "-"}</td>
+              <td>{project.repo || "-"}</td>
+              <td>{formatCount(project.raw_sources)}</td>
+              <td>{formatCount(project.chunks)}</td>
+              <td>{formatCount(project.raw_change_summaries)}</td>
+              <td>{formatCount(project.evidence_cards)}</td>
+              <td>{formatCount(project.capability_facts)}</td>
+              <td>{formatCount(project.raw_chars)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Phase2BuildResult({ result, error }) {
+  if (error) {
+    return <div className="github-status-message github-status-error">{error}</div>;
+  }
+  if (!result) return null;
+  return (
+    <div className="phase2-build-result">
+      <h3 className="github-status-subtitle">Build result</h3>
+      <p className="helper-text">{result.message || "Phase 2 build completed."}</p>
+      <Phase2KeyValueGrid
+        items={[
+          { label: "Ran stages", value: safeArray(result.ran_stages).join(", ") || "-" },
+          { label: "Errors", value: formatCount(safeArray(result.errors).length) },
+          { label: "Warnings", value: formatCount(safeArray(result.warnings).length) },
+        ]}
+      />
+      <div className="phase2-count-columns">
+        {[
+          ["Counts before", result.counts_before],
+          ["Counts after", result.counts_after],
+          ["Deltas", result.deltas],
+        ].map(([title, counts]) => (
+          <div className="phase2-count-box" key={title}>
+            <strong>{title}</strong>
+            {Object.entries(counts || {}).map(([key, value]) => (
+              <div key={key}>
+                <span>{key}</span>
+                <b>{formatCount(value)}</b>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {safeArray(result.stage_results).length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>OK</th>
+                <th>Processed</th>
+                <th>Created/updated</th>
+                <th>Skipped</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {safeArray(result.stage_results).map((stage) => (
+                <tr key={stage.stage}>
+                  <td>{stage.stage || "-"}</td>
+                  <td>{String(Boolean(stage.ok))}</td>
+                  <td>{formatCount(stage.processed)}</td>
+                  <td>{formatCount(stage.created_or_updated)}</td>
+                  <td>{formatCount(stage.skipped)}</td>
+                  <td>{stage.message || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {safeArray(result.errors).length > 0 && (
+        <pre className="phase2-json-preview">{JSON.stringify(sanitizePhase2SampleForDisplay(result.errors), null, 2)}</pre>
+      )}
+      {safeArray(result.warnings).length > 0 && (
+        <pre className="phase2-json-preview">{JSON.stringify(sanitizePhase2SampleForDisplay(result.warnings), null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+function Phase2InspectSamples({ samples }) {
+  const sampleEntries = Object.entries(PHASE2_SAMPLE_LABELS);
+  return (
+    <div className="phase2-samples">
+      {sampleEntries.map(([sampleKey, label]) => {
+        const items = safeArray(samples?.[sampleKey]).map((item) => sanitizePhase2SampleForDisplay(item));
+        return (
+          <div className="phase2-sample-group" key={sampleKey}>
+            <h4>{label}</h4>
+            {!items.length ? (
+              <p className="helper-text">No safe samples available.</p>
+            ) : (
+              items.map((item, index) => (
+                <div className="phase2-sample-item" key={`${sampleKey}-${index}`}>
+                  {Object.entries(item).map(([key, value]) => (
+                    <div className="phase2-sample-row" key={key}>
+                      <span>{key}</span>
+                      <strong>{phase2DisplayValue(value)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GitHubPhase2Panel({
+  status,
+  health,
+  inspect,
+  loading,
+  error,
+  buildForm,
+  setBuildForm,
+  building,
+  buildError,
+  buildResult,
+  onRefresh,
+  onBuild,
+}) {
+  const statusLoaded = Boolean(status);
+  const enabled = status?.enabled === true;
+  const counts = status || {};
+  const healthFlags = health?.health || {};
+  const projects = safeArray(status?.projects).length ? safeArray(status?.projects) : safeArray(inspect?.projects);
+  const projectOptions = phase2ProjectOptions(status, inspect);
+  const noRawSources = enabled && Number(counts.raw_sources_count || 0) === 0;
+  const pipelineComplete = Boolean(status?.pipeline_complete || health?.pipeline_complete);
+  const statusMessage = !statusLoaded
+    ? "Loading Phase 2 evidence memory diagnostics..."
+    : !enabled
+    ? "GitHub context Phase 2 is disabled. Enable USE_GITHUB_CONTEXT_PHASE2=1 to view and build Phase 2 evidence memory."
+    : noRawSources
+      ? "Phase 2 is enabled, but no raw sources are available yet. Sync GitHub context first, then run Phase 2 build."
+      : pipelineComplete
+        ? "Phase 2 pipeline complete: raw sources, chunks, change summaries, evidence cards, and capability facts are available."
+        : status?.message || "Phase 2 evidence memory is available for inspection.";
+
+  const handleBuildClick = () => {
+    const selectedStage = buildForm.stage === "all" ? null : [buildForm.stage];
+    onBuild({
+      projectId: buildForm.projectId.trim(),
+      stages: selectedStage,
+      limit: buildForm.limit,
+      continueOnError: true,
+    });
+  };
+
+  return (
+    <section className="card phase2-panel">
+      <div className="section-toolbar">
+        <h2 className="card-title">Phase 2 Evidence Memory</h2>
+        <button type="button" className="btn btn-secondary btn-small" onClick={onRefresh} disabled={loading || building}>
+          Refresh
+        </button>
+      </div>
+
+      {loading && <p className="helper-text">Loading Phase 2 status, health, and inspect samples...</p>}
+      {error && <div className="github-status-message github-status-error">{error}</div>}
+      <div className="github-status-message">{statusMessage}</div>
+
+      <h3 className="github-status-subtitle">Status</h3>
+      <Phase2KeyValueGrid
+        items={[
+          { label: "Enabled", value: String(Boolean(status?.enabled)) },
+          { label: "Available", value: String(Boolean(status?.available)) },
+          { label: "Phase", value: status?.phase || "phase2" },
+          { label: "Raw sources", value: formatCount(counts.raw_sources_count) },
+          { label: "Chunks", value: formatCount(counts.chunks_count) },
+          { label: "Change summaries", value: formatCount(counts.raw_change_summaries_count) },
+          { label: "Evidence cards", value: formatCount(counts.evidence_cards_count) },
+          { label: "Capability facts", value: formatCount(counts.capability_facts_count) },
+          { label: "Raw chars", value: formatCount(counts.raw_chars) },
+          { label: "Repos", value: formatCount(counts.repos_count) },
+          { label: "Pipeline complete", value: String(pipelineComplete) },
+          { label: "Next action", value: status?.next_recommended_action || health?.next_recommended_action || "-" },
+        ]}
+      />
+
+      <h3 className="github-status-subtitle">Health</h3>
+      <Phase2KeyValueGrid
+        items={[
+          { label: "Has raw sources", value: String(Boolean(healthFlags.has_raw_sources)) },
+          { label: "Has chunks", value: String(Boolean(healthFlags.has_chunks)) },
+          { label: "Has change summaries", value: String(Boolean(healthFlags.has_raw_change_summaries)) },
+          { label: "Has evidence cards", value: String(Boolean(healthFlags.has_evidence_cards)) },
+          { label: "Has capability facts", value: String(Boolean(healthFlags.has_capability_facts)) },
+          { label: "Missing stages", value: safeArray(health?.missing_stages).join(", ") || "-" },
+          { label: "Recommended", value: health?.next_recommended_action || "-" },
+        ]}
+      />
+
+      <h3 className="github-status-subtitle">Project Summaries</h3>
+      <Phase2ProjectSummaries projects={projects} />
+
+      <h3 className="github-status-subtitle">Manual Build</h3>
+      <div className="phase2-build-controls">
+        <div className="field compact-field">
+          <label>Project ID</label>
+          <input
+            list="phase2-project-options"
+            value={buildForm.projectId}
+            onChange={(event) => setBuildForm((current) => ({ ...current, projectId: event.target.value }))}
+            placeholder="Leave empty for all projects"
+            disabled={!statusLoaded || !enabled || building}
+          />
+          <datalist id="phase2-project-options">
+            {projectOptions.map((projectId) => (
+              <option key={projectId} value={projectId} />
+            ))}
+          </datalist>
+        </div>
+        <div className="field compact-field">
+          <label>Stage</label>
+          <select
+            value={buildForm.stage}
+            onChange={(event) => setBuildForm((current) => ({ ...current, stage: event.target.value }))}
+            disabled={!statusLoaded || !enabled || building}
+          >
+            {PHASE2_STAGE_OPTIONS.map((stage) => (
+              <option key={stage.value} value={stage.value}>{stage.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="field compact-field">
+          <label>Limit</label>
+          <input
+            type="number"
+            min="0"
+            value={buildForm.limit}
+            onChange={(event) => setBuildForm((current) => ({ ...current, limit: event.target.value }))}
+            placeholder="Optional"
+            disabled={!statusLoaded || !enabled || building}
+          />
+        </div>
+      </div>
+      {noRawSources && (
+        <p className="warning-line">No raw sources are saved yet. Sync GitHub context first; this button will not trigger sync.</p>
+      )}
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleBuildClick}
+          disabled={!statusLoaded || !enabled || building}
+        >
+          {building ? "Running Phase 2 Build" : "Run Phase 2 Build"}
+        </button>
+        {statusLoaded && !enabled && <span className="helper-text">Enable USE_GITHUB_CONTEXT_PHASE2=1 before building.</span>}
+      </div>
+      <Phase2BuildResult result={buildResult} error={buildError} />
+
+      <h3 className="github-status-subtitle">Safe Inspect Samples</h3>
+      {inspect?.enabled === false ? (
+        <div className="github-status-message">Phase 2 inspect is disabled.</div>
+      ) : (
+        <Phase2InspectSamples samples={inspect?.samples || {}} />
+      )}
+    </section>
+  );
+}
+
 function resolveProjectMemoryUpdatedAt(githubConfig, status) {
   return (
     githubConfig?.project_memory_updated_at ||
@@ -608,6 +996,19 @@ export default function GitHubContext() {
   const [contextStatusError, setContextStatusError] = useState("");
   const [contextPreviews, setContextPreviews] = useState({});
   const [rawInspections, setRawInspections] = useState({});
+  const [phase2Status, setPhase2Status] = useState(null);
+  const [phase2Health, setPhase2Health] = useState(null);
+  const [phase2Inspect, setPhase2Inspect] = useState(null);
+  const [phase2Loading, setPhase2Loading] = useState(false);
+  const [phase2Error, setPhase2Error] = useState("");
+  const [phase2BuildForm, setPhase2BuildForm] = useState({
+    projectId: "",
+    stage: "all",
+    limit: "",
+  });
+  const [phase2Building, setPhase2Building] = useState(false);
+  const [phase2BuildError, setPhase2BuildError] = useState("");
+  const [phase2BuildResult, setPhase2BuildResult] = useState(null);
   const { loading, error, success, run } = useAsyncAction();
   const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
@@ -713,9 +1114,57 @@ export default function GitHubContext() {
     });
   };
 
+  const loadGithubPhase2Debug = async (projectId = phase2BuildForm.projectId) => {
+    const requestedProjectId = String(projectId || "").trim();
+    setPhase2Loading(true);
+    setPhase2Error("");
+    try {
+      const [statusData, healthData, inspectData] = await Promise.all([
+        api.getGitHubContextPhase2Status(),
+        api.getGitHubContextPhase2Health(requestedProjectId),
+        api.getGitHubContextPhase2Inspect({
+          projectId: requestedProjectId,
+          limit: 10,
+          includeSamples: true,
+        }),
+      ]);
+      setPhase2Status(statusData || null);
+      setPhase2Health(healthData || null);
+      setPhase2Inspect(inspectData || null);
+      return { statusData, healthData, inspectData };
+    } catch (phase2LoadError) {
+      setPhase2Error(phase2LoadError?.message || "Unable to load Phase 2 evidence memory diagnostics.");
+      return null;
+    } finally {
+      setPhase2Loading(false);
+    }
+  };
+
+  const runGithubPhase2Build = async (payload) => {
+    setPhase2Building(true);
+    setPhase2BuildError("");
+    setPhase2BuildResult(null);
+    try {
+      const data = await api.buildGitHubContextPhase2(payload);
+      setPhase2BuildResult(data);
+      await loadGithubPhase2Debug(payload?.projectId || "");
+      return data;
+    } catch (phase2ErrorResponse) {
+      setPhase2BuildError(phase2ErrorResponse?.message || "Unable to run Phase 2 build.");
+      if (phase2ErrorResponse?.detail && typeof phase2ErrorResponse.detail === "object") {
+        setPhase2BuildResult(phase2ErrorResponse.detail);
+      }
+      await loadGithubPhase2Debug(payload?.projectId || "");
+      return null;
+    } finally {
+      setPhase2Building(false);
+    }
+  };
+
   useEffect(() => {
     loadGithubConfig();
     loadGithubContextStatus();
+    loadGithubPhase2Debug("");
   }, []);
 
   const saveGithubConfig = () =>
@@ -839,6 +1288,7 @@ export default function GitHubContext() {
       setMemoryRepositories(githubConfig.memory_repositories || []);
       setProjectMemoryUpdatedAt(resolveProjectMemoryUpdatedAt(githubConfig, status));
       await loadGithubContextStatus();
+      await loadGithubPhase2Debug("");
       return data;
     }, copy.fetched);
 
@@ -1021,6 +1471,21 @@ export default function GitHubContext() {
         onInspectRaw={inspectGithubContextRaw}
         onCloseRaw={closeGithubContextRaw}
         language={language}
+      />
+
+      <GitHubPhase2Panel
+        status={phase2Status}
+        health={phase2Health}
+        inspect={phase2Inspect}
+        loading={phase2Loading}
+        error={phase2Error}
+        buildForm={phase2BuildForm}
+        setBuildForm={setPhase2BuildForm}
+        building={phase2Building}
+        buildError={phase2BuildError}
+        buildResult={phase2BuildResult}
+        onRefresh={() => loadGithubPhase2Debug(phase2BuildForm.projectId)}
+        onBuild={runGithubPhase2Build}
       />
 
       <section className="card">
