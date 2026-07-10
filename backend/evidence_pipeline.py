@@ -14,7 +14,8 @@ import evidence_memory
 
 
 PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
-DISABLED_MESSAGE = "GitHub context Phase 2 is disabled."
+ENABLED_VALUES = {"1", "true", "yes", "on"}
+DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 SUMMARY_CHARS = 240
@@ -261,7 +262,7 @@ def get_phase2_pipeline_health(project_id: str | None = None) -> dict[str, Any]:
 
 
 def phase2_enabled() -> bool:
-    return os.getenv(PHASE2_FLAG_ENV, "") in {"1", "true", "True", "TRUE"}
+    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def normalize_project_id(project_id: str | None) -> str:

@@ -10,6 +10,7 @@ import evidence_memory
 
 
 PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+ENABLED_VALUES = {"1", "true", "yes", "on"}
 DETAIL_LIMIT = 6
 DETAIL_CHARS = 220
 
@@ -116,7 +117,7 @@ GENERIC_FORBIDDEN_CLAIMS = [
 
 
 def phase2_enabled() -> bool:
-    return os.getenv(PHASE2_FLAG_ENV, "") in {"1", "true", "True", "TRUE"}
+    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def build_evidence_cards_from_change_summaries(
@@ -221,7 +222,7 @@ def build_phase2_evidence_cards(
             "created_or_updated_evidence_cards": 0,
             "skipped_summaries": 0,
             "evidence_cards_count": 0,
-            "message": "GitHub context Phase 2 is disabled.",
+            "message": "GitHub context evidence memory is disabled.",
             "errors": [],
         }
 

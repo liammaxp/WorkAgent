@@ -22,9 +22,9 @@ class GitHubContextPhase2FlagTests(unittest.TestCase):
         else:
             os.environ.pop(self.env_name, None)
 
-    def test_default_disabled(self):
+    def test_default_enabled(self):
         os.environ.pop(self.env_name, None)
-        self.assertFalse(api_server.is_github_context_phase2_enabled())
+        self.assertTrue(api_server.is_github_context_phase2_enabled())
 
     def test_disabled_values(self):
         for value in ["0", "false", "False", "FALSE", "", "no"]:

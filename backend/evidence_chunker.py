@@ -10,6 +10,7 @@ import evidence_memory
 
 
 PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+ENABLED_VALUES = {"1", "true", "yes", "on"}
 PHASE2_CHUNK_TARGET_CHARS = 3000
 PHASE2_CHUNK_MAX_CHARS = 6000
 PHASE2_CHUNK_MIN_CHARS = 80
@@ -60,7 +61,7 @@ TECHNICAL_TAG_RULES = {
 
 
 def phase2_enabled() -> bool:
-    return os.getenv(PHASE2_FLAG_ENV, "") in {"1", "true", "True", "TRUE"}
+    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def build_evidence_chunks_from_raw_sources(raw_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -125,7 +126,7 @@ def chunk_phase2_raw_sources(
             "updated_chunks": 0,
             "created_or_updated_chunks": 0,
             "chunks_count": 0,
-            "message": "GitHub context Phase 2 is disabled.",
+            "message": "GitHub context evidence memory is disabled.",
             "errors": [],
         }
 

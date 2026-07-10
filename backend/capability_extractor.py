@@ -10,6 +10,7 @@ import evidence_memory
 
 
 PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+ENABLED_VALUES = {"1", "true", "yes", "on"}
 DETAIL_CHARS = 220
 MAX_MECHANISMS = 8
 MAX_ALLOWED_CLAIMS = 8
@@ -90,7 +91,7 @@ UNSUPPORTED_FACTUAL_PATTERNS = [
 
 
 def phase2_enabled() -> bool:
-    return os.getenv(PHASE2_FLAG_ENV, "") in {"1", "true", "True", "TRUE"}
+    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def extract_capability_facts_from_evidence_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -190,7 +191,7 @@ def build_phase2_capability_facts(
             "created_or_updated_capability_facts": 0,
             "skipped_groups": 0,
             "capability_facts_count": 0,
-            "message": "GitHub context Phase 2 is disabled.",
+            "message": "GitHub context evidence memory is disabled.",
             "errors": [],
         }
 

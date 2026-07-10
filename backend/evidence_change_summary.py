@@ -10,6 +10,7 @@ import evidence_memory
 
 
 PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+ENABLED_VALUES = {"1", "true", "yes", "on"}
 SUPPORTED_CHUNK_TYPES = {
     "diff_hunk",
     "function",
@@ -66,7 +67,7 @@ GENERIC_BOILERPLATE_PATTERNS = [
 
 
 def phase2_enabled() -> bool:
-    return os.getenv(PHASE2_FLAG_ENV, "") in {"1", "true", "True", "TRUE"}
+    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def extract_raw_change_summaries_from_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -162,7 +163,7 @@ def build_phase2_raw_change_summaries(
             "updated_summaries": 0,
             "created_or_updated_summaries": 0,
             "raw_change_summaries_count": 0,
-            "message": "GitHub context Phase 2 is disabled.",
+            "message": "GitHub context evidence memory is disabled.",
             "errors": [],
         }
 

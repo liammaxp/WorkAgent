@@ -74,21 +74,32 @@ agent_task_cancellations: dict[str, threading.Event] = {}
 agent_task_adapters: dict[str, list[Any]] = {}
 background_task_lock = threading.Lock()
 background_agent_tasks: dict[str, dict[str, Any]] = {}
-USE_GITHUB_CONTEXT_STATUS_V2 = os.getenv("USE_GITHUB_CONTEXT_STATUS_V2", "1") == "1"
 GITHUB_CONTEXT_PHASE2_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_CONTEXT_STATUS_ENV = "USE_GITHUB_CONTEXT_STATUS_V2"
+GITHUB_CONTEXT_ENABLED_VALUES = {"1", "true", "yes", "on"}
+
+
+def github_context_env_enabled(name: str, default: str = "1") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in GITHUB_CONTEXT_ENABLED_VALUES
+
+
+USE_GITHUB_CONTEXT_STATUS_V2 = github_context_env_enabled(
+    GITHUB_CONTEXT_PHASE2_ENV,
+    default=os.getenv(GITHUB_CONTEXT_STATUS_ENV, "1"),
+)
 GITHUB_CONTEXT_STATUS_MAX_JSON_CHARS = 1_000_000
 GITHUB_CONTEXT_STATUS_DISABLED_MESSAGE = (
-    "GitHub context status v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable."
+    "GitHub context diagnostics are disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable."
 )
-GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE = "GitHub context Phase 2 is disabled."
+GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
 GITHUB_CONTEXT_PHASE2_STORAGE_MISSING_MESSAGE = (
-    "GitHub context Phase 2 is enabled, but storage is not initialized yet."
+    "GitHub context evidence memory is enabled, but storage is not initialized yet."
 )
 GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT = 10
 GITHUB_CONTEXT_PHASE2_PREVIEW_MAX_LIMIT = 50
 GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS = 240
 GITHUB_CONTEXT_PREVIEW_DISABLED_MESSAGE = (
-    "GitHub context preview v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable."
+    "GitHub context preview is disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable."
 )
 GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT = 5
 GITHUB_CONTEXT_PREVIEW_MAX_LIMIT = 20
@@ -15688,7 +15699,7 @@ def github_context_status_v2_enabled() -> bool:
 
 
 def is_github_context_phase2_enabled() -> bool:
-    return os.getenv(GITHUB_CONTEXT_PHASE2_ENV, "") in {"1", "true", "True", "TRUE"}
+    return github_context_env_enabled(GITHUB_CONTEXT_PHASE2_ENV, default="1")
 
 
 def github_context_phase2_zero_counts() -> dict[str, int]:
@@ -18842,7 +18853,7 @@ def github_context_raw(
             "source_id": requested_source_id or None,
             "max_chars": safe_chars,
             "raw_text": "",
-            "message": "GitHub context raw inspect v2 is disabled. Set USE_GITHUB_CONTEXT_STATUS_V2=1 to enable.",
+            "message": "GitHub context raw inspect is disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable.",
             "errors": [],
         }
 
