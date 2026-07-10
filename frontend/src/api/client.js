@@ -374,6 +374,19 @@ export const api = {
       signal: requestOptions.signal,
     }),
   getGithubConfig: () => request("/github/config"),
+  getGithubContextStatus: () => request("/github/context/status"),
+  getGithubContextPreview: (projectId = "", limit = 5) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project_id", projectId);
+    params.set("limit", String(limit));
+    return request(`/github/context/preview?${params}`);
+  },
+  getGithubContextRaw: (sourceId, maxChars = 10000) => {
+    const params = new URLSearchParams();
+    params.set("source_id", sourceId);
+    params.set("max_chars", String(maxChars));
+    return request(`/github/context/raw?${params}`);
+  },
   saveGithubConfig: (payload) =>
     request("/github/config", {
       method: "POST",

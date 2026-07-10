@@ -91,7 +91,7 @@ class MemoryVectorStore:
         self._profile = None
         self._github = None
 
-    def _ensure_client(self) -> None:
+    def _ensure_client(self, migrate: bool = True) -> None:
         if self._client is not None:
             return
         if chromadb is None:
@@ -109,8 +109,9 @@ class MemoryVectorStore:
             GITHUB_COLLECTION,
             metadata={"description": "Approved GitHub repository and commit evidence", "hnsw:space": "cosine"},
         )
-        self._migrate_legacy_profile()
-        self._migrate_legacy_github()
+        if migrate:
+            self._migrate_legacy_profile()
+            self._migrate_legacy_github()
 
     def _migrate_legacy_profile(self) -> None:
         marker_path = self.persist_directory / PROFILE_MIGRATION_MARKER
@@ -405,6 +406,85 @@ class MemoryVectorStore:
                 repository_map[repository] = {"repository": repository, "updated_at": updated_at}
         repositories = list(repository_map.values())
         return sorted(repositories, key=lambda item: item["updated_at"], reverse=True)
+
+    def github_metadata_status(self) -> dict[str, Any]:
+        if chromadb is None:
+            raise RuntimeError(
+                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
+            ) from CHROMA_IMPORT_ERROR
+        if not self.persist_directory.exists():
+            return {"available": False, "count": 0, "repositories": []}
+
+        self._ensure_client(migrate=False)
+        count = self._github.count()
+        if not count:
+            return {"available": True, "count": 0, "repositories": []}
+
+        metadatas = self._github.get(include=["metadatas"]).get("metadatas", [])
+        repository_map: dict[str, dict[str, str]] = {}
+        for metadata in metadatas:
+            repository = canonical_github_repository(metadata.get("repository"))
+            if not repository:
+                continue
+            updated_at = str(metadata.get("updated_at", ""))
+            current = repository_map.get(repository)
+            if current is None or updated_at > current["updated_at"]:
+                repository_map[repository] = {"repository": repository, "updated_at": updated_at}
+
+        repositories = list(repository_map.values())
+        return {
+            "available": True,
+            "count": count,
+            "repositories": sorted(repositories, key=lambda item: item["updated_at"], reverse=True),
+        }
+
+    def github_preview_metadata(self, limit: int = 5) -> list[dict[str, Any]]:
+        if chromadb is None:
+            raise RuntimeError(
+                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
+            ) from CHROMA_IMPORT_ERROR
+        if not self.persist_directory.exists():
+            return []
+
+        self._ensure_client(migrate=False)
+        if not self._github.count():
+            return []
+
+        result = self._github.get(include=["metadatas"], limit=max(1, int(limit)))
+        records = []
+        for record_id, metadata in zip(result.get("ids", []), result.get("metadatas", [])):
+            repository = canonical_github_repository(metadata.get("repository"))
+            records.append(
+                {
+                    "id": str(record_id),
+                    "repository": repository,
+                    "updated_at": str(metadata.get("updated_at", "")),
+                    "source": str(metadata.get("source", "")),
+                }
+            )
+        return records
+
+    def read_github_document(self, record_id: str) -> dict[str, Any] | None:
+        if chromadb is None:
+            raise RuntimeError(
+                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
+            ) from CHROMA_IMPORT_ERROR
+        if not self.persist_directory.exists():
+            return None
+
+        self._ensure_client(migrate=False)
+        result = self._github.get(ids=[record_id], include=["documents", "metadatas"])
+        ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+        if not ids:
+            return None
+        metadata = metadatas[0] if metadatas else {}
+        return {
+            "id": str(ids[0]),
+            "document": documents[0] if documents else "",
+            "metadata": metadata if isinstance(metadata, dict) else {},
+        }
 
     def cleanup_github_repositories(self) -> dict[str, int]:
         self._ensure_client()
