@@ -236,6 +236,9 @@ _TEXT_PATTERN_OVERRIDES: Mapping[str, tuple[str, ...]] = {
         r"(?<![a-z0-9])allowed(?:[\s_-]+and[\s_-]+|\s*/\s*)forbidden[\s_-]+claim[\s_-]+handling(?![a-z0-9])",
     ),
     "atomic_persistence": (r"(?<![a-z0-9])atomic[\s_-]+write(?:s|n|ing)?(?![a-z0-9])",),
+    "backend_route": (
+        r"(?<![a-z0-9])api[\s_-]+routes?(?:[\s_-]+updates?)?(?![a-z0-9])",
+    ),
     "cache_reuse": (
         r"(?<![a-z0-9])reus(?:e|ed|ing)[\s_-]+(?:the[\s_-]+)?cache(?:d)?(?![a-z0-9])",
         r"(?<![a-z0-9])cache(?:d)?[\s_-]+(?:result|record|analysis|context|value)s?[\s_-]+(?:is[\s_-]+|are[\s_-]+|was[\s_-]+|were[\s_-]+)?reus(?:e|ed|ing)(?![a-z0-9])",
@@ -298,6 +301,12 @@ def _build_default_rules() -> tuple[Phase4SignalExtractionRule, ...]:
             allowed_fields=("technical_tags", "source_metadata"),
             exact_values=(signal,),
         ))
+    rules.append(Phase4SignalExtractionRule(
+        rule_id="metadata_schema_version",
+        signal="schema_versioning",
+        allowed_fields=("source_metadata",),
+        exact_values=("schema version",),
+    ))
     rules.append(Phase4SignalExtractionRule(
         rule_id="structured_retrieval_evidence_type",
         signal="retrieval",

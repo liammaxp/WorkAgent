@@ -192,6 +192,38 @@ def test_declared_signal_metadata_is_bounded_to_registry():
     assert "unsupported_signal_candidate" in extract_phase4_fact_signals(invalid).rejected_candidates
 
 
+def test_schema_version_provenance_metadata_emits_only_contextual_schema_signal():
+    item = scored_fact(
+        "implemented a bounded component",
+        source_type="project_memory",
+        status=EvidenceStatus.SUPPORTING,
+        evidence_type=EvidenceType.UNKNOWN,
+        metadata={"schema_version": 1},
+    )
+    extraction = extract_phase4_fact_signals(item)
+    assert extraction.signals == ("schema_versioning",)
+    assert extraction.bindings[0].matched_field == "source_metadata"
+    capabilities, _ = extract_for_project(item)
+    assert not capabilities
+
+
+@pytest.mark.parametrize("mechanism", ["API route", "api_route_update", "api-route-update"])
+def test_explicit_api_route_variants_emit_backend_route(mechanism):
+    extraction = extract_phase4_fact_signals(scored_fact(mechanism))
+    assert extraction.signals == ("backend_route",)
+    assert extraction.bindings[0].matched_field == "mechanism"
+
+
+def test_non_registry_api_route_tag_alone_does_not_become_backend_route():
+    item = scored_fact("implemented a bounded component", technical_tags=["api_route_update"])
+    assert "backend_route" not in signals(item)
+
+
+def test_backend_route_alone_does_not_prove_frontend_backend_integration():
+    capabilities, _ = extract_for_project(scored_fact("api_route_update"))
+    assert "frontend_backend_integration" not in capability_types(capabilities)
+
+
 def test_unknown_rule_signal_is_rejected_before_extraction():
     rule = Phase4SignalExtractionRule(
         rule_id="unknown_signal_rule",
