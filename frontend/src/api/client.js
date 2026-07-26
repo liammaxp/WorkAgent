@@ -387,38 +387,7 @@ export const api = {
     params.set("max_chars", String(maxChars));
     return request(`/github/context/raw?${params}`);
   },
-  saveGithubConfig: (payload) =>
-    request("/github/config", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  fetchGithubContext: (approved = true, resume_source = "resume", options = {}, requestOptions = {}) =>
-    request("/github/context", {
-      method: "POST",
-      body: JSON.stringify({
-        approved,
-        resume_source,
-        ...options,
-        agent_progress_messages: requestOptions.agentProgressMessages || [],
-        agent_task_id: requestOptions.agentTaskId || "",
-      }),
-      signal: requestOptions.signal,
-    }),
-  getGitHubContextPhase2Status: () => request("/github/context/phase2/status"),
-  getGitHubContextPhase2Health: (projectId = "") => {
-    const params = new URLSearchParams();
-    if (projectId) params.set("project_id", projectId);
-    const query = params.toString();
-    return request(`/github/context/phase2/health${query ? `?${query}` : ""}`);
-  },
-  getGitHubContextPhase2Inspect: ({ projectId = "", limit = 10, includeSamples = true } = {}) => {
-    const params = new URLSearchParams();
-    if (projectId) params.set("project_id", projectId);
-    params.set("limit", String(limit || 10));
-    params.set("include_samples", includeSamples ? "true" : "false");
-    return request(`/github/context/phase2/inspect?${params}`);
-  },
-  buildGitHubContextPhase2: ({
+  buildGitHubContextEvidencePipeline: ({
     projectId = "",
     stages = null,
     limit = null,
@@ -437,6 +406,23 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  saveGithubConfig: (payload) =>
+    request("/github/config", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  fetchGithubContext: (approved = true, resume_source = "resume", options = {}, requestOptions = {}) =>
+    request("/github/context", {
+      method: "POST",
+      body: JSON.stringify({
+        approved,
+        resume_source,
+        ...options,
+        agent_progress_messages: requestOptions.agentProgressMessages || [],
+        agent_task_id: requestOptions.agentTaskId || "",
+      }),
+      signal: requestOptions.signal,
+    }),
   getApplications: (status = "", limit = 50) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);

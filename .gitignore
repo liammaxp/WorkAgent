@@ -136,3 +136,23 @@ frontend/.vite/
 
 # Local automated regression test (generated from README and feature logs)
 local_automation_test.py
+
+# Local/generated test files
+tests/
+test/
+__tests__/
+**/tests/
+**/test/
+**/__tests__/
+test_*.py
+*_test.py
+*.test.py
+*.spec.py
+*.test.js
+*.test.jsx
+*.test.ts
+*.test.tsx
+*.spec.js
+*.spec.jsx
+*.spec.ts
+*.spec.tsx

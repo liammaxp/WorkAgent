@@ -40,6 +40,7 @@ import evidence_chunker
 import evidence_memory
 import evidence_pipeline
 import main as agent
+import phase3_pipeline
 from tech_ontology import (
     build_tech_ontology_index,
     enrich_jd_profile_with_tech_ontology,
@@ -18799,6 +18800,62 @@ def github_context_phase2_capability_facts_preview(
         len(preview.get("errors") or []),
     )
     return preview
+
+
+@app.post("/api/github/context/phase3/build")
+def github_context_phase3_build():
+    result = phase3_pipeline.run_phase3_diff_memory_pipeline()
+    payload = phase3_pipeline.pipeline_result_to_dict(result)
+    ok = bool(payload.get("enabled")) and payload.get("status") not in {"disabled", "failed"}
+    message = "Phase 3 diff memory build completed." if ok else "Phase 3 diff memory build did not complete."
+    if payload.get("status") == "disabled":
+        message = phase3_pipeline.PHASE3_DISABLED_MESSAGE
+    logger.info(
+        "GitHub context Phase 3 build requested: enabled=%s status=%s raw_inputs=%s "
+        "diff_units=%s summaries=%s qualified_cards=%s capabilities=%s skipped=%s errors=%s",
+        payload.get("enabled"),
+        payload.get("status"),
+        payload.get("raw_diff_input_count"),
+        payload.get("diff_unit_count"),
+        payload.get("raw_change_summary_count"),
+        payload.get("qualified_evidence_card_count"),
+        payload.get("capability_fact_count"),
+        payload.get("skipped_source_count"),
+        len(payload.get("errors") or []),
+    )
+    return {"ok": ok, "message": message, **payload}
+
+
+@app.get("/api/github/context/phase3/inspect")
+def github_context_phase3_inspect(
+    project_id: str = "",
+    sample_limit: str = Query(default=str(phase3_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
+):
+    result = phase3_pipeline.get_phase3_project_inspect(
+        project_id=project_id or None,
+        sample_limit=sample_limit,
+    )
+    logger.info(
+        "GitHub context Phase 3 inspect requested: enabled=%s project_id=%s sample_limit=%s errors=%s",
+        result.get("enabled"),
+        project_id,
+        result.get("sample_limit", sample_limit),
+        len(result.get("errors") or []),
+    )
+    return result
+
+
+@app.get("/api/github/context/phase3/health")
+def github_context_phase3_health():
+    result = phase3_pipeline.get_phase3_pipeline_health()
+    logger.info(
+        "GitHub context Phase 3 health requested: enabled=%s status=%s memory_exists=%s issues=%s",
+        result.get("enabled"),
+        result.get("status"),
+        result.get("memory_exists"),
+        len(result.get("issues") or []),
+    )
+    return result
 
 
 @app.get("/api/github/context/preview")
