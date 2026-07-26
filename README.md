@@ -67,6 +67,8 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- evidence_memory.py   # Phase 2 GitHub evidence JSONL storage
 |   |-- evidence_pipeline.py # Phase 2 evidence build orchestration and inspection
 |   |-- evidence_*.py        # Phase 2 chunk, change-summary, evidence-card helpers
+|   |-- phase3_diff_memory.py # Phase 3 diff-memory schema, extraction, and persistence
+|   |-- phase3_pipeline.py    # Phase 3 diff-memory pipeline, inspect, and health helpers
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
@@ -90,17 +92,18 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- windows/                 # Windows .bat and PowerShell entry points
 |-- linux/                   # Linux .sh entry points
 |-- macos/                   # macOS double-click .command entry points
-|-- tests/                   # Backend regression tests for resume quality gates
+|-- tests/                   # Backend regression tests for resume quality gates and GitHub context pipelines
 `-- README.md
 ```
 
-The system has four main layers:
+The system has six main layers:
 
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
 2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
-4. `backend/api_server.py`: FastAPI endpoints used by the Web UI.
-5. `frontend/`: React + Vite workspace with dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: Phase 2 raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
+5. `backend/phase3_diff_memory.py` and `backend/phase3_pipeline.py`: Phase 3 diff-memory extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
+6. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
 
@@ -244,7 +247,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
-- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, inspect structured context previews, and view or manually build Phase 2 evidence memory when `USE_GITHUB_CONTEXT_PHASE2=1`.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, review saved repository evidence status, and run the unified Evidence Processing Pipeline for Phase 2 chunks, change summaries, evidence cards, and capability facts when `USE_GITHUB_CONTEXT_PHASE2=1`. The backend also exposes bounded context preview/raw inspect APIs and Phase 3 diff-memory APIs, but the current page keeps the UI focused on summary views instead of rendering full raw content.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
 - Language Switch: change the Web UI between Chinese and English. This affects interface text only; generated content follows the saved job description's predominant language.
@@ -304,6 +307,9 @@ Main FastAPI endpoints:
 - `GET /api/github/context/phase2/evidence-cards/preview`
 - `POST /api/github/context/phase2/build-capability-facts`
 - `GET /api/github/context/phase2/capability-facts/preview`
+- `POST /api/github/context/phase3/build`
+- `GET /api/github/context/phase3/inspect`
+- `GET /api/github/context/phase3/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/applications`
@@ -347,6 +353,8 @@ Agent Chat image requests use data URLs:
 
 GitHub context Phase 2 is controlled by `USE_GITHUB_CONTEXT_PHASE2`. When enabled, GitHub context sync persists raw sources into JSONL storage under `information/phase2_evidence_memory/`, and the Phase 2 pipeline can turn those sources into chunks, raw change summaries, evidence cards, and capability facts. `GET /api/github/context/phase2/status`, `health`, and `inspect` report counts, project summaries, missing stages, safe samples, and the next recommended action. `POST /api/github/context/phase2/build` runs the full ordered pipeline, while the stage-specific endpoints run or preview individual stages.
 
+GitHub context Phase 3 is controlled by `USE_PHASE3_DIFF_MEMORY`. When enabled, the Phase 3 pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_memory_phase3.json`. `POST /api/github/context/phase3/build` runs the pipeline, `GET /api/github/context/phase3/inspect` returns bounded per-project samples and capability types, and `GET /api/github/context/phase3/health` reports whether the saved Phase 3 memory is ready, empty, degraded, or disabled.
+
 ## Local Files And Privacy
 
 WorkAgent intentionally uses local files as working state. These files can contain private information and should not be committed:
@@ -361,6 +369,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
 - `information/phase2_evidence_memory/`
+- `information/project_memory_phase3.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -564,6 +573,12 @@ Resume quality-gate regression tests:
 python -m unittest tests\test_resume_quality_gates.py
 ```
 
+GitHub context pipeline regression tests:
+
+```powershell
+python -m unittest tests\test_github_context_phase1_status.py tests\test_github_context_phase1_preview.py tests\test_github_context_phase1_raw.py tests\test_github_context_phase1_boundary.py tests\test_github_context_phase1_end_to_end.py tests\test_github_context_phase2_flag.py tests\test_github_context_phase2_status.py tests\test_phase2_evidence_pipeline.py tests\test_phase3_api.py tests\test_phase3_pipeline.py
+```
+
 Frontend production build:
 
 ```powershell
@@ -576,7 +591,7 @@ Production frontend output is written to `outputs/frontend/`.
 ## Current Limitations
 
 - Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
-- GitHub evidence is still displayed mostly as JSON rather than a polished visual report.
+- GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all Phase 2 and Phase 3 records.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
@@ -653,6 +668,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- evidence_memory.py   # Phase 2 GitHub 证据 JSONL 存储
 |   |-- evidence_pipeline.py # Phase 2 证据构建编排和检查
 |   |-- evidence_*.py        # Phase 2 分块、变更摘要、证据卡辅助模块
+|   |-- phase3_diff_memory.py # Phase 3 diff memory schema、提取和持久化
+|   |-- phase3_pipeline.py    # Phase 3 diff memory pipeline、inspect 和 health 辅助逻辑
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # 紧凑技术 taxonomy 和安全声明辅助逻辑
 |   |-- data/
@@ -679,13 +696,14 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 `-- README.md
 ```
 
-系统主要分为五层：
+系统主要分为六层：
 
 1. `backend/main.py`：本地 agent 逻辑、模型适配器、文件工具、GitHub 上下文提取和 SQLite 投递记录。
 2. `backend/memory_store.py`：Chroma collections、确定性的本地向量化、写入前相似度对比、语义检索和旧 JSON 自动迁移。
 3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
-4. `backend/api_server.py`：Web UI 使用的 FastAPI 接口。
-5. `frontend/`：React + Vite 前端，包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面。
+4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 Phase 2 raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
+5. `backend/phase3_diff_memory.py` 和 `backend/phase3_pipeline.py`：从已保存的 GitHub compare/file patch 提取 Phase 3 diff memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
+6. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。
 
 ## 模型配置
 
@@ -826,7 +844,7 @@ background/prompt.example.txt
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
-- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，把已确认的上下文写入 Chroma，检查结构化上下文预览，并在 `USE_GITHUB_CONTEXT_PHASE2=1` 时查看或手动构建 Phase 2 证据记忆。
+- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，把已确认的上下文写入 Chroma，查看已保存仓库证据状态，并在 `USE_GITHUB_CONTEXT_PHASE2=1` 时通过统一 Evidence Processing Pipeline 手动构建 Phase 2 的 chunks、change summaries、evidence cards 和 capability facts。后端同时保留受限的 context preview/raw inspect API 和 Phase 3 diff memory API，但当前页面以摘要结果为主，不直接渲染完整 raw 内容。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话，可以上传图片，也可以删除指定的画像记忆。
 - 语言切换：在中文和英文界面之间切换。该设置只影响界面文字；生成内容使用已保存职位描述的主要语言。
@@ -886,6 +904,9 @@ background/prompt.example.txt
 - `GET /api/github/context/phase2/evidence-cards/preview`
 - `POST /api/github/context/phase2/build-capability-facts`
 - `GET /api/github/context/phase2/capability-facts/preview`
+- `POST /api/github/context/phase3/build`
+- `GET /api/github/context/phase3/inspect`
+- `GET /api/github/context/phase3/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/applications`
@@ -927,6 +948,8 @@ Agent Chat 图片请求使用 data URL：
 
 GitHub context Phase 2 由 `USE_GITHUB_CONTEXT_PHASE2` 控制。启用后，GitHub context 同步会把 raw sources 持久化到 `information/phase2_evidence_memory/` 下的 JSONL 存储，Phase 2 pipeline 可以继续把这些来源构建为 chunks、raw change summaries、evidence cards 和 capability facts。`GET /api/github/context/phase2/status`、`health` 和 `inspect` 会返回计数、项目摘要、缺失阶段、安全样本和下一步建议；`POST /api/github/context/phase2/build` 运行完整有序 pipeline，阶段专用接口则用于单独运行或预览某个阶段。
 
+GitHub context Phase 3 由 `USE_PHASE3_DIFF_MEMORY` 控制。启用后，Phase 3 pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_memory_phase3.json`。`POST /api/github/context/phase3/build` 用于运行该 pipeline，`GET /api/github/context/phase3/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/context/phase3/health` 返回当前 Phase 3 memory 是否 ready、empty、degraded 或 disabled。
+
 ## 本地文件与隐私
 
 WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个人信息或密钥，不应提交到 git：
@@ -941,6 +964,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
 - `information/phase2_evidence_memory/`
+- `information/project_memory_phase3.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`

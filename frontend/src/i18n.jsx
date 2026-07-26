@@ -207,7 +207,7 @@ export const text = {
       saved: "GitHub 配置已保存",
       configHint: "每行或逗号分隔多个值；会自动写入 github_accounts.txt 和 .env。",
       memoryRepositories: "记忆中的仓库",
-      memoryRepositoriesHint: "这些仓库已有本地 GitHub 证据记忆。列表读取不会访问 GitHub 云端。",
+      memoryRepositoriesHint: "这些仓库已有本地 GitHub 上下文数据。列表读取不会访问 GitHub 云端。",
       memoryUpdatedAt: "上次记忆更新：",
       noMemoryRepositories: "暂无 GitHub 仓库记忆",
       scanSettings: "扫描设置",
