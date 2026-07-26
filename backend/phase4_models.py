@@ -389,8 +389,8 @@ class Phase4EvidenceFact(Phase4Model):
         object.__setattr__(self, "allowed_claims", _strings(self.allowed_claims, "allowed_claims", MAX_CLAIM_LENGTH, sort=True))
         object.__setattr__(self, "forbidden_claims", _strings(self.forbidden_claims, "forbidden_claims", MAX_CLAIM_LENGTH, sort=True))
         object.__setattr__(self, "technical_tags", _strings(self.technical_tags, "technical_tags", MAX_TAG_LENGTH, sort=True))
-        if self.quality_score is not None and (isinstance(self.quality_score, bool) or not 0 <= self.quality_score <= 1):
-            raise ValueError("quality_score must be between 0 and 1")
+        if self.quality_score is not None and (isinstance(self.quality_score, bool) or not 0 <= self.quality_score <= 100):
+            raise ValueError("quality_score must be between 0 and 100")
         object.__setattr__(self, "quality_breakdown", _json_safe(self.quality_breakdown, path="quality_breakdown"))
         generated = build_phase4_stable_id("p4ef_", project, {
             "problem": self.problem, "mechanism": self.mechanism, "implementation": self.implementation,
