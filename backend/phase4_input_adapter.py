@@ -90,8 +90,14 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _content_hash(payload: Mapping[str, Any]) -> str:
+def build_phase4_content_hash(payload: Mapping[str, Any]) -> str:
+    """Build the canonical SHA-256 digest used for safe Phase 4 input payloads."""
+
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+# Backward-compatible private alias used throughout the accepted Step 2 adapter.
+_content_hash = build_phase4_content_hash
 
 
 def _valid_sha256(value: Any) -> str:
@@ -602,6 +608,7 @@ def load_phase4_inputs(
 
 __all__ = [
     "Phase4InputSourcePaths",
+    "build_phase4_content_hash",
     "load_compact_fact_inputs",
     "load_phase2_inputs",
     "load_phase3_inputs",
