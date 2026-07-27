@@ -53,6 +53,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Start from an example system prompt and customize the agent prompt from the Web UI.
 - Scan GitHub repository links from the resume and vector memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
+- Process saved GitHub evidence through an internal Phase 4 deterministic layer that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, and extracts capability signals without inferring unsupported claims. Phase 4 is currently a Python-internal layer and is not exposed through the Web UI or HTTP API.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
 - Switch the Web UI between Chinese and English.
@@ -69,6 +70,10 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- evidence_*.py        # Phase 2 chunk, change-summary, evidence-card helpers
 |   |-- phase3_diff_memory.py # Phase 3 diff-memory schema, extraction, and persistence
 |   |-- phase3_pipeline.py    # Phase 3 diff-memory pipeline, inspect, and health helpers
+|   |-- phase4_models.py       # Phase 4 bounded evidence-memory models and stable IDs
+|   |-- phase4_input_adapter.py # Read-only Phase 2/3/project-fact input adapters
+|   |-- phase4_evidence_*.py  # Phase 4 normalization, synthesis, and quality scoring
+|   |-- phase4_capability_*.py # Phase 4 capability taxonomy and deterministic extraction
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
@@ -96,14 +101,15 @@ The project is designed for truthful, conservative job-search writing. It helps 
 `-- README.md
 ```
 
-The system has six main layers:
+The system has seven main layers:
 
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
 2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
 4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: Phase 2 raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
 5. `backend/phase3_diff_memory.py` and `backend/phase3_pipeline.py`: Phase 3 diff-memory extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
-6. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+6. `backend/phase4_models.py`, `backend/phase4_input_adapter.py`, `backend/phase4_evidence_*.py`, and `backend/phase4_capability_*.py`: Phase 4 bounded evidence-memory models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, capability taxonomy, and signal extraction. This layer currently consumes Phase 2/3 and project-fact inputs without adding an HTTP route.
+7. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
 
@@ -355,6 +361,8 @@ GitHub context Phase 2 is controlled by `USE_GITHUB_CONTEXT_PHASE2`. When enable
 
 GitHub context Phase 3 is controlled by `USE_PHASE3_DIFF_MEMORY`. When enabled, the Phase 3 pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_memory_phase3.json`. `POST /api/github/context/phase3/build` runs the pipeline, `GET /api/github/context/phase3/inspect` returns bounded per-project samples and capability types, and `GET /api/github/context/phase3/health` reports whether the saved Phase 3 memory is ready, empty, degraded, or disabled.
 
+Phase 4 currently has no `/api/github/context/phase4/*` route and no frontend trigger. Its Python modules read Phase 2 JSONL, Phase 3 memory, `project_memory.json`, and `project_compact_facts.json` in read-only mode, then expose dataclass serialization plus deterministic `load_phase4_*`, `normalize_phase4_*`, `synthesize_phase4_*`, `score_phase4_*`, and `extract_phase4_*` helpers for later integration. Invalid or incomplete inputs become sorted warnings; unsupported metrics and capability inferences are kept outside the synthesized claims.
+
 ## Local Files And Privacy
 
 WorkAgent intentionally uses local files as working state. These files can contain private information and should not be committed:
@@ -370,6 +378,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/project_compact_facts.json`
 - `information/phase2_evidence_memory/`
 - `information/project_memory_phase3.json`
+- Phase 4 does not currently create a separate persisted memory file; it consumes the existing local evidence and project-memory files above.
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -579,6 +588,12 @@ GitHub context pipeline regression tests:
 python -m unittest tests\test_github_context_phase1_status.py tests\test_github_context_phase1_preview.py tests\test_github_context_phase1_raw.py tests\test_github_context_phase1_boundary.py tests\test_github_context_phase1_end_to_end.py tests\test_github_context_phase2_flag.py tests\test_github_context_phase2_status.py tests\test_phase2_evidence_pipeline.py tests\test_phase3_api.py tests\test_phase3_pipeline.py
 ```
 
+Phase 4 deterministic evidence-memory tests:
+
+```powershell
+python -m pytest -q tests\test_phase4_*.py
+```
+
 Frontend production build:
 
 ```powershell
@@ -592,6 +607,7 @@ Production frontend output is written to `outputs/frontend/`.
 
 - Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
 - GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all Phase 2 and Phase 3 records.
+- Phase 4 capability extraction and evidence-quality results are currently internal Python outputs; they are not yet persisted, exposed through FastAPI, or rendered in the GitHub Evidence page.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
@@ -600,6 +616,7 @@ Production frontend output is written to `outputs/frontend/`.
 - Expand the Agent Chat application-material flow to include job analysis and interview prep.
 - Add persistent task queues and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
+- Integrate the Phase 4 evidence-memory layer with a persisted pipeline, API responses, and conservative UI inspection.
 - Add application dashboards, statistics, batch actions, and richer search.
 - Add document preview and DOCX export.
 - Improve mobile layout and add dark mode.
