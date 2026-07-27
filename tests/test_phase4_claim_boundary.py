@@ -7,11 +7,13 @@ import sys
 
 import pytest
 
+import backend.phase4_claim_boundary as claim_boundary_module
 from backend.phase4_capability_extractor import extract_phase4_capabilities_by_project
 from backend.phase4_claim_boundary import (
     CLAIM_LIMITS,
     CLAIM_TYPES,
     GLOBAL_FORBIDDEN_POLICIES,
+    MAX_ALLOWED_CLAIMS,
     MAX_DECISION_SAMPLES,
     Phase4StructuredClaim,
     build_phase4_capability_claim_boundary,
@@ -629,6 +631,28 @@ def test_bounded_decision_sampling_and_truncation_are_deterministic():
     assert len(allowed(forward_boundary["workagent"], "mechanism")) == CLAIM_LIMITS["mechanism"]
     assert forward_report.truncated_claim_count >= 8
     assert len(forward_report.decisions) <= MAX_DECISION_SAMPLES
+
+
+def test_combined_claim_type_limits_never_exceed_model_list_bound():
+    claims = [
+        Phase4StructuredClaim(
+            project_id="workagent",
+            claim_type=claim_type,
+            value=f"bounded value {index}",
+            evidence_fact_ids=(f"p4ef_{claim_type}_{index}",),
+            capability_fact_ids=(),
+            metric_support="explicit" if claim_type == "metric" else "none",
+            confidence="high",
+            rule_id="bounded_test_rule",
+            quality_score=80,
+            source_category="direct_evidence",
+        )
+        for claim_type, limit in CLAIM_LIMITS.items()
+        for index in range(limit)
+    ]
+    selected, truncated = claim_boundary_module._limit_claims(claims)
+    assert len(selected) == MAX_ALLOWED_CLAIMS
+    assert truncated == len(claims) - MAX_ALLOWED_CLAIMS
 
 
 def test_machine_specific_absolute_prefix_does_not_change_boundary_id():

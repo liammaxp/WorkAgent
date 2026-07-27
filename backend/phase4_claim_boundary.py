@@ -25,6 +25,7 @@ from backend.phase4_capability_taxonomy import (
 )
 from backend.phase4_models import (
     MAX_CLAIM_LENGTH,
+    MAX_LIST_ITEMS,
     MAX_NOTES_LENGTH,
     ClaimSubjectType,
     Confidence,
@@ -41,6 +42,7 @@ MIN_DIRECT_CLAIM_SCORE = 60
 MIN_CONTEXT_CLAIM_SCORE = 40
 MAX_DECISION_SAMPLES = 100
 MAX_FORBIDDEN_CLAIMS = 40
+MAX_ALLOWED_CLAIMS = MAX_LIST_ITEMS
 
 CLAIM_TYPES = (
     "problem",
@@ -768,6 +770,10 @@ def _limit_claims(claims: Iterable[Phase4StructuredClaim]) -> tuple[list[Phase4S
         limit = CLAIM_LIMITS[claim_type]
         selected.extend(ordered[:limit])
         truncated += max(0, len(ordered) - limit)
+    if len(selected) > MAX_ALLOWED_CLAIMS:
+        selected = sorted(selected, key=_claim_rank)
+        truncated += len(selected) - MAX_ALLOWED_CLAIMS
+        selected = selected[:MAX_ALLOWED_CLAIMS]
     selected.sort(key=lambda item: (CLAIM_TYPE_PRIORITY[item.claim_type], item.value.casefold(), item.value))
     return selected, truncated
 
@@ -1313,6 +1319,7 @@ __all__ = [
     "CLAIM_LIMITS",
     "CLAIM_TYPES",
     "GLOBAL_FORBIDDEN_POLICIES",
+    "MAX_ALLOWED_CLAIMS",
     "MAX_DECISION_SAMPLES",
     "MIN_CONTEXT_CLAIM_SCORE",
     "MIN_DIRECT_CLAIM_SCORE",
