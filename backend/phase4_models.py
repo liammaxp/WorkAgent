@@ -37,7 +37,7 @@ FORBIDDEN_CONTENT_KEYS = frozenset({
     "full_file_content", "access_token", "api_key", "secret", "password",
     "authorization_header",
 })
-ALLOWED_ID_PREFIXES = frozenset({"p4src_", "p4in_", "p4ef_", "p4cap_", "p4claim_"})
+ALLOWED_ID_PREFIXES = frozenset({"p4src_", "p4in_", "p4ef_", "p4cap_", "p4claim_", "p4pm_"})
 ORDER_INSENSITIVE_FIELDS = frozenset({
     "technical_tags",
     "source_evidence_fact_ids",
@@ -492,6 +492,7 @@ class Phase4ProjectMemory(Phase4Model):
     quality_summary: dict[str, Any] = field(default_factory=lambda: {"accepted_count": 0, "supporting_count": 0, "weak_count": 0, "rejected_count": 0})
     warnings: list[Phase4PipelineWarning] = field(default_factory=list)
     schema_version: str = PHASE4_SCHEMA_VERSION
+    project_memory_id: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != PHASE4_SCHEMA_VERSION:
@@ -500,22 +501,39 @@ class Phase4ProjectMemory(Phase4Model):
         object.__setattr__(self, "project_id", project)
         object.__setattr__(self, "project_name", _bounded(self.project_name, "project_name", 300, required=True))
         object.__setattr__(self, "source_hashes", _json_safe(self.source_hashes, path="source_hashes"))
-        collections = (("evidence_facts", self.evidence_facts, "evidence_fact_id"), ("capability_facts", self.capability_facts, "capability_id"), ("claim_boundaries", self.claim_boundaries, "boundary_id"))
-        for name, values, id_name in collections:
+        collections = (
+            ("evidence_facts", self.evidence_facts, "evidence_fact_id", lambda item: item.evidence_fact_id),
+            ("capability_facts", self.capability_facts, "capability_id", lambda item: (item.capability_type, item.capability_id)),
+            ("claim_boundaries", self.claim_boundaries, "boundary_id", lambda item: (item.subject_type.value, item.subject_id, item.boundary_id)),
+        )
+        for name, values, id_name, sort_key in collections:
             if any(item.project_id != project for item in values):
                 raise ValueError(f"all {name} project IDs must match parent project_id")
             ids = [getattr(item, id_name) for item in values]
             if len(ids) != len(set(ids)):
                 raise ValueError(f"duplicate {id_name} in {name}")
-            object.__setattr__(self, name, sorted(list(values), key=lambda item: getattr(item, id_name)))
+            object.__setattr__(self, name, sorted(list(values), key=sort_key))
         if any(item.project_id not in (None, project) for item in self.warnings):
             raise ValueError("warning project IDs must match parent project_id")
-        object.__setattr__(self, "warnings", list(self.warnings))
+        object.__setattr__(self, "warnings", sorted(list(self.warnings), key=lambda item: (
+            item.code, item.project_id or "", item.source_id or "", item.severity.value, item.message,
+        )))
         summary = _json_safe(self.quality_summary, path="quality_summary")
         required = {"accepted_count", "supporting_count", "weak_count", "rejected_count"}
         if set(summary) != required or any(isinstance(summary[key], bool) or not isinstance(summary[key], int) or summary[key] < 0 for key in required):
             raise ValueError("quality_summary must contain exactly four non-negative integer counts")
         object.__setattr__(self, "quality_summary", summary)
+        generated = build_phase4_stable_id("p4pm_", project, {
+            "schema_version": self.schema_version,
+            "project_id": project,
+            "project_name": self.project_name,
+            "source_hashes": self.source_hashes,
+            "evidence_facts": self.evidence_facts,
+            "capability_facts": self.capability_facts,
+            "claim_boundaries": self.claim_boundaries,
+            "quality_summary": self.quality_summary,
+        })
+        object.__setattr__(self, "project_memory_id", self.project_memory_id or generated)
 
 
 @dataclass(frozen=True)
