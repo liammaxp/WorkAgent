@@ -99,6 +99,7 @@ class EvidenceType(str, Enum):
 class ClaimSubjectType(str, Enum):
     EVIDENCE_FACT = "evidence_fact"
     CAPABILITY_FACT = "capability_fact"
+    PROJECT = "project"
 
 
 class WarningSeverity(str, Enum):
