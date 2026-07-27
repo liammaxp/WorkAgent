@@ -384,10 +384,10 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
-- `background/prompt.example.txt`
 - `outputs/`
 
 Do not commit API keys, resumes, job descriptions, GitHub identities, generated documents, application records, or personal background notes.
+Safe templates such as `.env.example` and `background/prompt.example.txt` remain trackable. `.gitignore` prevents future accidental tracking; it does not remove sensitive data from existing Git history.
 
 ## Minimum Environment Requirements
 
@@ -989,10 +989,10 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
-- `background/prompt.example.txt`
 - `outputs/`
 
 不要提交 API Key、简历、职位描述、GitHub 身份、生成文档、投递记录或个人背景资料。
+`.env.example` 和 `background/prompt.example.txt` 等安全模板仍可被 Git 跟踪。`.gitignore` 只能防止以后误提交，不能从已有 Git 历史中删除敏感数据。
 
 ## 最低环境配置要求
 
