@@ -9,36 +9,36 @@ import sys
 
 import pytest
 
-from backend.phase4_capability_extractor import (
+from backend.project_capability_extractor import (
     MAX_DECISION_SAMPLES,
     SIGNAL_EXTRACTION_RULES,
-    Phase4CapabilityExtractionReport,
-    Phase4SignalExtractionRule,
-    classify_phase4_source_category,
-    extract_phase4_capabilities_by_project,
-    extract_phase4_fact_signals,
-    extract_phase4_fact_signals_many,
-    extract_phase4_project_capabilities,
-    list_phase4_signal_extraction_rules,
-    validate_phase4_signal_extraction_rules,
+    ProjectCapabilityExtractionReport,
+    ProjectSignalExtractionRule,
+    classify_project_evidence_source_category,
+    extract_project_evidence_capabilities_by_project,
+    extract_project_evidence_fact_signals,
+    extract_project_evidence_fact_signals_many,
+    extract_project_capabilities,
+    list_project_evidence_signal_extraction_rules,
+    validate_project_evidence_signal_extraction_rules,
 )
-from backend.phase4_capability_taxonomy import (
+from backend.project_capability_taxonomy import (
     CAPABILITY_ALIASES,
     CAPABILITY_TAXONOMY,
-    list_phase4_signal_identifiers,
+    list_project_evidence_signal_identifiers,
 )
-from backend.phase4_evidence_normalizer import dedupe_phase4_inputs
-from backend.phase4_evidence_scoring import score_phase4_evidence_facts
-from backend.phase4_evidence_synthesizer import synthesize_phase4_evidence_facts
-from backend.phase4_input_adapter import load_phase4_inputs
-from backend.phase4_models import (
+from backend.project_evidence_normalizer import dedupe_project_evidence_inputs
+from backend.project_evidence_scoring import score_project_evidence_facts
+from backend.project_evidence_synthesizer import synthesize_project_evidence_facts
+from backend.project_evidence_input import load_project_evidence_inputs
+from backend.project_evidence_models import (
     Confidence,
     EvidenceStatus,
     EvidenceType,
     MetricSupport,
-    Phase4CapabilityFact,
-    Phase4EvidenceFact,
-    Phase4SourceRef,
+    ProjectCapabilityFact,
+    ProjectEvidenceFact,
+    EvidenceSourceRef,
 )
 
 
@@ -46,14 +46,14 @@ def source(
     source_id: str = "src-1",
     *,
     project_id: str = "workagent",
-    source_type: str = "phase3_evidence_card",
+    source_type: str = "project_change_evidence_card",
     content_seed: str | None = None,
     metadata: dict | None = None,
     file_path: str | None = "backend/module.py",
     symbol: str | None = "build_result",
-) -> Phase4SourceRef:
+) -> EvidenceSourceRef:
     seed = content_seed if content_seed is not None else source_id
-    return Phase4SourceRef(
+    return EvidenceSourceRef(
         source_type=source_type,
         source_id=source_id,
         project_id=project_id,
@@ -69,7 +69,7 @@ def scored_fact(
     *,
     project_id: str = "workagent",
     evidence_type: EvidenceType = EvidenceType.ARCHITECTURE,
-    source_type: str = "phase3_evidence_card",
+    source_type: str = "project_change_evidence_card",
     source_id: str = "src-1",
     content_seed: str | None = None,
     status: EvidenceStatus = EvidenceStatus.ACCEPTED,
@@ -81,8 +81,8 @@ def scored_fact(
     technical_tags: list[str] | None = None,
     metadata: dict | None = None,
     evidence_fact_id: str = "",
-) -> Phase4EvidenceFact:
-    return Phase4EvidenceFact(
+) -> ProjectEvidenceFact:
+    return ProjectEvidenceFact(
         project_id=project_id,
         mechanism=mechanism,
         implementation=implementation or ["backend/module.py::build_result"],
@@ -108,16 +108,16 @@ def scored_fact(
     )
 
 
-def signals(item: Phase4EvidenceFact) -> set[str]:
-    return set(extract_phase4_fact_signals(item).signals)
+def signals(item: ProjectEvidenceFact) -> set[str]:
+    return set(extract_project_evidence_fact_signals(item).signals)
 
 
-def capability_types(items: list[Phase4CapabilityFact]) -> set[str]:
+def capability_types(items: list[ProjectCapabilityFact]) -> set[str]:
     return {item.capability_type for item in items}
 
 
-def extract_for_project(*facts: Phase4EvidenceFact):
-    return extract_phase4_project_capabilities("workagent", facts)
+def extract_for_project(*facts: ProjectEvidenceFact):
+    return extract_project_capabilities("workagent", facts)
 
 
 @pytest.mark.parametrize(
@@ -144,13 +144,13 @@ def extract_for_project(*facts: Phase4EvidenceFact):
     ],
 )
 def test_explicit_named_signal_rules(mechanism, expected):
-    extraction = extract_phase4_fact_signals(scored_fact(mechanism))
+    extraction = extract_project_evidence_fact_signals(scored_fact(mechanism))
     assert expected in extraction.signals
     assert all(binding.rule_id for binding in extraction.bindings)
 
 
 def test_retrieval_evidence_type_emits_only_base_retrieval_signal():
-    extraction = extract_phase4_fact_signals(scored_fact("retrieval", evidence_type=EvidenceType.RETRIEVAL))
+    extraction = extract_project_evidence_fact_signals(scored_fact("retrieval", evidence_type=EvidenceType.RETRIEVAL))
     assert extraction.signals == ("retrieval",)
     assert extraction.bindings[0].matched_field == "evidence_type"
     assert "reranking" not in extraction.signals
@@ -182,14 +182,14 @@ def test_generic_technology_tags_do_not_become_signals():
 
 def test_exact_registered_technical_tag_may_emit_only_that_signal():
     item = scored_fact("implemented a bounded component", technical_tags=["candidate_filtering"])
-    assert extract_phase4_fact_signals(item).signals == ("candidate_filtering",)
+    assert extract_project_evidence_fact_signals(item).signals == ("candidate_filtering",)
 
 
 def test_declared_signal_metadata_is_bounded_to_registry():
     valid = scored_fact("implemented a bounded component", metadata={"signals": ["retrieval"]})
     invalid = scored_fact("implemented a bounded component", metadata={"signals": ["unknown_signal"]})
     assert "retrieval" in signals(valid)
-    assert "unsupported_signal_candidate" in extract_phase4_fact_signals(invalid).rejected_candidates
+    assert "unsupported_signal_candidate" in extract_project_evidence_fact_signals(invalid).rejected_candidates
 
 
 def test_schema_version_provenance_metadata_emits_only_contextual_schema_signal():
@@ -200,7 +200,7 @@ def test_schema_version_provenance_metadata_emits_only_contextual_schema_signal(
         evidence_type=EvidenceType.UNKNOWN,
         metadata={"schema_version": 1},
     )
-    extraction = extract_phase4_fact_signals(item)
+    extraction = extract_project_evidence_fact_signals(item)
     assert extraction.signals == ("schema_versioning",)
     assert extraction.bindings[0].matched_field == "source_metadata"
     capabilities, _ = extract_for_project(item)
@@ -209,7 +209,7 @@ def test_schema_version_provenance_metadata_emits_only_contextual_schema_signal(
 
 @pytest.mark.parametrize("mechanism", ["API route", "api_route_update", "api-route-update"])
 def test_explicit_api_route_variants_emit_backend_route(mechanism):
-    extraction = extract_phase4_fact_signals(scored_fact(mechanism))
+    extraction = extract_project_evidence_fact_signals(scored_fact(mechanism))
     assert extraction.signals == ("backend_route",)
     assert extraction.bindings[0].matched_field == "mechanism"
 
@@ -225,23 +225,23 @@ def test_backend_route_alone_does_not_prove_frontend_backend_integration():
 
 
 def test_unknown_rule_signal_is_rejected_before_extraction():
-    rule = Phase4SignalExtractionRule(
+    rule = ProjectSignalExtractionRule(
         rule_id="unknown_signal_rule",
         signal="not_in_taxonomy",
         allowed_fields=("mechanism",),
         exact_values=("anything",),
     )
-    assert validate_phase4_signal_extraction_rules((rule,)) == ("rule[0]:unknown_signal",)
+    assert validate_project_evidence_signal_extraction_rules((rule,)) == ("rule[0]:unknown_signal",)
     with pytest.raises(ValueError, match="unknown_signal"):
-        extract_phase4_fact_signals(scored_fact("anything"), rules=(rule,))
+        extract_project_evidence_fact_signals(scored_fact("anything"), rules=(rule,))
 
 
 def test_rule_table_is_immutable_complete_and_deterministically_ordered():
-    rules = list_phase4_signal_extraction_rules()
+    rules = list_project_evidence_signal_extraction_rules()
     assert rules is SIGNAL_EXTRACTION_RULES
-    assert validate_phase4_signal_extraction_rules() == ()
+    assert validate_project_evidence_signal_extraction_rules() == ()
     assert [item.rule_id for item in rules] == sorted(item.rule_id for item in rules)
-    assert {item.signal for item in rules} == set(list_phase4_signal_identifiers())
+    assert {item.signal for item in rules} == set(list_project_evidence_signal_identifiers())
     with pytest.raises(Exception):
         rules[0].signal = "retrieval"
 
@@ -249,8 +249,8 @@ def test_rule_table_is_immutable_complete_and_deterministically_ordered():
 def test_fact_signal_extraction_is_deterministic_and_does_not_mutate_fact():
     item = scored_fact("canonical serialization and exact deduplication")
     before = item.to_json()
-    first = extract_phase4_fact_signals(item)
-    second = extract_phase4_fact_signals(item)
+    first = extract_project_evidence_fact_signals(item)
+    second = extract_project_evidence_fact_signals(item)
     assert first == second
     assert item.to_json() == before
 
@@ -258,8 +258,8 @@ def test_fact_signal_extraction_is_deterministic_and_does_not_mutate_fact():
 def test_many_signal_extraction_order_and_report_are_input_order_independent():
     first = scored_fact("canonical serialization", source_id="a")
     second = scored_fact("exact deduplication", source_id="b")
-    output_a, report_a = extract_phase4_fact_signals_many([first, second])
-    output_b, report_b = extract_phase4_fact_signals_many([second, first])
+    output_a, report_a = extract_project_evidence_fact_signals_many([first, second])
+    output_b, report_b = extract_project_evidence_fact_signals_many([second, first])
     assert output_a == output_b
     assert report_a == report_b
     assert report_a.fact_count == 2
@@ -280,23 +280,23 @@ def test_many_signal_extraction_order_and_report_are_input_order_independent():
     ],
 )
 def test_additional_canonical_signal_phrases_are_explicitly_supported(phrase):
-    extraction = extract_phase4_fact_signals(scored_fact(phrase))
+    extraction = extract_project_evidence_fact_signals(scored_fact(phrase))
     assert len(extraction.signals) == 1
 
 
 @pytest.mark.parametrize(
     ("source_type", "status", "expected"),
     [
-        ("phase2_evidence_chunk", EvidenceStatus.ACCEPTED, "direct_evidence"),
-        ("phase3_evidence_card", EvidenceStatus.ACCEPTED, "direct_evidence"),
+        ("github_evidence_chunk", EvidenceStatus.ACCEPTED, "direct_evidence"),
+        ("project_change_evidence_card", EvidenceStatus.ACCEPTED, "direct_evidence"),
         ("project_memory", EvidenceStatus.SUPPORTING, "project_context"),
-        ("phase2_capability_fact", EvidenceStatus.WEAK, "capability_context"),
+        ("github_evidence_capability_fact", EvidenceStatus.WEAK, "capability_context"),
         ("unknown_safe_source", EvidenceStatus.ACCEPTED, "other"),
     ],
 )
 def test_source_category_classification(source_type, status, expected):
     item = scored_fact("stable identity", source_type=source_type, status=status)
-    assert classify_phase4_source_category(item) == expected
+    assert classify_project_evidence_source_category(item) == expected
 
 
 @pytest.mark.parametrize("status", [EvidenceStatus.WEAK, EvidenceStatus.REJECTED])
@@ -332,13 +332,13 @@ def test_project_context_cannot_satisfy_direct_fact_minimum():
 def test_legacy_capability_context_does_not_count_as_direct():
     item = scored_fact(
         "canonical serialization with exact deduplication",
-        source_type="phase3_capability_fact",
+        source_type="project_change_capability_fact",
         status=EvidenceStatus.WEAK,
         technical_tags=["testing_and_regression_safety"],
     )
     capabilities, _ = extract_for_project(item)
     assert not capabilities
-    assert "legacy_capability_alias" in extract_phase4_fact_signals(item).rejected_candidates
+    assert "legacy_capability_alias" in extract_project_evidence_fact_signals(item).rejected_candidates
 
 
 def test_duplicate_lineage_is_not_two_independent_direct_facts():
@@ -469,7 +469,7 @@ def test_single_partial_behavior_does_not_imply_broader_capability(mechanism, ev
 def test_alias_presence_never_bypasses_canonical_evidence_requirements():
     item = scored_fact(
         "implemented a bounded component",
-        source_type="phase2_capability_fact",
+        source_type="github_evidence_capability_fact",
         status=EvidenceStatus.WEAK,
         technical_tags=["token_or_cost_reduction"],
     )
@@ -481,7 +481,7 @@ def test_alias_presence_never_bypasses_canonical_evidence_requirements():
 def test_project_id_is_preserved_exactly_and_aliases_are_not_inferred():
     first = scored_fact("canonical serialization with exact deduplication", project_id="example/workagent", source_id="a")
     second = scored_fact("canonical serialization with exact deduplication", project_id="liammaxp/WorkAgent", source_id="b")
-    grouped, report = extract_phase4_capabilities_by_project([first, second])
+    grouped, report = extract_project_evidence_capabilities_by_project([first, second])
     assert set(grouped) == {"example/workagent", "liammaxp/WorkAgent"}
     assert all(item.project_id == project for project, items in grouped.items() for item in items)
     assert report.project_count == 2
@@ -490,7 +490,7 @@ def test_project_id_is_preserved_exactly_and_aliases_are_not_inferred():
 def test_project_extractor_reports_and_ignores_mismatched_project():
     matching = scored_fact("canonical serialization with exact deduplication", project_id="workagent")
     other = scored_fact("candidate filtering", project_id="other", evidence_type=EvidenceType.RETRIEVAL)
-    capabilities, report = extract_phase4_project_capabilities("workagent", [matching, other])
+    capabilities, report = extract_project_capabilities("workagent", [matching, other])
     assert capability_types(capabilities) == {"deterministic_evidence_normalization"}
     assert report.project_mismatch_count == 1
 
@@ -650,8 +650,8 @@ def test_repeated_capability_extraction_is_idempotent():
         scored_fact("retrieval", evidence_type=EvidenceType.RETRIEVAL, source_id="first"),
         scored_fact("candidate filtering", evidence_type=EvidenceType.RETRIEVAL, source_id="second"),
     ]
-    first = extract_phase4_capabilities_by_project(facts)
-    second = extract_phase4_capabilities_by_project(facts)
+    first = extract_project_evidence_capabilities_by_project(facts)
+    second = extract_project_evidence_capabilities_by_project(facts)
     assert first == second
 
 
@@ -687,12 +687,12 @@ def test_same_fact_id_with_different_safe_payload_blocks_affected_capability():
     first = scored_fact(
         "canonical serialization",
         source_id="first",
-        evidence_fact_id="p4ef_conflict",
+        evidence_fact_id="pef_conflict",
     )
     second = scored_fact(
         "exact deduplication",
         source_id="second",
-        evidence_fact_id="p4ef_conflict",
+        evidence_fact_id="pef_conflict",
     )
     capabilities, report = extract_for_project(first, second)
     assert "deterministic_evidence_normalization" not in capability_types(capabilities)
@@ -720,14 +720,14 @@ def test_duplicate_fact_id_across_projects_is_reported_and_never_combined():
     first = scored_fact(
         "canonical serialization with exact deduplication",
         project_id="one",
-        evidence_fact_id="p4ef_shared",
+        evidence_fact_id="pef_shared",
     )
     second = scored_fact(
         "canonical serialization with exact deduplication",
         project_id="two",
-        evidence_fact_id="p4ef_shared",
+        evidence_fact_id="pef_shared",
     )
-    grouped, report = extract_phase4_capabilities_by_project([first, second])
+    grouped, report = extract_project_evidence_capabilities_by_project([first, second])
     assert set(grouped) == {"one", "two"}
     assert report.conflict_count == 2
     assert all(not values for values in grouped.values())
@@ -739,7 +739,7 @@ def test_capability_extraction_does_not_mutate_evidence_facts():
         scored_fact("candidate filtering", evidence_type=EvidenceType.RETRIEVAL, source_id="second"),
     ]
     before = [item.to_json() for item in facts]
-    extract_phase4_capabilities_by_project(facts)
+    extract_project_evidence_capabilities_by_project(facts)
     assert [item.to_json() for item in facts] == before
 
 
@@ -749,7 +749,7 @@ def test_reports_are_bounded_deterministic_and_contain_no_evidence_body_text():
         scored_fact(f"{marker} canonical serialization", project_id=f"project-{index}", source_id=str(index))
         for index in range(12)
     ]
-    _grouped, report = extract_phase4_capabilities_by_project(reversed(facts))
+    _grouped, report = extract_project_evidence_capabilities_by_project(reversed(facts))
     encoded = json.dumps(report.to_dict(), sort_keys=True)
     assert marker not in encoded
     assert len(report.decisions) <= MAX_DECISION_SAMPLES
@@ -761,8 +761,8 @@ def test_bounded_decision_sampling_is_input_order_independent():
         scored_fact("canonical serialization", project_id=f"project-{index:03d}", source_id=str(index))
         for index in range(12)
     ]
-    _first_grouped, first = extract_phase4_capabilities_by_project(facts)
-    _second_grouped, second = extract_phase4_capabilities_by_project(reversed(facts))
+    _first_grouped, first = extract_project_evidence_capabilities_by_project(facts)
+    _second_grouped, second = extract_project_evidence_capabilities_by_project(reversed(facts))
     assert first.decisions == second.decisions
     assert first.grouped_decision_counts == second.grouped_decision_counts
     assert sum(item.count for item in first.grouped_decision_counts) == 12 * len(CAPABILITY_TAXONOMY)
@@ -770,13 +770,13 @@ def test_bounded_decision_sampling_is_input_order_independent():
 
 def test_blank_project_id_is_rejected_without_alias_inference():
     with pytest.raises(ValueError, match="blank"):
-        extract_phase4_project_capabilities("  ", [])
+        extract_project_capabilities("  ", [])
 
 
 def test_empty_input_has_empty_valid_report():
-    grouped, report = extract_phase4_capabilities_by_project([])
+    grouped, report = extract_project_evidence_capabilities_by_project([])
     assert grouped == {}
-    assert isinstance(report, Phase4CapabilityExtractionReport)
+    assert isinstance(report, ProjectCapabilityExtractionReport)
     assert report.project_count == report.fact_count == report.capabilities_emitted == 0
 
 
@@ -793,7 +793,7 @@ def test_calls_write_no_files(tmp_path):
 
 def test_import_has_no_external_or_runtime_side_effects():
     before = set(sys.modules)
-    module = importlib.import_module("backend.phase4_capability_extractor")
+    module = importlib.import_module("backend.project_capability_extractor")
     importlib.reload(module)
     newly_loaded = set(sys.modules) - before
     assert not any(name.startswith(("chromadb", "openai", "requests", "sqlite3")) for name in newly_loaded)
@@ -803,19 +803,19 @@ def test_forbidden_raw_or_secret_fields_remain_model_rejected():
     payload = source().to_dict()
     payload["metadata"] = {"raw_patch": "secret"}
     with pytest.raises(ValueError, match="forbidden"):
-        Phase4SourceRef.from_dict(payload)
+        EvidenceSourceRef.from_dict(payload)
 
 
 def test_step5_scored_facts_pass_directly_and_all_results_validate():
-    inputs, _ = load_phase4_inputs()
-    normalized, _ = dedupe_phase4_inputs(inputs)
-    synthesized, _ = synthesize_phase4_evidence_facts(normalized)
-    scored, _ = score_phase4_evidence_facts(synthesized)
-    grouped, report = extract_phase4_capabilities_by_project(scored)
+    inputs, _ = load_project_evidence_inputs()
+    normalized, _ = dedupe_project_evidence_inputs(inputs)
+    synthesized, _ = synthesize_project_evidence_facts(normalized)
+    scored, _ = score_project_evidence_facts(synthesized)
+    grouped, report = extract_project_evidence_capabilities_by_project(scored)
     source_ids = {item.evidence_fact_id for item in scored}
     assert len(scored) == 283
     assert report.fact_count == 283
-    assert all(isinstance(item, Phase4CapabilityFact) for values in grouped.values() for item in values)
+    assert all(isinstance(item, ProjectCapabilityFact) for values in grouped.values() for item in values)
     assert all(item.capability_type in CAPABILITY_TAXONOMY for values in grouped.values() for item in values)
     assert all(set(item.source_evidence_fact_ids) <= source_ids for values in grouped.values() for item in values)
 
@@ -823,19 +823,19 @@ def test_step5_scored_facts_pass_directly_and_all_results_validate():
 def test_real_data_audit_is_read_only_and_high_risk_is_conservative():
     information = Path(__file__).resolve().parents[1] / "information"
     before = {path: path.stat().st_mtime_ns for path in information.rglob("*") if path.is_file()}
-    inputs, _ = load_phase4_inputs()
-    normalized, _ = dedupe_phase4_inputs(inputs)
-    synthesized, _ = synthesize_phase4_evidence_facts(normalized)
-    scored, _ = score_phase4_evidence_facts(synthesized)
-    grouped, _ = extract_phase4_capabilities_by_project(scored)
+    inputs, _ = load_project_evidence_inputs()
+    normalized, _ = dedupe_project_evidence_inputs(inputs)
+    synthesized, _ = synthesize_project_evidence_facts(normalized)
+    scored, _ = score_project_evidence_facts(synthesized)
+    grouped, _ = extract_project_evidence_capabilities_by_project(scored)
     after = {path: path.stat().st_mtime_ns for path in information.rglob("*") if path.is_file()}
     capability_context = [
-        fact for fact in scored if classify_phase4_source_category(fact) == "capability_context"
+        fact for fact in scored if classify_project_evidence_source_category(fact) == "capability_context"
     ]
     project_context = [
-        fact for fact in scored if classify_phase4_source_category(fact) == "project_context"
+        fact for fact in scored if classify_project_evidence_source_category(fact) == "project_context"
     ]
-    context_only_caps, _ = extract_phase4_capabilities_by_project([*capability_context, *project_context])
+    context_only_caps, _ = extract_project_evidence_capabilities_by_project([*capability_context, *project_context])
     all_types = capability_types([item for values in grouped.values() for item in values])
     assert len(capability_context) == 43
     assert len(project_context) == 5

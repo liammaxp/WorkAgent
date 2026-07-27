@@ -7,28 +7,28 @@ import sys
 
 import pytest
 
-from backend.phase4_capability_taxonomy import (
+from backend.project_capability_taxonomy import (
     CAPABILITY_ALIASES,
     CAPABILITY_DEFINITIONS,
     CAPABILITY_OVERLAP_RULES,
     CAPABILITY_TAXONOMY,
     FORBIDDEN_INFERENCE_REGISTRY,
     SIGNAL_REGISTRY,
-    Phase4CapabilityDefinition,
-    get_phase4_capability_alias_target,
-    get_phase4_capability_definition,
-    is_phase4_capability_supported,
-    list_phase4_capability_definitions,
-    list_phase4_capability_overlap_rules,
-    list_phase4_signal_identifiers,
-    validate_phase4_capability_taxonomy,
-    validate_phase4_capability_type,
+    ProjectCapabilityDefinition,
+    get_project_capability_alias_target,
+    get_project_capability_definition,
+    is_project_capability_supported,
+    list_project_capability_definitions,
+    list_project_capability_overlap_rules,
+    list_project_evidence_signal_identifiers,
+    validate_project_capability_taxonomy,
+    validate_project_capability_type,
 )
-from backend.phase4_evidence_normalizer import dedupe_phase4_inputs
-from backend.phase4_evidence_scoring import score_phase4_evidence_facts
-from backend.phase4_evidence_synthesizer import synthesize_phase4_evidence_facts
-from backend.phase4_input_adapter import load_phase4_inputs
-from backend.phase4_models import EvidenceType, Phase4CapabilityFact, Phase4EvidenceFact
+from backend.project_evidence_normalizer import dedupe_project_evidence_inputs
+from backend.project_evidence_scoring import score_project_evidence_facts
+from backend.project_evidence_synthesizer import synthesize_project_evidence_facts
+from backend.project_evidence_input import load_project_evidence_inputs
+from backend.project_evidence_models import EvidenceType, ProjectCapabilityFact, ProjectEvidenceFact
 
 
 REQUIRED_CAPABILITIES = {
@@ -54,16 +54,16 @@ REQUIRED_CAPABILITIES = {
 IDENTIFIER_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
 
 
-def definition(name: str) -> Phase4CapabilityDefinition:
-    return get_phase4_capability_definition(name)
+def definition(name: str) -> ProjectCapabilityDefinition:
+    return get_project_capability_definition(name)
 
 
 def required_signals(name: str) -> tuple[frozenset[str], ...]:
     return tuple(frozenset(group) for group in definition(name).required_signal_groups)
 
 
-def validate_fixture(item: Phase4CapabilityDefinition, **changes):
-    return validate_phase4_capability_taxonomy(
+def validate_fixture(item: ProjectCapabilityDefinition, **changes):
+    return validate_project_capability_taxonomy(
         (replace(item, **changes),),
         aliases=(),
         overlap_rules=(),
@@ -129,12 +129,12 @@ def test_high_risk_capabilities_use_stricter_requirements():
 def test_taxonomy_and_signal_order_are_deterministic():
     assert [item.capability_type for item in CAPABILITY_DEFINITIONS] == sorted(REQUIRED_CAPABILITIES)
     assert SIGNAL_REGISTRY == tuple(sorted(SIGNAL_REGISTRY))
-    assert list_phase4_capability_definitions() == list_phase4_capability_definitions()
+    assert list_project_capability_definitions() == list_project_capability_definitions()
 
 
 def test_valid_lookup_and_repeated_lookup_succeed():
-    first = get_phase4_capability_definition("claim_validation")
-    second = get_phase4_capability_definition("claim_validation")
+    first = get_project_capability_definition("claim_validation")
+    second = get_project_capability_definition("claim_validation")
     assert first == second
     assert first.capability_type == "claim_validation"
 
@@ -142,24 +142,24 @@ def test_valid_lookup_and_repeated_lookup_succeed():
 @pytest.mark.parametrize("value", ["unknown_capability", "Claim_Validation", " bad", "bad__name", ""])
 def test_unknown_or_invalid_lookup_fails_safely(value):
     with pytest.raises(ValueError):
-        get_phase4_capability_definition(value)
-    assert not is_phase4_capability_supported(value)
+        get_project_capability_definition(value)
+    assert not is_project_capability_supported(value)
 
 
 def test_non_string_lookup_fails_safely():
     with pytest.raises(TypeError):
-        validate_phase4_capability_type(None)  # type: ignore[arg-type]
-    assert not is_phase4_capability_supported(None)  # type: ignore[arg-type]
+        validate_project_capability_type(None)  # type: ignore[arg-type]
+    assert not is_project_capability_supported(None)  # type: ignore[arg-type]
 
 
 def test_supported_check_accepts_canonical_and_declared_alias():
-    assert is_phase4_capability_supported("claim_validation")
-    assert is_phase4_capability_supported("unsupported_claim_boundary")
-    assert validate_phase4_capability_type("unsupported_claim_boundary") == "claim_validation"
+    assert is_project_capability_supported("claim_validation")
+    assert is_project_capability_supported("unsupported_claim_boundary")
+    assert validate_project_capability_type("unsupported_claim_boundary") == "claim_validation"
 
 
 def test_list_and_lookup_results_are_immutable():
-    listed = list_phase4_capability_definitions()
+    listed = list_project_capability_definitions()
     with pytest.raises(AttributeError):
         listed.append(listed[0])  # type: ignore[attr-defined]
     with pytest.raises(FrozenInstanceError):
@@ -181,43 +181,43 @@ def test_list_and_lookup_results_are_immutable():
     ],
 )
 def test_declared_legacy_aliases_resolve_to_canonical_definition(alias, target):
-    assert get_phase4_capability_alias_target(alias) == target
-    assert get_phase4_capability_definition(alias) == definition(target)
+    assert get_project_capability_alias_target(alias) == target
+    assert get_project_capability_definition(alias) == definition(target)
 
 
 def test_unknown_alias_does_not_resolve():
-    assert get_phase4_capability_alias_target("not_declared") is None
-    assert get_phase4_capability_alias_target("Bad Alias") is None
+    assert get_project_capability_alias_target("not_declared") is None
+    assert get_project_capability_alias_target("Bad Alias") is None
 
 
 def test_alias_cycle_is_rejected():
-    report = validate_phase4_capability_taxonomy(aliases=(("legacy_a", "legacy_b"), ("legacy_b", "legacy_a")))
+    report = validate_project_capability_taxonomy(aliases=(("legacy_a", "legacy_b"), ("legacy_b", "legacy_a")))
     assert any("alias_cycle" in error for error in report.errors)
 
 
 def test_alias_chain_is_rejected():
-    report = validate_phase4_capability_taxonomy(
+    report = validate_project_capability_taxonomy(
         aliases=(("legacy_a", "legacy_b"), ("legacy_b", "claim_validation"))
     )
     assert any("alias_chain" in error for error in report.errors)
 
 
 def test_alias_target_must_exist():
-    report = validate_phase4_capability_taxonomy(aliases=(("legacy_a", "missing_target"),))
+    report = validate_project_capability_taxonomy(aliases=(("legacy_a", "missing_target"),))
     assert any("missing_target" in error for error in report.errors)
 
 
 def test_canonical_capability_cannot_be_alias():
-    report = validate_phase4_capability_taxonomy(aliases=(("claim_validation", "data_persistence"),))
+    report = validate_project_capability_taxonomy(aliases=(("claim_validation", "data_persistence"),))
     assert any("canonical_name_used_as_alias" in error for error in report.errors)
 
 
 def test_duplicate_alias_is_rejected_and_aliases_do_not_duplicate_definitions():
-    report = validate_phase4_capability_taxonomy(
+    report = validate_project_capability_taxonomy(
         aliases=(("legacy_a", "claim_validation"), ("legacy_a", "data_persistence"))
     )
     assert any("duplicate_alias" in error for error in report.errors)
-    assert len(list_phase4_capability_definitions()) == len(REQUIRED_CAPABILITIES)
+    assert len(list_project_capability_definitions()) == len(REQUIRED_CAPABILITIES)
 
 
 @pytest.mark.parametrize(
@@ -287,13 +287,13 @@ def test_sqlite_or_storage_does_not_imply_latency():
 )
 def test_overlapping_capabilities_do_not_imply_each_other(left, right):
     assert required_signals(left) != required_signals(right)
-    assert get_phase4_capability_alias_target(left) is None
-    assert validate_phase4_capability_type(left) == left
-    assert validate_phase4_capability_type(right) == right
+    assert get_project_capability_alias_target(left) is None
+    assert validate_project_capability_type(left) == left
+    assert validate_project_capability_type(right) == right
 
 
 def test_overlap_rules_are_explicit_immutable_and_distinguishing():
-    rules = list_phase4_capability_overlap_rules()
+    rules = list_project_capability_overlap_rules()
     assert rules == CAPABILITY_OVERLAP_RULES
     assert all(rule.left_distinguishing_signals for rule in rules)
     assert all(rule.right_distinguishing_signals for rule in rules)
@@ -323,7 +323,7 @@ def test_high_risk_forbidden_lists_include_explicit_overclaims():
 
 
 def test_taxonomy_self_validation_succeeds():
-    report = validate_phase4_capability_taxonomy()
+    report = validate_project_capability_taxonomy()
     assert report.valid, report.errors
     assert report.capability_count == 18
     assert report.signal_count == len(SIGNAL_REGISTRY)
@@ -332,7 +332,7 @@ def test_taxonomy_self_validation_succeeds():
 
 def test_duplicate_definition_is_detected():
     items = (CAPABILITY_DEFINITIONS[0], CAPABILITY_DEFINITIONS[0])
-    report = validate_phase4_capability_taxonomy(items, aliases=(), overlap_rules=())
+    report = validate_project_capability_taxonomy(items, aliases=(), overlap_rules=())
     assert any("duplicate_capability_id" in error for error in report.errors)
 
 
@@ -394,14 +394,14 @@ def test_unsupported_forbidden_inference_is_detected_without_echoing_fixture_con
 
 
 def test_signal_and_definition_collection_apis_are_immutable():
-    assert list_phase4_signal_identifiers() is SIGNAL_REGISTRY
+    assert list_project_evidence_signal_identifiers() is SIGNAL_REGISTRY
     with pytest.raises(AttributeError):
-        list_phase4_signal_identifiers().append("new")  # type: ignore[attr-defined]
+        list_project_evidence_signal_identifiers().append("new")  # type: ignore[attr-defined]
     assert set(FORBIDDEN_INFERENCE_REGISTRY)
 
 
 def test_import_has_no_runtime_file_or_external_service_side_effects(monkeypatch):
-    module_name = "backend.phase4_capability_taxonomy"
+    module_name = "backend.project_capability_taxonomy"
     sys.modules.pop(module_name, None)
     before = set(sys.modules)
     monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: pytest.fail("unexpected read"))
@@ -414,16 +414,16 @@ def test_import_has_no_runtime_file_or_external_service_side_effects(monkeypatch
 def test_real_taxonomy_audit_is_read_only_and_creates_no_capability_facts():
     information = Path(__file__).resolve().parents[1] / "information"
     before_mtimes = {path: path.stat().st_mtime_ns for path in information.rglob("*") if path.is_file()}
-    inputs, _ = load_phase4_inputs()
-    normalized, _ = dedupe_phase4_inputs(inputs)
-    facts, _ = synthesize_phase4_evidence_facts(normalized)
-    scored, _ = score_phase4_evidence_facts(facts)
+    inputs, _ = load_project_evidence_inputs()
+    normalized, _ = dedupe_project_evidence_inputs(inputs)
+    facts, _ = synthesize_project_evidence_facts(normalized)
+    scored, _ = score_project_evidence_facts(facts)
     before_facts = [item.to_json() for item in scored]
-    report = validate_phase4_capability_taxonomy()
+    report = validate_project_capability_taxonomy()
     after_mtimes = {path: path.stat().st_mtime_ns for path in information.rglob("*") if path.is_file()}
     assert report.valid
     assert len(scored) == 283
-    assert all(isinstance(item, Phase4EvidenceFact) for item in scored)
-    assert not any(isinstance(item, Phase4CapabilityFact) for item in scored)
+    assert all(isinstance(item, ProjectEvidenceFact) for item in scored)
+    assert not any(isinstance(item, ProjectCapabilityFact) for item in scored)
     assert before_facts == [item.to_json() for item in scored]
     assert before_mtimes == after_mtimes

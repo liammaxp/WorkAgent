@@ -1,6 +1,6 @@
-"""Deterministic, conservative Phase 4 Evidence Fact synthesis.
+"""Deterministic, conservative project evidence Evidence Fact synthesis.
 
-Only explicit fields from normalized Phase4EvidenceInput records are selected
+Only explicit fields from normalized ProjectEvidenceInput records are selected
 and restructured. This module performs no semantic inference, quality scoring,
 persistence, retrieval, network access, or model calls.
 """
@@ -11,16 +11,16 @@ from dataclasses import asdict, dataclass
 import re
 from typing import Any, Iterable, Mapping
 
-from backend.phase4_evidence_normalizer import normalize_phase4_inputs
-from backend.phase4_models import (
+from backend.project_evidence_normalizer import normalize_project_evidence_inputs
+from backend.project_evidence_models import (
     Confidence,
     EvidenceStatus,
     EvidenceType,
     MetricSupport,
-    Phase4EvidenceFact,
-    Phase4EvidenceInput,
-    Phase4SourceRef,
-    build_phase4_stable_id,
+    ProjectEvidenceFact,
+    ProjectEvidenceInput,
+    EvidenceSourceRef,
+    build_project_evidence_stable_id,
 )
 
 
@@ -30,16 +30,16 @@ MAX_MECHANISM_LENGTH = 2_000
 MAX_IMPLEMENTATION_SIGNALS = 200
 
 DIRECT_STRUCTURED_TYPES = frozenset({
-    "phase2_evidence_card",
-    "phase3_evidence_card",
+    "github_evidence_card",
+    "project_change_evidence_card",
 })
 DIRECT_CHANGE_TYPES = frozenset({
-    "phase2_raw_change_summary",
-    "phase3_raw_change_summary",
+    "github_evidence_raw_change_summary",
+    "project_change_raw_change_summary",
 })
 CAPABILITY_TYPES = frozenset({
-    "phase2_capability_fact",
-    "phase3_capability_fact",
+    "github_evidence_capability_fact",
+    "project_change_capability_fact",
 })
 CONTEXTUAL_TYPES = frozenset({
     "project_memory",
@@ -118,10 +118,10 @@ _NUMERIC_IMPACT_PATTERN = re.compile(
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceBundle:
+class ProjectEvidenceBundle:
     project_id: str
-    items: tuple[Phase4EvidenceInput, ...]
-    source_refs: tuple[Phase4SourceRef, ...]
+    items: tuple[ProjectEvidenceInput, ...]
+    source_refs: tuple[EvidenceSourceRef, ...]
     provenance_key: str
     provenance_conflict: bool = False
 
@@ -135,7 +135,7 @@ class Phase4EvidenceBundle:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceSynthesisDecision:
+class ProjectEvidenceSynthesisDecision:
     input_ids: tuple[str, ...]
     project_id: str
     decision: str
@@ -144,7 +144,7 @@ class Phase4EvidenceSynthesisDecision:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceSynthesisGroupCount:
+class ProjectEvidenceSynthesisGroupCount:
     project_id: str
     input_type: str
     status: str
@@ -153,7 +153,7 @@ class Phase4EvidenceSynthesisGroupCount:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceSynthesisReport:
+class ProjectEvidenceSynthesisReport:
     input_count: int
     bundle_count: int
     evidence_fact_count: int
@@ -165,8 +165,8 @@ class Phase4EvidenceSynthesisReport:
     missing_implementation_count: int
     unsafe_impact_dropped_count: int
     provenance_conflict_count: int
-    decisions: tuple[Phase4EvidenceSynthesisDecision, ...] = ()
-    grouped_counts: tuple[Phase4EvidenceSynthesisGroupCount, ...] = ()
+    decisions: tuple[ProjectEvidenceSynthesisDecision, ...] = ()
+    grouped_counts: tuple[ProjectEvidenceSynthesisGroupCount, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -174,7 +174,7 @@ class Phase4EvidenceSynthesisReport:
 
 @dataclass(frozen=True)
 class _SynthesisOutcome:
-    fact: Phase4EvidenceFact | None
+    fact: ProjectEvidenceFact | None
     status: str
     evidence_type: EvidenceType
     missing_mechanism: bool = False
@@ -183,23 +183,23 @@ class _SynthesisOutcome:
     reason: str = "created"
 
 
-def _canonical_ref_key(ref: Phase4SourceRef) -> str:
+def _canonical_ref_key(ref: EvidenceSourceRef) -> str:
     return ref.to_json()
 
 
-def _lineage_key(item: Phase4EvidenceInput) -> str:
+def _lineage_key(item: ProjectEvidenceInput) -> str:
     return "\n".join(sorted(_canonical_ref_key(ref) for ref in item.source_refs))
 
 
 def _family(input_type: str) -> str:
-    if input_type.startswith("phase2_"):
-        return "phase2"
-    if input_type.startswith("phase3_"):
-        return "phase3"
+    if input_type.startswith("github_evidence_"):
+        return "github_evidence"
+    if input_type.startswith("project_change_"):
+        return "project_change"
     return input_type
 
 
-def _item_priority(item: Phase4EvidenceInput) -> tuple[int, str, str]:
+def _item_priority(item: ProjectEvidenceInput) -> tuple[int, str, str]:
     if item.input_type in DIRECT_STRUCTURED_TYPES:
         priority = 0
     elif item.input_type in DIRECT_CHANGE_TYPES:
@@ -213,43 +213,43 @@ def _item_priority(item: Phase4EvidenceInput) -> tuple[int, str, str]:
     return (priority, item.input_type, item.input_id)
 
 
-def _bundle_sort_key(bundle: Phase4EvidenceBundle) -> tuple[str, str, str, str]:
+def _bundle_sort_key(bundle: ProjectEvidenceBundle) -> tuple[str, str, str, str]:
     primary = bundle.items[0]
     return (bundle.project_id, primary.input_type, bundle.provenance_key, primary.input_id)
 
 
-def _dedupe_refs(items: Iterable[Phase4EvidenceInput]) -> tuple[Phase4SourceRef, ...]:
-    refs: list[Phase4SourceRef] = []
+def _dedupe_refs(items: Iterable[ProjectEvidenceInput]) -> tuple[EvidenceSourceRef, ...]:
+    refs: list[EvidenceSourceRef] = []
     seen: set[str] = set()
     for item in items:
         for ref in item.source_refs:
             key = _canonical_ref_key(ref)
             if key not in seen:
                 seen.add(key)
-                refs.append(Phase4SourceRef.from_dict(ref.to_dict()))
+                refs.append(EvidenceSourceRef.from_dict(ref.to_dict()))
     return tuple(refs)
 
 
-def _problem_conflict(items: list[Phase4EvidenceInput]) -> bool:
+def _problem_conflict(items: list[ProjectEvidenceInput]) -> bool:
     problems = {item.problem_signal for item in items if item.problem_signal}
     return len(problems) > 1
 
 
-def build_phase4_evidence_bundles(
-    items: Iterable[Phase4EvidenceInput],
-) -> list[Phase4EvidenceBundle]:
+def build_project_evidence_bundles(
+    items: Iterable[ProjectEvidenceInput],
+) -> list[ProjectEvidenceBundle]:
     """Bundle only one direct card and one direct change with exact lineage."""
 
-    normalized = normalize_phase4_inputs(items)
-    direct_groups: dict[tuple[str, str, str], list[Phase4EvidenceInput]] = {}
-    singles: list[Phase4EvidenceInput] = []
+    normalized = normalize_project_evidence_inputs(items)
+    direct_groups: dict[tuple[str, str, str], list[ProjectEvidenceInput]] = {}
+    singles: list[ProjectEvidenceInput] = []
     for item in normalized:
         if item.input_type in DIRECT_TYPES:
             key = (item.project_id, _family(item.input_type), _lineage_key(item))
             direct_groups.setdefault(key, []).append(item)
         else:
             singles.append(item)
-    bundles: list[Phase4EvidenceBundle] = []
+    bundles: list[ProjectEvidenceBundle] = []
     for (project_id, _source_family, lineage), group in sorted(direct_groups.items()):
         ordered = sorted(group, key=_item_priority)
         cards = [item for item in ordered if item.input_type in DIRECT_STRUCTURED_TYPES]
@@ -257,7 +257,7 @@ def build_phase4_evidence_bundles(
         conflict = len(cards) > 1 or len(changes) > 1 or _problem_conflict(ordered)
         if len(cards) == 1 and len(changes) == 1 and not conflict:
             pair = tuple(sorted([cards[0], changes[0]], key=_item_priority))
-            bundles.append(Phase4EvidenceBundle(
+            bundles.append(ProjectEvidenceBundle(
                 project_id=project_id,
                 items=pair,
                 source_refs=_dedupe_refs(pair),
@@ -265,7 +265,7 @@ def build_phase4_evidence_bundles(
             ))
         else:
             for item in ordered:
-                bundles.append(Phase4EvidenceBundle(
+                bundles.append(ProjectEvidenceBundle(
                     project_id=project_id,
                     items=(item,),
                     source_refs=_dedupe_refs((item,)),
@@ -273,7 +273,7 @@ def build_phase4_evidence_bundles(
                     provenance_conflict=conflict,
                 ))
     for item in sorted(singles, key=_item_priority):
-        bundles.append(Phase4EvidenceBundle(
+        bundles.append(ProjectEvidenceBundle(
             project_id=item.project_id,
             items=(item,),
             source_refs=_dedupe_refs((item,)),
@@ -317,7 +317,7 @@ def _has_concrete_implementation(values: Iterable[str]) -> bool:
     return bool(normalized) and any(value not in GENERIC_IMPLEMENTATION for value in normalized)
 
 
-def _provenance_fallback(refs: Iterable[Phase4SourceRef]) -> list[str]:
+def _provenance_fallback(refs: Iterable[EvidenceSourceRef]) -> list[str]:
     values: list[str] = []
     for ref in refs:
         path = ref.file_path or ""
@@ -331,7 +331,7 @@ def _provenance_fallback(refs: Iterable[Phase4SourceRef]) -> list[str]:
     return _unique_strings(values)
 
 
-def _metadata_enum(refs: Iterable[Phase4SourceRef], key: str, allowed: set[str]) -> str | None:
+def _metadata_enum(refs: Iterable[EvidenceSourceRef], key: str, allowed: set[str]) -> str | None:
     values = {
         str(ref.metadata.get(key) or "").strip().lower()
         for ref in refs
@@ -340,7 +340,7 @@ def _metadata_enum(refs: Iterable[Phase4SourceRef], key: str, allowed: set[str])
     return next(iter(values)) if len(values) == 1 and next(iter(values)) in allowed else None
 
 
-def _evidence_type(bundle: Phase4EvidenceBundle) -> EvidenceType:
+def _evidence_type(bundle: ProjectEvidenceBundle) -> EvidenceType:
     explicit = _metadata_enum(
         bundle.source_refs,
         "evidence_type",
@@ -358,7 +358,7 @@ def _evidence_type(bundle: Phase4EvidenceBundle) -> EvidenceType:
     return next(iter(mapped)) if len(mapped) == 1 else EvidenceType.UNKNOWN
 
 
-def _metric_support(refs: Iterable[Phase4SourceRef]) -> MetricSupport:
+def _metric_support(refs: Iterable[EvidenceSourceRef]) -> MetricSupport:
     explicit = _metadata_enum(
         refs,
         "metric_support",
@@ -374,7 +374,7 @@ def _unsafe_impact(value: str, metric_support: MetricSupport) -> bool:
 
 
 def _status_and_confidence(
-    bundle: Phase4EvidenceBundle,
+    bundle: ProjectEvidenceBundle,
     *,
     has_implementation: bool,
 ) -> tuple[EvidenceStatus, Confidence]:
@@ -395,7 +395,7 @@ def _status_and_confidence(
 
 
 def _fact_id(
-    bundle: Phase4EvidenceBundle,
+    bundle: ProjectEvidenceBundle,
     *,
     problem: str,
     mechanism: str,
@@ -404,7 +404,7 @@ def _fact_id(
     evidence_type: EvidenceType,
     technical_tags: list[str],
 ) -> str:
-    return build_phase4_stable_id("p4ef_", bundle.project_id, {
+    return build_project_evidence_stable_id("pef_", bundle.project_id, {
         "problem": problem,
         "mechanism": mechanism,
         "implementation": implementation,
@@ -415,7 +415,7 @@ def _fact_id(
     })
 
 
-def _synthesize_bundle(bundle: Phase4EvidenceBundle) -> _SynthesisOutcome:
+def _synthesize_bundle(bundle: ProjectEvidenceBundle) -> _SynthesisOutcome:
     evidence_type = _evidence_type(bundle)
     if not bundle.source_refs or any(ref.project_id != bundle.project_id for ref in bundle.source_refs):
         return _SynthesisOutcome(None, "rejected", evidence_type, reason="missing_or_mismatched_provenance")
@@ -460,7 +460,7 @@ def _synthesize_bundle(bundle: Phase4EvidenceBundle) -> _SynthesisOutcome:
         bundle,
         has_implementation=has_concrete_implementation,
     )
-    fact = Phase4EvidenceFact(
+    fact = ProjectEvidenceFact(
         evidence_fact_id=_fact_id(
             bundle,
             problem=problem,
@@ -495,18 +495,18 @@ def _synthesize_bundle(bundle: Phase4EvidenceBundle) -> _SynthesisOutcome:
     )
 
 
-def synthesize_phase4_evidence_fact(
-    item: Phase4EvidenceInput,
-) -> Phase4EvidenceFact | None:
-    if not isinstance(item, Phase4EvidenceInput):
-        raise TypeError("synthesize_phase4_evidence_fact expects Phase4EvidenceInput")
+def synthesize_project_evidence_fact(
+    item: ProjectEvidenceInput,
+) -> ProjectEvidenceFact | None:
+    if not isinstance(item, ProjectEvidenceInput):
+        raise TypeError("synthesize_project_evidence_fact expects ProjectEvidenceInput")
     if not item.source_refs:
         return None
-    bundle = build_phase4_evidence_bundles([item])[0]
+    bundle = build_project_evidence_bundles([item])[0]
     return _synthesize_bundle(bundle).fact
 
 
-def _fact_sort_key(fact: Phase4EvidenceFact) -> tuple[str, str, str, str, str, str]:
+def _fact_sort_key(fact: ProjectEvidenceFact) -> tuple[str, str, str, str, str, str]:
     primary = fact.source_refs[0]
     return (
         fact.project_id,
@@ -518,13 +518,13 @@ def _fact_sort_key(fact: Phase4EvidenceFact) -> tuple[str, str, str, str, str, s
     )
 
 
-def synthesize_phase4_evidence_facts(
-    items: Iterable[Phase4EvidenceInput],
-) -> tuple[list[Phase4EvidenceFact], Phase4EvidenceSynthesisReport]:
+def synthesize_project_evidence_facts(
+    items: Iterable[ProjectEvidenceInput],
+) -> tuple[list[ProjectEvidenceFact], ProjectEvidenceSynthesisReport]:
     input_records = list(items)
-    bundles = build_phase4_evidence_bundles(input_records)
-    facts: list[Phase4EvidenceFact] = []
-    decisions: list[Phase4EvidenceSynthesisDecision] = []
+    bundles = build_project_evidence_bundles(input_records)
+    facts: list[ProjectEvidenceFact] = []
+    decisions: list[ProjectEvidenceSynthesisDecision] = []
     grouped: dict[tuple[str, str, str, str], int] = {}
     status_counts = {status.value: 0 for status in EvidenceStatus}
     missing_mechanism = 0
@@ -552,7 +552,7 @@ def synthesize_phase4_evidence_facts(
         if outcome.fact is not None:
             facts.append(outcome.fact)
         if len(decisions) < MAX_DECISION_SAMPLES:
-            decisions.append(Phase4EvidenceSynthesisDecision(
+            decisions.append(ProjectEvidenceSynthesisDecision(
                 input_ids=bundle.input_ids,
                 project_id=bundle.project_id,
                 decision="created" if outcome.fact is not None else "rejected",
@@ -567,7 +567,7 @@ def synthesize_phase4_evidence_facts(
         item.input_ids,
     ))
     group_counts = tuple(
-        Phase4EvidenceSynthesisGroupCount(
+        ProjectEvidenceSynthesisGroupCount(
             project_id=key[0],
             input_type=key[1],
             status=key[2],
@@ -576,7 +576,7 @@ def synthesize_phase4_evidence_facts(
         )
         for key, count in sorted(grouped.items())
     )
-    report = Phase4EvidenceSynthesisReport(
+    report = ProjectEvidenceSynthesisReport(
         input_count=len(input_records),
         bundle_count=len(bundles),
         evidence_fact_count=len(facts),
@@ -595,11 +595,11 @@ def synthesize_phase4_evidence_facts(
 
 
 __all__ = [
-    "Phase4EvidenceBundle",
-    "Phase4EvidenceSynthesisDecision",
-    "Phase4EvidenceSynthesisGroupCount",
-    "Phase4EvidenceSynthesisReport",
-    "build_phase4_evidence_bundles",
-    "synthesize_phase4_evidence_fact",
-    "synthesize_phase4_evidence_facts",
+    "ProjectEvidenceBundle",
+    "ProjectEvidenceSynthesisDecision",
+    "ProjectEvidenceSynthesisGroupCount",
+    "ProjectEvidenceSynthesisReport",
+    "build_project_evidence_bundles",
+    "synthesize_project_evidence_fact",
+    "synthesize_project_evidence_facts",
 ]

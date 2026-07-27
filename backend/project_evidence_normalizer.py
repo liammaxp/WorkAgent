@@ -1,6 +1,6 @@
-"""Pure normalization and exact deduplication for Phase 4 evidence inputs.
+"""Pure normalization and exact deduplication for project evidence evidence inputs.
 
-This module operates only on already-safe :class:`Phase4EvidenceInput` objects.
+This module operates only on already-safe :class:`ProjectEvidenceInput` objects.
 It performs no semantic comparison, synthesis, scoring, persistence, retrieval,
 or external calls.
 """
@@ -12,11 +12,11 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
-from backend.phase4_input_adapter import build_phase4_content_hash
-from backend.phase4_models import (
-    Phase4EvidenceInput,
-    Phase4SourceRef,
-    build_phase4_stable_id,
+from backend.project_evidence_input import build_project_evidence_content_hash
+from backend.project_evidence_models import (
+    ProjectEvidenceInput,
+    EvidenceSourceRef,
+    build_project_evidence_stable_id,
 )
 
 
@@ -36,7 +36,7 @@ _NON_IDENTITY_METADATA_KEYS = frozenset({
 
 
 @dataclass(frozen=True)
-class Phase4DeduplicationDecision:
+class ProjectEvidenceDeduplicationDecision:
     reason: str
     kept_input_id: str
     dropped_input_id: str
@@ -45,7 +45,7 @@ class Phase4DeduplicationDecision:
 
 
 @dataclass(frozen=True)
-class Phase4DeduplicationReport:
+class ProjectEvidenceDeduplicationReport:
     input_count: int
     normalized_count: int
     output_count: int
@@ -54,13 +54,13 @@ class Phase4DeduplicationReport:
     duplicate_source_refs_removed: int
     duplicate_signal_values_removed: int
     retained_cross_source_records: int
-    decisions: tuple[Phase4DeduplicationDecision, ...] = ()
+    decisions: tuple[ProjectEvidenceDeduplicationDecision, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-class Phase4IntegrityError(ValueError):
+class ProjectEvidenceIntegrityError(ValueError):
     """Safe integrity error containing identifiers but no evidence content."""
 
     def __init__(
@@ -79,7 +79,7 @@ class Phase4IntegrityError(ValueError):
         self.content_hash = content_hash
         identifier = input_id or content_hash or "unknown"
         super().__init__(
-            f"Phase 4 input integrity conflict ({reason}) for "
+            f"project evidence input integrity conflict ({reason}) for "
             f"project={project_id!r}, input_type={input_type!r}, identifier={identifier!r}"
         )
 
@@ -90,13 +90,13 @@ def _canonical_json(value: Any) -> str:
 
 def _normalize_text(value: str) -> str:
     if not isinstance(value, str):
-        raise TypeError("Phase 4 descriptive values must be strings")
+        raise TypeError("project evidence descriptive values must be strings")
     return " ".join(value.split())
 
 
 def _normalize_strings(values: list[str], *, set_like: bool = False) -> tuple[list[str], int]:
     if not isinstance(values, list):
-        raise TypeError("Phase 4 signal fields must be lists")
+        raise TypeError("project evidence signal fields must be lists")
     normalized: list[str] = []
     seen: set[str] = set()
     removed = 0
@@ -116,16 +116,16 @@ def _normalize_strings(values: list[str], *, set_like: bool = False) -> tuple[li
     return normalized, removed
 
 
-def _normalize_source_refs(values: list[Phase4SourceRef]) -> tuple[list[Phase4SourceRef], int]:
+def _normalize_source_refs(values: list[EvidenceSourceRef]) -> tuple[list[EvidenceSourceRef], int]:
     if not isinstance(values, list):
         raise TypeError("source_refs must be a list")
-    normalized: list[Phase4SourceRef] = []
+    normalized: list[EvidenceSourceRef] = []
     seen: set[str] = set()
     removed = 0
     for value in values:
-        if not isinstance(value, Phase4SourceRef):
-            raise TypeError("source_refs must contain Phase4SourceRef values")
-        ref = Phase4SourceRef.from_dict(value.to_dict())
+        if not isinstance(value, EvidenceSourceRef):
+            raise TypeError("source_refs must contain EvidenceSourceRef values")
+        ref = EvidenceSourceRef.from_dict(value.to_dict())
         key = ref.to_json()
         if key in seen:
             removed += 1
@@ -147,7 +147,7 @@ def _without_non_identity_metadata(value: Any) -> Any:
     return value
 
 
-def _source_ref_identity(ref: Phase4SourceRef) -> dict[str, Any]:
+def _source_ref_identity(ref: EvidenceSourceRef) -> dict[str, Any]:
     payload = ref.to_dict()
     file_path = payload.get("file_path")
     if isinstance(file_path, str) and (
@@ -169,7 +169,7 @@ def _normalized_content_payload(
     implementation_signals: list[str],
     impact_signals: list[str],
     technical_tags: list[str],
-    source_refs: list[Phase4SourceRef],
+    source_refs: list[EvidenceSourceRef],
 ) -> dict[str, Any]:
     return {
         "project_id": project_id,
@@ -192,12 +192,12 @@ def _stable_input_id(
 ) -> str:
     identity_payload = dict(content_payload)
     identity_payload["content_hash"] = content_hash
-    return build_phase4_stable_id("p4in_", project_id, identity_payload)
+    return build_project_evidence_stable_id("pei_", project_id, identity_payload)
 
 
-def _normalize_with_counts(item: Phase4EvidenceInput) -> tuple[Phase4EvidenceInput, int, int]:
-    if not isinstance(item, Phase4EvidenceInput):
-        raise TypeError("normalize_phase4_input expects a Phase4EvidenceInput")
+def _normalize_with_counts(item: ProjectEvidenceInput) -> tuple[ProjectEvidenceInput, int, int]:
+    if not isinstance(item, ProjectEvidenceInput):
+        raise TypeError("normalize_project_evidence_input expects a ProjectEvidenceInput")
     project_id = _normalize_text(item.project_id)
     input_type = _normalize_text(item.input_type)
     title = _normalize_text(item.title)
@@ -221,9 +221,9 @@ def _normalize_with_counts(item: Phase4EvidenceInput) -> tuple[Phase4EvidenceInp
         technical_tags=technical_tags,
         source_refs=source_refs,
     )
-    content_hash = build_phase4_content_hash(payload)
+    content_hash = build_project_evidence_content_hash(payload)
     input_id = _stable_input_id(project_id, payload, content_hash)
-    normalized = Phase4EvidenceInput(
+    normalized = ProjectEvidenceInput(
         project_id=project_id,
         input_type=input_type,
         title=title,
@@ -241,13 +241,13 @@ def _normalize_with_counts(item: Phase4EvidenceInput) -> tuple[Phase4EvidenceInp
     return normalized, refs_removed, signal_removed
 
 
-def normalize_phase4_input(item: Phase4EvidenceInput) -> Phase4EvidenceInput:
+def normalize_project_evidence_input(item: ProjectEvidenceInput) -> ProjectEvidenceInput:
     """Return a new normalized model with recomputed content hash and input ID."""
 
     return _normalize_with_counts(item)[0]
 
 
-def _sort_key(item: Phase4EvidenceInput) -> tuple[str, str, str, str, str, str]:
+def _sort_key(item: ProjectEvidenceInput) -> tuple[str, str, str, str, str, str]:
     primary = item.source_refs[0]
     return (
         item.project_id,
@@ -259,17 +259,17 @@ def _sort_key(item: Phase4EvidenceInput) -> tuple[str, str, str, str, str, str]:
     )
 
 
-def normalize_phase4_inputs(items: Iterable[Phase4EvidenceInput]) -> list[Phase4EvidenceInput]:
+def normalize_project_evidence_inputs(items: Iterable[ProjectEvidenceInput]) -> list[ProjectEvidenceInput]:
     """Normalize inputs independently and return deterministic collection order."""
 
-    return sorted((normalize_phase4_input(item) for item in items), key=_sort_key)
+    return sorted((normalize_project_evidence_input(item) for item in items), key=_sort_key)
 
 
-def _full_payload(item: Phase4EvidenceInput) -> str:
+def _full_payload(item: ProjectEvidenceInput) -> str:
     return item.to_json()
 
 
-def _safe_payload_without_identity(item: Phase4EvidenceInput) -> str:
+def _safe_payload_without_identity(item: ProjectEvidenceInput) -> str:
     payload = item.to_dict()
     payload.pop("input_id", None)
     payload.pop("content_hash", None)
@@ -277,16 +277,16 @@ def _safe_payload_without_identity(item: Phase4EvidenceInput) -> str:
 
 
 def _check_declared_integrity(
-    originals: list[Phase4EvidenceInput],
-    normalized: list[Phase4EvidenceInput],
+    originals: list[ProjectEvidenceInput],
+    normalized: list[ProjectEvidenceInput],
 ) -> None:
-    by_input_id: dict[str, tuple[str, Phase4EvidenceInput]] = {}
-    by_hash: dict[tuple[str, str, str, str], tuple[str, Phase4EvidenceInput]] = {}
+    by_input_id: dict[str, tuple[str, ProjectEvidenceInput]] = {}
+    by_hash: dict[tuple[str, str, str, str], tuple[str, ProjectEvidenceInput]] = {}
     for original, current in zip(originals, normalized):
         safe_payload = _safe_payload_without_identity(current)
         previous_id = by_input_id.get(original.input_id)
         if previous_id is not None and previous_id[0] != safe_payload:
-            raise Phase4IntegrityError(
+            raise ProjectEvidenceIntegrityError(
                 "same_input_id_different_payload",
                 project_id=current.project_id,
                 input_type=current.input_type,
@@ -304,7 +304,7 @@ def _check_declared_integrity(
         )
         previous_hash = by_hash.get(hash_key)
         if previous_hash is not None and previous_hash[0] != safe_payload:
-            raise Phase4IntegrityError(
+            raise ProjectEvidenceIntegrityError(
                 "same_content_hash_different_payload",
                 project_id=current.project_id,
                 input_type=current.input_type,
@@ -313,13 +313,13 @@ def _check_declared_integrity(
         by_hash.setdefault(hash_key, (safe_payload, current))
 
 
-def _check_normalized_integrity(items: list[Phase4EvidenceInput]) -> None:
+def _check_normalized_integrity(items: list[ProjectEvidenceInput]) -> None:
     by_id: dict[str, str] = {}
     by_hash: dict[str, str] = {}
     for item in items:
         payload = _safe_payload_without_identity(item)
         if item.input_id in by_id and by_id[item.input_id] != payload:
-            raise Phase4IntegrityError(
+            raise ProjectEvidenceIntegrityError(
                 "same_input_id_different_normalized_payload",
                 project_id=item.project_id,
                 input_type=item.input_type,
@@ -327,7 +327,7 @@ def _check_normalized_integrity(items: list[Phase4EvidenceInput]) -> None:
             )
         by_id.setdefault(item.input_id, payload)
         if item.content_hash in by_hash and by_hash[item.content_hash] != payload:
-            raise Phase4IntegrityError(
+            raise ProjectEvidenceIntegrityError(
                 "same_content_hash_different_normalized_payload",
                 project_id=item.project_id,
                 input_type=item.input_type,
@@ -336,7 +336,7 @@ def _check_normalized_integrity(items: list[Phase4EvidenceInput]) -> None:
         by_hash.setdefault(item.content_hash, payload)
 
 
-def _cross_source_retained_count(items: list[Phase4EvidenceInput]) -> int:
+def _cross_source_retained_count(items: list[ProjectEvidenceInput]) -> int:
     groups: dict[str, set[tuple[str, str, str]]] = {}
     for item in items:
         payload = {
@@ -356,9 +356,9 @@ def _cross_source_retained_count(items: list[Phase4EvidenceInput]) -> int:
     return sum(len(identities) - 1 for identities in groups.values() if len(identities) > 1)
 
 
-def dedupe_phase4_inputs(
-    items: Iterable[Phase4EvidenceInput],
-) -> tuple[list[Phase4EvidenceInput], Phase4DeduplicationReport]:
+def dedupe_project_evidence_inputs(
+    items: Iterable[ProjectEvidenceInput],
+) -> tuple[list[ProjectEvidenceInput], ProjectEvidenceDeduplicationReport]:
     """Normalize and remove only fully equivalent or repeated-traversal inputs.
 
     Deterministic winner policy: normalized collection key, then normalized JSON,
@@ -366,7 +366,7 @@ def dedupe_phase4_inputs(
     """
 
     originals = list(items)
-    normalized_records: list[Phase4EvidenceInput] = []
+    normalized_records: list[ProjectEvidenceInput] = []
     refs_removed = 0
     signals_removed = 0
     for item in originals:
@@ -380,11 +380,11 @@ def dedupe_phase4_inputs(
         zip(originals, normalized_records),
         key=lambda pair: (*_sort_key(pair[1]), _full_payload(pair[1]), _full_payload(pair[0])),
     )
-    kept: list[Phase4EvidenceInput] = []
-    kept_original: dict[str, Phase4EvidenceInput] = {}
+    kept: list[ProjectEvidenceInput] = []
+    kept_original: dict[str, ProjectEvidenceInput] = {}
     exact_removed = 0
     repeated_removed = 0
-    decisions: list[Phase4DeduplicationDecision] = []
+    decisions: list[ProjectEvidenceDeduplicationDecision] = []
     for original, normalized in pairs:
         normalized_key = _full_payload(normalized)
         winner = kept_original.get(normalized_key)
@@ -399,7 +399,7 @@ def dedupe_phase4_inputs(
             reason = "repeated_source_record"
             repeated_removed += 1
         if len(decisions) < MAX_DECISION_SAMPLES:
-            decisions.append(Phase4DeduplicationDecision(
+            decisions.append(ProjectEvidenceDeduplicationDecision(
                 reason=reason,
                 kept_input_id=winner.input_id,
                 dropped_input_id=original.input_id,
@@ -414,7 +414,7 @@ def dedupe_phase4_inputs(
         item.kept_input_id,
         item.dropped_input_id,
     ))
-    report = Phase4DeduplicationReport(
+    report = ProjectEvidenceDeduplicationReport(
         input_count=len(originals),
         normalized_count=len(normalized_records),
         output_count=len(output),
@@ -428,18 +428,18 @@ def dedupe_phase4_inputs(
     return output, report
 
 
-def normalize_and_dedupe_phase4_inputs(
-    items: Iterable[Phase4EvidenceInput],
-) -> tuple[list[Phase4EvidenceInput], Phase4DeduplicationReport]:
-    return dedupe_phase4_inputs(items)
+def normalize_and_dedupe_project_evidence_inputs(
+    items: Iterable[ProjectEvidenceInput],
+) -> tuple[list[ProjectEvidenceInput], ProjectEvidenceDeduplicationReport]:
+    return dedupe_project_evidence_inputs(items)
 
 
 __all__ = [
-    "Phase4DeduplicationDecision",
-    "Phase4DeduplicationReport",
-    "Phase4IntegrityError",
-    "dedupe_phase4_inputs",
-    "normalize_and_dedupe_phase4_inputs",
-    "normalize_phase4_input",
-    "normalize_phase4_inputs",
+    "ProjectEvidenceDeduplicationDecision",
+    "ProjectEvidenceDeduplicationReport",
+    "ProjectEvidenceIntegrityError",
+    "dedupe_project_evidence_inputs",
+    "normalize_and_dedupe_project_evidence_inputs",
+    "normalize_project_evidence_input",
+    "normalize_project_evidence_inputs",
 ]

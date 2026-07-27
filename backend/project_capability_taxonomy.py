@@ -1,4 +1,4 @@
-"""Strict, immutable Phase 4 capability taxonomy.
+"""Strict, immutable project evidence capability taxonomy.
 
 This module defines capability vocabulary and evidence requirements only.  It
 does not inspect Evidence Facts, extract signals, assign capabilities, persist
@@ -16,7 +16,7 @@ import re
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from backend.phase4_models import EvidenceType
+from backend.project_evidence_models import EvidenceType
 
 
 MAX_VALIDATION_MESSAGES = 100
@@ -40,7 +40,7 @@ _VALID_SOURCE_CATEGORIES = frozenset({
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityDefinition:
+class ProjectCapabilityDefinition:
     capability_type: str
     display_name: str
     description: str
@@ -64,7 +64,7 @@ class Phase4CapabilityDefinition:
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityOverlapRule:
+class ProjectCapabilityOverlapRule:
     left_capability: str
     right_capability: str
     shared_signals: tuple[str, ...]
@@ -75,7 +75,7 @@ class Phase4CapabilityOverlapRule:
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityTaxonomyValidationReport:
+class ProjectCapabilityTaxonomyValidationReport:
     valid: bool
     capability_count: int
     signal_count: int
@@ -288,9 +288,9 @@ def _definition(
     allows_contextual_support: bool = True,
     high_risk: bool = False,
     notes: tuple[str, ...] = (),
-) -> Phase4CapabilityDefinition:
+) -> ProjectCapabilityDefinition:
     accepted, contextual, unsupported = _evidence_policy(*accepted_types)
-    return Phase4CapabilityDefinition(
+    return ProjectCapabilityDefinition(
         capability_type=capability_type,
         display_name=display_name,
         description=description,
@@ -557,8 +557,8 @@ CAPABILITY_TAXONOMY = MappingProxyType({
     definition.capability_type: definition for definition in CAPABILITY_DEFINITIONS
 })
 
-# Each alias has a concrete legacy source in the repository.  The Phase 2
-# aliases occur in capability_facts.jsonl; the Phase 3 aliases occur in the
+# Each alias has a concrete legacy source in the repository.  The GitHub evidence
+# aliases occur in capability_facts.jsonl; the project change memory aliases occur in the
 # CAPABILITY_TYPES producer registry.  Broad legacy labels are intentionally
 # omitted when they do not have one unambiguous canonical meaning.
 CAPABILITY_ALIAS_ITEMS = (
@@ -572,7 +572,7 @@ CAPABILITY_ALIASES = MappingProxyType(dict(CAPABILITY_ALIAS_ITEMS))
 
 
 CAPABILITY_OVERLAP_RULES = (
-    Phase4CapabilityOverlapRule(
+    ProjectCapabilityOverlapRule(
         "data_persistence", "project_memory_management",
         ("load_validate_write_lifecycle", "persistent_storage", "schema_versioning"),
         ("atomic_persistence", "database_storage"),
@@ -580,7 +580,7 @@ CAPABILITY_OVERLAP_RULES = (
         "Both may be present when a persistent store has an explicit project-memory lifecycle.",
         "Storage alone must not imply project-memory management.",
     ),
-    Phase4CapabilityOverlapRule(
+    ProjectCapabilityOverlapRule(
         "deterministic_document_generation", "latex_validation_and_repair",
         ("structured_document_assembly",),
         ("document_merge", "section_ordering"),
@@ -588,7 +588,7 @@ CAPABILITY_OVERLAP_RULES = (
         "Both may be present when deterministic assembly is followed by explicit validation and repair.",
         "Document assembly must not imply validation or repair.",
     ),
-    Phase4CapabilityOverlapRule(
+    ProjectCapabilityOverlapRule(
         "evidence_grounded_generation", "llm_reliability",
         ("claim_validation", "source_grounding", "unsupported_claim_blocking"),
         ("evidence_selection", "output_evidence_validation"),
@@ -596,7 +596,7 @@ CAPABILITY_OVERLAP_RULES = (
         "Both may be present only when grounding and multiple independent reliability controls are evidenced.",
         "Grounded generation alone must not imply broad LLM reliability.",
     ),
-    Phase4CapabilityOverlapRule(
+    ProjectCapabilityOverlapRule(
         "output_quality_control", "claim_validation",
         ("validation_gate",),
         ("generic_content_blocking", "quality_dimensions", "status_band_decision"),
@@ -604,7 +604,7 @@ CAPABILITY_OVERLAP_RULES = (
         "Both may be present when general quality gates also enforce evidence-bound claim rules.",
         "General output quality checks must not imply claim validation.",
     ),
-    Phase4CapabilityOverlapRule(
+    ProjectCapabilityOverlapRule(
         "structured_evidence_extraction", "deterministic_evidence_normalization",
         ("field_normalization", "schema_validation"),
         ("evidence_card_generation", "structured_extraction"),
@@ -625,13 +625,13 @@ def _alias_items(
     return tuple(aliases)
 
 
-def validate_phase4_capability_taxonomy(
-    definitions: Iterable[Phase4CapabilityDefinition] | None = None,
+def validate_project_capability_taxonomy(
+    definitions: Iterable[ProjectCapabilityDefinition] | None = None,
     *,
     signal_registry: Iterable[str] | None = None,
     aliases: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
-    overlap_rules: Iterable[Phase4CapabilityOverlapRule] | None = None,
-) -> Phase4CapabilityTaxonomyValidationReport:
+    overlap_rules: Iterable[ProjectCapabilityOverlapRule] | None = None,
+) -> ProjectCapabilityTaxonomyValidationReport:
     """Validate the canonical taxonomy or deterministic in-memory fixtures."""
 
     items = tuple(CAPABILITY_DEFINITIONS if definitions is None else definitions)
@@ -806,7 +806,7 @@ def validate_phase4_capability_taxonomy(
 
     bounded_errors = tuple(sorted(set(errors))[:MAX_VALIDATION_MESSAGES])
     bounded_warnings = tuple(sorted(set(warnings))[:MAX_VALIDATION_MESSAGES])
-    return Phase4CapabilityTaxonomyValidationReport(
+    return ProjectCapabilityTaxonomyValidationReport(
         valid=not bounded_errors,
         capability_count=len(items),
         signal_count=len(signals),
@@ -816,42 +816,42 @@ def validate_phase4_capability_taxonomy(
     )
 
 
-def validate_phase4_capability_type(capability_type: str) -> str:
+def validate_project_capability_type(capability_type: str) -> str:
     """Return the canonical identifier or raise a clear validation error."""
 
     if not isinstance(capability_type, str):
         raise TypeError("capability_type must be a string")
     if capability_type != capability_type.strip() or not _IDENTIFIER_RE.fullmatch(capability_type):
-        raise ValueError("invalid Phase 4 capability type")
+        raise ValueError("invalid project evidence capability type")
     canonical = CAPABILITY_ALIASES.get(capability_type, capability_type)
     if canonical not in CAPABILITY_TAXONOMY:
-        raise ValueError("unsupported Phase 4 capability type")
+        raise ValueError("unsupported project evidence capability type")
     return canonical
 
 
-def is_phase4_capability_supported(capability_type: str) -> bool:
+def is_project_capability_supported(capability_type: str) -> bool:
     """Return whether a canonical identifier or declared alias is supported."""
 
     try:
-        validate_phase4_capability_type(capability_type)
+        validate_project_capability_type(capability_type)
     except (TypeError, ValueError):
         return False
     return True
 
 
-def get_phase4_capability_definition(capability_type: str) -> Phase4CapabilityDefinition:
+def get_project_capability_definition(capability_type: str) -> ProjectCapabilityDefinition:
     """Return one immutable definition, resolving declared aliases."""
 
-    return CAPABILITY_TAXONOMY[validate_phase4_capability_type(capability_type)]
+    return CAPABILITY_TAXONOMY[validate_project_capability_type(capability_type)]
 
 
-def list_phase4_capability_definitions() -> tuple[Phase4CapabilityDefinition, ...]:
+def list_project_capability_definitions() -> tuple[ProjectCapabilityDefinition, ...]:
     """Return definitions in stable alphabetical canonical order."""
 
     return CAPABILITY_DEFINITIONS
 
 
-def get_phase4_capability_alias_target(capability_type: str) -> str | None:
+def get_project_capability_alias_target(capability_type: str) -> str | None:
     """Return an explicitly declared alias target without speculative normalization."""
 
     if not isinstance(capability_type, str) or not _IDENTIFIER_RE.fullmatch(capability_type):
@@ -859,11 +859,11 @@ def get_phase4_capability_alias_target(capability_type: str) -> str | None:
     return CAPABILITY_ALIASES.get(capability_type)
 
 
-def list_phase4_signal_identifiers() -> tuple[str, ...]:
+def list_project_evidence_signal_identifiers() -> tuple[str, ...]:
     return SIGNAL_REGISTRY
 
 
-def list_phase4_capability_overlap_rules() -> tuple[Phase4CapabilityOverlapRule, ...]:
+def list_project_capability_overlap_rules() -> tuple[ProjectCapabilityOverlapRule, ...]:
     return CAPABILITY_OVERLAP_RULES
 
 
@@ -874,15 +874,15 @@ __all__ = [
     "CAPABILITY_TAXONOMY",
     "FORBIDDEN_INFERENCE_REGISTRY",
     "SIGNAL_REGISTRY",
-    "Phase4CapabilityDefinition",
-    "Phase4CapabilityOverlapRule",
-    "Phase4CapabilityTaxonomyValidationReport",
-    "get_phase4_capability_alias_target",
-    "get_phase4_capability_definition",
-    "is_phase4_capability_supported",
-    "list_phase4_capability_definitions",
-    "list_phase4_capability_overlap_rules",
-    "list_phase4_signal_identifiers",
-    "validate_phase4_capability_taxonomy",
-    "validate_phase4_capability_type",
+    "ProjectCapabilityDefinition",
+    "ProjectCapabilityOverlapRule",
+    "ProjectCapabilityTaxonomyValidationReport",
+    "get_project_capability_alias_target",
+    "get_project_capability_definition",
+    "is_project_capability_supported",
+    "list_project_capability_definitions",
+    "list_project_capability_overlap_rules",
+    "list_project_evidence_signal_identifiers",
+    "validate_project_capability_taxonomy",
+    "validate_project_capability_type",
 ]

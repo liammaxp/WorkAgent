@@ -1,4 +1,4 @@
-"""Phase 3 diff memory models and feature flag helpers.
+"""project change memory models and feature flag helpers.
 
 This module is intentionally standalone. It defines data shapes and small
 deterministic helpers only; it does not run diff extraction or write memory.
@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 
-PHASE3_DIFF_MEMORY_ENV = "USE_PHASE3_DIFF_MEMORY"
-PHASE3_MEMORY_SCHEMA_VERSION = "phase3.v1"
-DEFAULT_PHASE3_MEMORY_PATH = Path("information/project_memory_phase3.json")
+PROJECT_CHANGE_MEMORY_ENV = "USE_PROJECT_CHANGE_MEMORY"
+PROJECT_CHANGE_MEMORY_SCHEMA_VERSION = "project_change_memory.v1"
+DEFAULT_PROJECT_CHANGE_MEMORY_PATH = Path("information/project_change_memory.json")
 
 RAW_CHANGE_TYPES = [
     "validation_logic_update",
@@ -569,10 +569,10 @@ class CapabilityFact:
     metric_support: str
 
 
-def is_phase3_diff_memory_enabled() -> bool:
-    """Return true only when Phase 3 diff memory is explicitly enabled."""
+def is_project_change_memory_enabled() -> bool:
+    """Return true only when project change memory is explicitly enabled."""
 
-    return os.getenv(PHASE3_DIFF_MEMORY_ENV, "").strip() == "1"
+    return os.getenv(PROJECT_CHANGE_MEMORY_ENV, "").strip() == "1"
 
 
 def stable_hash_text(text: str) -> str:
@@ -581,7 +581,7 @@ def stable_hash_text(text: str) -> str:
 
 def model_to_dict(obj: Any) -> dict[str, Any]:
     if not is_dataclass(obj) or isinstance(obj, type):
-        raise TypeError("model_to_dict expects a Phase 3 dataclass instance")
+        raise TypeError("model_to_dict expects a project change memory dataclass instance")
     payload = asdict(obj)
     if not isinstance(payload, dict):
         raise TypeError("model_to_dict expected dataclass serialization to produce a dict")
@@ -592,48 +592,48 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def create_empty_phase3_memory() -> dict[str, Any]:
+def create_empty_project_change_memory() -> dict[str, Any]:
     return {
-        "schema_version": PHASE3_MEMORY_SCHEMA_VERSION,
+        "schema_version": PROJECT_CHANGE_MEMORY_SCHEMA_VERSION,
         "updated_at": None,
         "projects": {},
     }
 
 
-def load_phase3_project_memory(
-    path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+def load_project_change_memory(
+    path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
 ) -> dict[str, Any]:
     memory_path = Path(path)
     if not memory_path.exists():
-        return create_empty_phase3_memory()
+        return create_empty_project_change_memory()
 
     raw_text = memory_path.read_text(encoding="utf-8")
     if not raw_text.strip():
-        return create_empty_phase3_memory()
+        return create_empty_project_change_memory()
 
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid Phase 3 project memory JSON: {memory_path}") from exc
+        raise ValueError(f"Invalid project change memory project memory JSON: {memory_path}") from exc
     if not isinstance(data, dict):
-        raise ValueError(f"Invalid Phase 3 project memory structure: {memory_path}")
-    if data.get("schema_version") != PHASE3_MEMORY_SCHEMA_VERSION:
+        raise ValueError(f"Invalid project change memory project memory structure: {memory_path}")
+    if data.get("schema_version") != PROJECT_CHANGE_MEMORY_SCHEMA_VERSION:
         raise ValueError(
-            f"Unsupported Phase 3 project memory schema: {data.get('schema_version')!r}"
+            f"Unsupported project change memory project memory schema: {data.get('schema_version')!r}"
         )
-    return normalize_phase3_memory(data)
+    return normalize_project_change_memory(data)
 
 
-def normalize_phase3_memory(data: dict[str, Any]) -> dict[str, Any]:
+def normalize_project_change_memory(data: dict[str, Any]) -> dict[str, Any]:
     if not data:
-        return create_empty_phase3_memory()
-    if data.get("schema_version") != PHASE3_MEMORY_SCHEMA_VERSION:
+        return create_empty_project_change_memory()
+    if data.get("schema_version") != PROJECT_CHANGE_MEMORY_SCHEMA_VERSION:
         raise ValueError(
-            f"Unsupported Phase 3 project memory schema: {data.get('schema_version')!r}"
+            f"Unsupported project change memory project memory schema: {data.get('schema_version')!r}"
         )
 
     normalized = dict(data)
-    normalized["schema_version"] = PHASE3_MEMORY_SCHEMA_VERSION
+    normalized["schema_version"] = PROJECT_CHANGE_MEMORY_SCHEMA_VERSION
     normalized.setdefault("updated_at", None)
     projects = normalized.get("projects")
     if not isinstance(projects, dict):
@@ -642,7 +642,7 @@ def normalize_phase3_memory(data: dict[str, Any]) -> dict[str, Any]:
     normalized_projects: dict[str, dict[str, Any]] = {}
     for project_id in sorted(str(key) for key in projects):
         entry = projects.get(project_id)
-        normalized_projects[project_id] = normalize_phase3_project_entry(
+        normalized_projects[project_id] = normalize_project_change_entry(
             project_id,
             entry if isinstance(entry, dict) else None,
         )
@@ -650,7 +650,7 @@ def normalize_phase3_memory(data: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def normalize_phase3_project_entry(
+def normalize_project_change_entry(
     project_id: str,
     entry: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -680,23 +680,23 @@ def dedupe_capability_facts(items: list[dict[str, Any]]) -> list[dict[str, Any]]
     return dedupe_dicts_by_id(items, "capability_id", sort_fields=("capability_type", "capability_id"))
 
 
-def write_phase3_project_memory(
+def write_project_change_memory(
     project_id: str,
     summaries: list[RawChangeSummary],
     cards: list[EvidenceCard],
     capabilities: list[CapabilityFact],
-    path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
     min_evidence_score: int = 6,
 ) -> dict[str, Any]:
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
-        raise ValueError("Phase 3 project_id is required")
+        raise ValueError("project change memory project_id is required")
 
-    validate_phase3_artifact_projects(normalized_project_id, summaries, cards, capabilities)
-    memory = load_phase3_project_memory(path)
+    validate_project_change_artifact_projects(normalized_project_id, summaries, cards, capabilities)
+    memory = load_project_change_memory(path)
     projects = memory.setdefault("projects", {})
     existing_entry = projects.get(normalized_project_id)
-    entry = normalize_phase3_project_entry(
+    entry = normalize_project_change_entry(
         normalized_project_id,
         existing_entry if isinstance(existing_entry, dict) else None,
     )
@@ -747,7 +747,7 @@ def write_phase3_project_memory(
     memory["updated_at"] = utc_now_iso()
 
     atomic_write_json(path, memory)
-    return normalize_phase3_memory(memory)
+    return normalize_project_change_memory(memory)
 
 
 def atomic_write_json(path: str | Path, data: dict[str, Any]) -> None:
@@ -779,24 +779,24 @@ def atomic_write_json(path: str | Path, data: dict[str, Any]) -> None:
                 pass
 
 
-def get_phase3_project_memory(
+def get_project_change_memory(
     project_id: str,
-    path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
 ) -> dict[str, Any]:
     requested_project_id = str(project_id or "").strip()
-    memory = load_phase3_project_memory(path)
+    memory = load_project_change_memory(path)
     project_entry = memory.get("projects", {}).get(requested_project_id)
-    return normalize_phase3_project_entry(
+    return normalize_project_change_entry(
         requested_project_id,
         project_entry if isinstance(project_entry, dict) else None,
     )
 
 
-def summarize_phase3_project_memory(
+def summarize_project_change_memory(
     project_id: str,
-    path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
 ) -> dict[str, Any]:
-    entry = get_phase3_project_memory(project_id, path)
+    entry = get_project_change_memory(project_id, path)
     capability_types = sorted(
         {
             str(capability.get("capability_type") or "")
@@ -813,11 +813,11 @@ def summarize_phase3_project_memory(
     }
 
 
-def persist_phase3_artifacts(
+def persist_project_change_artifacts(
     summaries: list[RawChangeSummary],
     cards: list[EvidenceCard],
     capabilities: list[CapabilityFact],
-    path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
     min_evidence_score: int = 6,
 ) -> dict[str, Any]:
     project_ids = sorted(
@@ -828,16 +828,16 @@ def persist_phase3_artifacts(
         }
     )
     if not project_ids:
-        return load_phase3_project_memory(path)
+        return load_project_change_memory(path)
 
-    memory: dict[str, Any] = create_empty_phase3_memory()
+    memory: dict[str, Any] = create_empty_project_change_memory()
     for project_id in project_ids:
         project_summaries = [summary for summary in summaries if summary.project_id == project_id]
         project_cards = [card for card in cards if card.project_id == project_id]
         project_capabilities = [
             capability for capability in capabilities if capability.project_id == project_id
         ]
-        memory = write_phase3_project_memory(
+        memory = write_project_change_memory(
             project_id,
             project_summaries,
             project_cards,
@@ -869,7 +869,7 @@ def dedupe_dicts_by_id(
     return sorted(by_id.values(), key=lambda item: tuple(str(item.get(field) or "") for field in sort_fields))
 
 
-def validate_phase3_artifact_projects(
+def validate_project_change_artifact_projects(
     project_id: str,
     summaries: list[RawChangeSummary],
     cards: list[EvidenceCard],
@@ -879,7 +879,7 @@ def validate_phase3_artifact_projects(
         artifact_project_id = str(getattr(artifact, "project_id", "") or "").strip()
         if artifact_project_id and artifact_project_id != project_id:
             raise ValueError(
-                "Phase 3 artifact project mismatch: "
+                "project change memory artifact project mismatch: "
                 f"expected {project_id}, got {artifact_project_id}"
             )
 
@@ -1280,7 +1280,7 @@ def infer_evidence_problem(summary: RawChangeSummary) -> str:
     if primary_type == "test_update":
         return "The changed behavior required direct regression or unit-test coverage."
     if primary_type == "ui_debug_update":
-        return "Stored or processed Phase 3 state required inspectable debug visibility."
+        return "Stored or processed project change memory state required inspectable debug visibility."
     return "The source implementation required a localized code change."
 
 
@@ -1350,7 +1350,7 @@ def infer_safe_impact(summary: RawChangeSummary) -> str:
     if primary_type == "test_update":
         return "Added regression coverage for the changed behavior."
     if primary_type == "ui_debug_update":
-        return "Made internal Phase 3 processing state inspectable during development."
+        return "Made internal project change memory processing state inspectable during development."
     return "Recorded the implementation change for later project analysis."
 
 
@@ -1423,7 +1423,7 @@ def build_allowed_claims(summary: RawChangeSummary) -> list[str]:
     elif primary_type == "test_update":
         claims.extend(
             [
-                "added regression tests for Phase 3 change extraction",
+                "added regression tests for project change memory change extraction",
                 "added deterministic coverage for diff parsing behavior",
             ]
         )
@@ -1431,7 +1431,7 @@ def build_allowed_claims(summary: RawChangeSummary) -> list[str]:
         claims.extend(
             [
                 "added inspectability for internal processing state",
-                "added debug visibility for Phase 3 development",
+                "added debug visibility for project change memory development",
             ]
         )
     else:

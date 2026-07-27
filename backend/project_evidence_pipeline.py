@@ -1,7 +1,7 @@
-"""Authoritative orchestration for the accepted Phase 4 memory stages.
+"""Authoritative orchestration for the accepted project evidence memory stages.
 
-The feature is default-off through ``USE_PHASE4_PROJECT_MEMORY``.  This module
-coordinates the public Step 2--9 interfaces; it contains no alternative
+The feature is default-off through ``USE_PROJECT_EVIDENCE_MEMORY``.  This module
+coordinates the public evidence-memory interfaces; it contains no alternative
 evidence, capability, claim, or persistence rules and performs no work when it
 is imported.
 """
@@ -16,22 +16,22 @@ import threading
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from backend import phase4_capability_extractor as capability_extractor
-from backend import phase4_capability_taxonomy as capability_taxonomy
-from backend import phase4_claim_boundary as claim_boundary
-from backend import phase4_evidence_normalizer as evidence_normalizer
-from backend import phase4_evidence_scoring as evidence_scoring
-from backend import phase4_evidence_synthesizer as evidence_synthesizer
-from backend import phase4_input_adapter as input_adapter
-from backend import phase4_project_memory as project_memory
-from backend.phase4_models import (
+from backend import project_capability_extractor as capability_extractor
+from backend import project_capability_taxonomy as capability_taxonomy
+from backend import project_claim_boundaries as claim_boundary
+from backend import project_evidence_normalizer as evidence_normalizer
+from backend import project_evidence_scoring as evidence_scoring
+from backend import project_evidence_synthesizer as evidence_synthesizer
+from backend import project_evidence_input as input_adapter
+from backend import project_evidence_memory as project_memory
+from backend.project_evidence_models import (
     ClaimSubjectType,
-    Phase4PipelineWarning,
+    ProjectEvidencePipelineWarning,
     WarningSeverity,
 )
 
 
-PHASE4_PROJECT_MEMORY_FLAG = "USE_PHASE4_PROJECT_MEMORY"
+PROJECT_EVIDENCE_MEMORY_FLAG = "USE_PROJECT_EVIDENCE_MEMORY"
 ENABLED_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
 DISABLED_FLAG_VALUES = frozenset({"", "0", "false", "no", "off"})
 MAX_PIPELINE_WARNINGS = 100
@@ -40,7 +40,7 @@ DEFAULT_INSPECT_SAMPLE_LIMIT = 5
 MAX_INSPECT_SAMPLE_LIMIT = 20
 MAX_INSPECT_PROJECT_ID_LENGTH = 300
 
-PHASE4_PIPELINE_STAGE_ORDER = (
+PROJECT_EVIDENCE_PIPELINE_STAGE_ORDER = (
     "load_inputs",
     "normalize_dedupe",
     "synthesize_evidence",
@@ -58,7 +58,7 @@ PIPELINE_STAGE_STATUSES = frozenset({
 })
 PIPELINE_STATUSES = frozenset({"disabled", "empty", "ready", "degraded", "unchanged", "error"})
 NEXT_RECOMMENDED_ACTIONS = frozenset({
-    "enable_phase4",
+    "enable_project_evidence_memory",
     "provide_safe_source_data",
     "review_optional_source_mapping",
     "use_existing_artifact",
@@ -70,17 +70,17 @@ NEXT_RECOMMENDED_ACTIONS = frozenset({
 _WARNING_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _BUILD_LOCK = threading.Lock()
 _WARNING_MESSAGES = {
-    "artifact_unchanged": "The validated Phase 4 artifact already matches the current snapshot.",
+    "artifact_unchanged": "The validated project evidence artifact already matches the current snapshot.",
     "capability_facts_empty": "No emitted capability facts were available; this is a valid bounded result.",
     "claim_budget_truncated": "Claim budgets deterministically truncated some candidate claims.",
     "compact_fact_project_mapping_missing": "A compact-fact record had no established project mapping.",
     "contextual_only_project": "At least one project contains only bounded contextual support.",
     "free_text_source_deferred": "Unstructured free-text ingestion remains outside this pipeline contract.",
-    "invalid_feature_flag": "The Phase 4 feature flag value is unsupported and was treated as disabled.",
+    "invalid_feature_flag": "The project evidence feature flag value is unsupported and was treated as disabled.",
     "low_quality_facts_excluded": "Low-quality evidence was excluded from affirmative claims.",
     "metric_evidence_empty": "No supported resume metric claims were emitted.",
     "missing_project_id": "One or more structured source records had no established project mapping.",
-    "optional_phase3_artifact_missing": "The optional Phase 3 artifact was not available.",
+    "optional_project_change_artifact_missing": "The optional project change memory artifact was not available.",
     "optional_source_missing": "An optional structured source artifact was not available.",
     "persistence_skipped": "A valid snapshot was built without persisting it.",
     "record_validation_failed": "One or more structured source records failed bounded validation.",
@@ -94,7 +94,7 @@ _WARNING_MESSAGES = {
 
 
 @dataclass(frozen=True)
-class Phase4PipelineStageResult:
+class ProjectEvidencePipelineStageResult:
     stage: str
     status: str
     input_count: int = 0
@@ -104,10 +104,10 @@ class Phase4PipelineStageResult:
     details: Mapping[str, int | str | bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.stage not in PHASE4_PIPELINE_STAGE_ORDER:
-            raise ValueError("unknown Phase 4 pipeline stage")
+        if self.stage not in PROJECT_EVIDENCE_PIPELINE_STAGE_ORDER:
+            raise ValueError("unknown project evidence pipeline stage")
         if self.status not in PIPELINE_STAGE_STATUSES:
-            raise ValueError("unknown Phase 4 stage status")
+            raise ValueError("unknown project evidence stage status")
         for name in ("input_count", "output_count", "warning_count", "error_count"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -138,7 +138,7 @@ class Phase4PipelineStageResult:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryPipelineResult:
+class ProjectEvidencePipelineResult:
     status: str
     enabled: bool
     persisted: bool
@@ -156,14 +156,14 @@ class Phase4ProjectMemoryPipelineResult:
     forbidden_claim_count: int
     claim_truncation_count: int
     previous_artifact_preserved: bool
-    stages: tuple[Phase4PipelineStageResult, ...]
-    warnings: tuple[Phase4PipelineWarning, ...]
+    stages: tuple[ProjectEvidencePipelineStageResult, ...]
+    warnings: tuple[ProjectEvidencePipelineWarning, ...]
     errors: tuple[str, ...]
     next_recommended_action: str
 
     def __post_init__(self) -> None:
         if self.status not in PIPELINE_STATUSES:
-            raise ValueError("unknown Phase 4 pipeline status")
+            raise ValueError("unknown project evidence pipeline status")
         if self.next_recommended_action not in NEXT_RECOMMENDED_ACTIONS:
             raise ValueError("unknown next recommended action")
 
@@ -193,12 +193,8 @@ class Phase4ProjectMemoryPipelineResult:
         }
 
 
-# Backward-friendly public name for callers expecting a pipeline result.
-Phase4PipelineResult = Phase4ProjectMemoryPipelineResult
-
-
 @dataclass(frozen=True)
-class Phase4PipelineHealth:
+class ProjectEvidenceHealth:
     enabled: bool
     status: str
     artifact_status: str
@@ -211,7 +207,7 @@ class Phase4PipelineHealth:
     claim_boundary_count: int = 0
     warning_codes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
-    next_recommended_action: str = "enable_phase4"
+    next_recommended_action: str = "enable_project_evidence_memory"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -232,7 +228,7 @@ class Phase4PipelineHealth:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectInspectSummary:
+class ProjectEvidenceInspectSummary:
     project_id: str
     project_name: str
     evidence_fact_count: int
@@ -266,7 +262,7 @@ class Phase4ProjectInspectSummary:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectInspect:
+class ProjectEvidenceInspect:
     enabled: bool
     status: str
     schema_version: str | None
@@ -275,7 +271,7 @@ class Phase4ProjectInspect:
     sample_limit: int
     project_count: int
     returned_project_count: int
-    projects: tuple[Phase4ProjectInspectSummary, ...] = ()
+    projects: tuple[ProjectEvidenceInspectSummary, ...] = ()
     warning_codes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -303,7 +299,7 @@ class _PipelineStageError(RuntimeError):
 
 def _flag_state(environ: Mapping[str, str] | None = None) -> tuple[bool, bool]:
     source = os.environ if environ is None else environ
-    raw = source.get(PHASE4_PROJECT_MEMORY_FLAG, "")
+    raw = source.get(PROJECT_EVIDENCE_MEMORY_FLAG, "")
     normalized = raw.strip().casefold() if isinstance(raw, str) else ""
     if normalized in ENABLED_FLAG_VALUES:
         return True, True
@@ -312,7 +308,7 @@ def _flag_state(environ: Mapping[str, str] | None = None) -> tuple[bool, bool]:
     return False, False
 
 
-def is_phase4_project_memory_enabled(
+def is_project_evidence_memory_enabled(
     environ: Mapping[str, str] | None = None,
 ) -> bool:
     return _flag_state(environ)[0]
@@ -328,10 +324,10 @@ def _safe_artifact_path(path: Path) -> str:
         return path.name
 
 
-def _safe_warning(code: str) -> Phase4PipelineWarning:
+def _safe_warning(code: str) -> ProjectEvidencePipelineWarning:
     safe_code = code if _WARNING_CODE_RE.fullmatch(code) else "pipeline_warning"
-    message = _WARNING_MESSAGES.get(safe_code, "A Phase 4 stage emitted a bounded warning.")
-    return Phase4PipelineWarning(
+    message = _WARNING_MESSAGES.get(safe_code, "A project evidence stage emitted a bounded warning.")
+    return ProjectEvidencePipelineWarning(
         code=safe_code,
         message=message,
         severity=WarningSeverity.WARNING,
@@ -348,13 +344,13 @@ def _source_type_details(inputs: list[Any]) -> dict[str, int]:
     return dict(sorted(counts.items())[:50])
 
 
-def _warning_tuple(codes: set[str]) -> tuple[Phase4PipelineWarning, ...]:
+def _warning_tuple(codes: set[str]) -> tuple[ProjectEvidencePipelineWarning, ...]:
     return tuple(_safe_warning(code) for code in sorted(codes)[:MAX_PIPELINE_WARNINGS])
 
 
 def _next_action(status: str, *, previous_valid: bool, invalid_existing: bool = False) -> str:
     if status == "disabled":
-        return "enable_phase4"
+        return "enable_project_evidence_memory"
     if status == "empty":
         return "provide_safe_source_data"
     if status == "unchanged":
@@ -371,20 +367,20 @@ def _next_action(status: str, *, previous_valid: bool, invalid_existing: bool = 
 def _error_code(stage: str, error: Exception) -> str:
     if isinstance(error, _PipelineStageError):
         return error.code
-    if isinstance(error, evidence_normalizer.Phase4IntegrityError):
+    if isinstance(error, evidence_normalizer.ProjectEvidenceIntegrityError):
         return "normalization_integrity_conflict"
-    if isinstance(error, project_memory.Phase4ProjectMemoryIntegrityError):
+    if isinstance(error, project_memory.ProjectEvidenceMemoryIntegrityError):
         return "project_memory_integrity_error"
     if isinstance(error, (TypeError, ValueError)):
         return f"{stage}_validation_failed"
     return "internal_pipeline_error"
 
 
-def _skipped_stages(existing: list[Phase4PipelineStageResult]) -> None:
+def _skipped_stages(existing: list[ProjectEvidencePipelineStageResult]) -> None:
     completed = {stage.stage for stage in existing}
-    for name in PHASE4_PIPELINE_STAGE_ORDER:
+    for name in PROJECT_EVIDENCE_PIPELINE_STAGE_ORDER:
         if name not in completed:
-            existing.append(Phase4PipelineStageResult(stage=name, status="skipped"))
+            existing.append(ProjectEvidencePipelineStageResult(stage=name, status="skipped"))
 
 
 def _result(
@@ -392,7 +388,7 @@ def _result(
     status: str,
     enabled: bool,
     destination: Path,
-    stages: list[Phase4PipelineStageResult],
+    stages: list[ProjectEvidencePipelineStageResult],
     warning_codes: set[str],
     errors: set[str],
     counts: Mapping[str, int],
@@ -402,9 +398,9 @@ def _result(
     schema_version: str | None = None,
     content_hash: str | None = None,
     invalid_existing: bool = False,
-) -> Phase4ProjectMemoryPipelineResult:
+) -> ProjectEvidencePipelineResult:
     _skipped_stages(stages)
-    return Phase4ProjectMemoryPipelineResult(
+    return ProjectEvidencePipelineResult(
         status=status,
         enabled=enabled,
         persisted=persisted,
@@ -433,21 +429,21 @@ def _result(
     )
 
 
-def run_phase4_project_memory_pipeline(
+def run_project_evidence_pipeline(
     *,
-    source_paths: input_adapter.Phase4InputSourcePaths | None = None,
+    source_paths: input_adapter.ProjectEvidenceInputSourcePaths | None = None,
     output_path: str | Path | None = None,
     persist: bool = True,
     environ: Mapping[str, str] | None = None,
-) -> Phase4ProjectMemoryPipelineResult:
+) -> ProjectEvidencePipelineResult:
     """Run accepted Steps 2--9 in order when the default-off flag is enabled."""
 
-    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PHASE4_PROJECT_MEMORY_PATH
+    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH
     enabled, recognized_flag = _flag_state(environ)
     warning_codes: set[str] = set()
     errors: set[str] = set()
     counts: dict[str, int] = {}
-    stages: list[Phase4PipelineStageResult] = []
+    stages: list[ProjectEvidencePipelineStageResult] = []
     if not recognized_flag:
         warning_codes.add("invalid_feature_flag")
     if not enabled:
@@ -464,11 +460,11 @@ def run_phase4_project_memory_pipeline(
 
     with _BUILD_LOCK:
         try:
-            existing = project_memory.load_phase4_project_memory(destination)
+            existing = project_memory.load_project_evidence_memory(destination)
         except Exception as error:
             code = _error_code("load_inputs", error)
             errors.add(code)
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage="load_inputs", status="error", error_count=1,
                 details={"error_code": code},
             ))
@@ -481,21 +477,21 @@ def run_phase4_project_memory_pipeline(
         invalid_existing = existing.status not in {"missing", "ready"}
         current_stage = "load_inputs"
         current_input_count = 0
-        snapshot: project_memory.Phase4ProjectMemorySnapshot | None = None
+        snapshot: project_memory.ProjectEvidenceMemorySnapshot | None = None
         persistence_status: str | None = None
         try:
-            paths = source_paths or input_adapter.Phase4InputSourcePaths()
-            inputs, adapter_warnings = input_adapter.load_phase4_inputs(source_paths=paths)
+            paths = source_paths or input_adapter.ProjectEvidenceInputSourcePaths()
+            inputs, adapter_warnings = input_adapter.load_project_evidence_inputs(source_paths=paths)
             counts["input_count"] = len(inputs)
             for warning in adapter_warnings:
                 warning_codes.add(warning.code)
                 if warning.code == "missing_project_id":
                     warning_codes.add("compact_fact_project_mapping_missing")
-            if paths.phase3_memory_path is not None and not Path(paths.phase3_memory_path).exists():
-                warning_codes.add("optional_phase3_artifact_missing")
+            if paths.project_change_memory_path is not None and not Path(paths.project_change_memory_path).exists():
+                warning_codes.add("optional_project_change_artifact_missing")
             if any(warning.code == "source_file_missing" for warning in adapter_warnings):
                 warning_codes.add("optional_source_missing")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="empty" if not inputs else ("degraded" if adapter_warnings else "ready"),
                 input_count=0,
@@ -520,9 +516,9 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "normalize_dedupe"
             current_input_count = len(inputs)
-            normalized, dedupe_report = evidence_normalizer.dedupe_phase4_inputs(inputs)
+            normalized, dedupe_report = evidence_normalizer.dedupe_project_evidence_inputs(inputs)
             counts["normalized_input_count"] = len(normalized)
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="ready",
                 input_count=len(inputs),
@@ -539,11 +535,11 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "synthesize_evidence"
             current_input_count = len(normalized)
-            facts, synthesis_report = evidence_synthesizer.synthesize_phase4_evidence_facts(normalized)
+            facts, synthesis_report = evidence_synthesizer.synthesize_project_evidence_facts(normalized)
             counts["evidence_fact_count"] = len(facts)
             if synthesis_report.unsafe_impact_dropped_count:
                 warning_codes.add("unsafe_impact_dropped")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="empty" if not facts else "ready",
                 input_count=len(normalized),
@@ -569,11 +565,11 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "score_evidence"
             current_input_count = len(facts)
-            scored, scoring_report = evidence_scoring.score_phase4_evidence_facts(facts)
+            scored, scoring_report = evidence_scoring.score_project_evidence_facts(facts)
             counts["evidence_fact_count"] = len(scored)
             if scoring_report.weak_value_count or scoring_report.rejected_value_count:
                 warning_codes.add("low_quality_facts_excluded")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status=(
                     "degraded"
@@ -602,12 +598,12 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "validate_taxonomy"
             current_input_count = len(scored)
-            taxonomy_report = capability_taxonomy.validate_phase4_capability_taxonomy()
+            taxonomy_report = capability_taxonomy.validate_project_capability_taxonomy()
             if not taxonomy_report.valid:
                 raise _PipelineStageError("taxonomy_validation_failed")
             if taxonomy_report.warnings:
                 warning_codes.add("taxonomy_warning")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="degraded" if taxonomy_report.warnings else "ready",
                 input_count=taxonomy_report.capability_count,
@@ -622,8 +618,8 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "extract_signals"
             current_input_count = len(scored)
-            _signal_results, signal_report = capability_extractor.extract_phase4_fact_signals_many(scored)
-            stages.append(Phase4PipelineStageResult(
+            _signal_results, signal_report = capability_extractor.extract_project_evidence_fact_signals_many(scored)
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="ready",
                 input_count=len(scored),
@@ -639,7 +635,7 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "extract_capabilities"
             current_input_count = len(scored)
-            grouped_capabilities, capability_report = capability_extractor.extract_phase4_capabilities_by_project(scored)
+            grouped_capabilities, capability_report = capability_extractor.extract_project_evidence_capabilities_by_project(scored)
             capabilities = [
                 capability
                 for project_id in sorted(grouped_capabilities)
@@ -648,7 +644,7 @@ def run_phase4_project_memory_pipeline(
             counts["capability_fact_count"] = len(capabilities)
             if not capabilities:
                 warning_codes.add("capability_facts_empty")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="degraded" if not capabilities else "ready",
                 input_count=len(scored),
@@ -665,20 +661,20 @@ def run_phase4_project_memory_pipeline(
 
             current_stage = "build_claim_boundaries"
             current_input_count = len(scored) + len(capabilities)
-            project_boundaries, boundary_report = claim_boundary.build_phase4_claim_boundaries_by_project(
+            project_boundaries, boundary_report = claim_boundary.build_project_claim_boundaries_by_project(
                 scored, capabilities
             )
             evidence_boundaries = [
                 boundary
                 for fact in scored
-                if (boundary := claim_boundary.build_phase4_evidence_claim_boundary(fact)) is not None
+                if (boundary := claim_boundary.build_project_evidence_claim_boundary(fact)) is not None
             ]
             evidence_by_id = {fact.evidence_fact_id: fact for fact in scored}
             capability_by_id = {capability.capability_id: capability for capability in capabilities}
             capability_boundaries = [
                 boundary
                 for capability in capabilities
-                if (boundary := claim_boundary.build_phase4_capability_claim_boundary(
+                if (boundary := claim_boundary.build_project_capability_claim_boundary(
                     capability, evidence_facts_by_id=evidence_by_id
                 )) is not None
             ]
@@ -688,7 +684,7 @@ def run_phase4_project_memory_pipeline(
                 *project_boundaries.values(),
             ]
             validation_failures = sum(
-                not claim_boundary.validate_phase4_claim_boundary(
+                not claim_boundary.validate_project_claim_boundary(
                     boundary,
                     evidence_facts_by_id=evidence_by_id,
                     capability_facts_by_id=capability_by_id,
@@ -713,7 +709,7 @@ def run_phase4_project_memory_pipeline(
                 warning_codes.add("claim_budget_truncated")
             if boundary_report.metric_claim_count == 0:
                 warning_codes.add("metric_evidence_empty")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="degraded" if boundary_report.truncated_claim_count else "ready",
                 input_count=current_input_count,
@@ -735,32 +731,32 @@ def run_phase4_project_memory_pipeline(
 
             project_ids = sorted({fact.project_id for fact in scored})
             projects_with_truncation = sum(
-                claim_boundary.build_phase4_claim_boundaries_by_project(
+                claim_boundary.build_project_claim_boundaries_by_project(
                     [fact for fact in scored if fact.project_id == project_id],
                     [capability for capability in capabilities if capability.project_id == project_id],
                 )[1].truncated_claim_count > 0
                 for project_id in project_ids
             )
-            diagnostics = project_memory.Phase4ProjectMemoryDiagnostics.from_claim_boundary_report(
+            diagnostics = project_memory.ProjectEvidenceMemoryDiagnostics.from_claim_boundary_report(
                 boundary_report,
                 projects_with_truncation=projects_with_truncation,
             )
 
             current_stage = "build_project_memory"
             current_input_count = len(scored) + len(capabilities) + len(all_boundaries)
-            memories, memory_report = project_memory.build_phase4_project_memories(
+            memories, memory_report = project_memory.build_project_evidence_memories(
                 scored, capabilities, all_boundaries, diagnostics=diagnostics
             )
             warning_codes.update(memory_report.warnings)
-            snapshot = project_memory.build_phase4_project_memory_snapshot(
+            snapshot = project_memory.build_project_evidence_memory_snapshot(
                 memories, diagnostics=diagnostics
             )
-            snapshot_validation = project_memory.validate_phase4_project_memory_snapshot(snapshot)
+            snapshot_validation = project_memory.validate_project_evidence_memory_snapshot(snapshot)
             if not snapshot_validation.valid:
                 raise _PipelineStageError("snapshot_validation_failed")
-            serialized = project_memory.serialize_phase4_project_memory_snapshot(snapshot)
+            serialized = project_memory.serialize_project_evidence_memory_snapshot(snapshot)
             counts["project_count"] = len(memories)
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="ready",
                 input_count=current_input_count,
@@ -779,7 +775,7 @@ def run_phase4_project_memory_pipeline(
             current_input_count = len(memories)
             if not persist:
                 warning_codes.add("persistence_skipped")
-                stages.append(Phase4PipelineStageResult(
+                stages.append(ProjectEvidencePipelineStageResult(
                     stage=current_stage,
                     status="skipped",
                     input_count=len(memories),
@@ -787,7 +783,7 @@ def run_phase4_project_memory_pipeline(
                     warning_count=1,
                     details={"persist_requested": False},
                 ))
-                stages.append(Phase4PipelineStageResult(
+                stages.append(ProjectEvidencePipelineStageResult(
                     stage="round_trip_validate",
                     status="skipped",
                     input_count=0,
@@ -802,13 +798,13 @@ def run_phase4_project_memory_pipeline(
                     invalid_existing=invalid_existing,
                 )
 
-            persistence_report = project_memory.persist_phase4_project_memory(snapshot, destination)
+            persistence_report = project_memory.persist_project_evidence_memory(snapshot, destination)
             persistence_status = persistence_report.status
             if persistence_status == "failed":
                 raise _PipelineStageError("persistence_failed")
             if persistence_status == "unchanged":
                 warning_codes.add("artifact_unchanged")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="unchanged" if persistence_status == "unchanged" else "ready",
                 input_count=len(memories),
@@ -825,7 +821,7 @@ def run_phase4_project_memory_pipeline(
             current_input_count = len(memories)
             if not persistence_report.round_trip_validated:
                 raise _PipelineStageError("round_trip_validation_failed")
-            stages.append(Phase4PipelineStageResult(
+            stages.append(ProjectEvidencePipelineStageResult(
                 stage=current_stage,
                 status="unchanged" if persistence_status == "unchanged" else "ready",
                 input_count=len(memories),
@@ -856,7 +852,7 @@ def run_phase4_project_memory_pipeline(
             code = _error_code(current_stage, error)
             errors.add(code)
             if not any(stage.stage == current_stage for stage in stages):
-                stages.append(Phase4PipelineStageResult(
+                stages.append(ProjectEvidencePipelineStageResult(
                     stage=current_stage,
                     status="error",
                     input_count=current_input_count,
@@ -881,28 +877,28 @@ def run_phase4_project_memory_pipeline(
             )
 
 
-def get_phase4_pipeline_health(
+def get_project_evidence_health(
     *,
     output_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
-) -> Phase4PipelineHealth:
+) -> ProjectEvidenceHealth:
     """Read and validate the existing artifact without running or writing the pipeline."""
 
     enabled, recognized = _flag_state(environ)
     flag_warnings = () if recognized else ("invalid_feature_flag",)
     if not enabled:
-        return Phase4PipelineHealth(
+        return ProjectEvidenceHealth(
             enabled=False,
             status="disabled",
             artifact_status="not_checked",
             warning_codes=flag_warnings,
-            next_recommended_action="enable_phase4",
+            next_recommended_action="enable_project_evidence_memory",
         )
-    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PHASE4_PROJECT_MEMORY_PATH
+    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH
     try:
-        loaded = project_memory.load_phase4_project_memory(destination)
+        loaded = project_memory.load_project_evidence_memory(destination)
     except Exception:
-        return Phase4PipelineHealth(
+        return ProjectEvidenceHealth(
             enabled=True,
             status="error",
             artifact_status="error",
@@ -910,7 +906,7 @@ def get_phase4_pipeline_health(
             next_recommended_action="retry_pipeline",
         )
     if loaded.status == "missing":
-        return Phase4PipelineHealth(
+        return ProjectEvidenceHealth(
             enabled=True,
             status="missing",
             artifact_status="missing",
@@ -918,7 +914,7 @@ def get_phase4_pipeline_health(
             next_recommended_action="retry_pipeline",
         )
     if loaded.status != "ready" or loaded.snapshot is None:
-        return Phase4PipelineHealth(
+        return ProjectEvidenceHealth(
             enabled=True,
             status="invalid",
             artifact_status=loaded.status,
@@ -929,7 +925,7 @@ def get_phase4_pipeline_health(
     snapshot = loaded.snapshot
     warnings = tuple(sorted(set(snapshot.diagnostics.warnings))[:MAX_PIPELINE_WARNINGS])
     status = "degraded" if warnings else "ready"
-    return Phase4PipelineHealth(
+    return ProjectEvidenceHealth(
         enabled=True,
         status=status,
         artifact_status="ready",
@@ -953,9 +949,9 @@ def _safe_sample_limit(value: int | str | None) -> int:
     return max(0, min(parsed, MAX_INSPECT_SAMPLE_LIMIT))
 
 
-def _inspect_summary(memory: Any) -> Phase4ProjectInspectSummary:
+def _inspect_summary(memory: Any) -> ProjectEvidenceInspectSummary:
     boundaries = memory.claim_boundaries
-    return Phase4ProjectInspectSummary(
+    return ProjectEvidenceInspectSummary(
         project_id=memory.project_id,
         project_name=memory.project_name,
         evidence_fact_count=len(memory.evidence_facts),
@@ -978,13 +974,13 @@ def _inspect_summary(memory: Any) -> Phase4ProjectInspectSummary:
     )
 
 
-def get_phase4_project_inspect(
+def inspect_project_evidence_memory(
     *,
     output_path: str | Path | None = None,
     project_id: str | None = None,
     sample_limit: int | str = DEFAULT_INSPECT_SAMPLE_LIMIT,
     environ: Mapping[str, str] | None = None,
-) -> Phase4ProjectInspect:
+) -> ProjectEvidenceInspect:
     """Return bounded project/count metadata; never return evidence or claims."""
 
     limit = _safe_sample_limit(sample_limit)
@@ -995,7 +991,7 @@ def get_phase4_project_inspect(
     enabled, recognized = _flag_state(environ)
     flag_warnings = () if recognized else ("invalid_feature_flag",)
     if not enabled:
-        return Phase4ProjectInspect(
+        return ProjectEvidenceInspect(
             enabled=False,
             status="disabled",
             schema_version=None,
@@ -1006,23 +1002,23 @@ def get_phase4_project_inspect(
             returned_project_count=0,
             warning_codes=flag_warnings,
         )
-    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PHASE4_PROJECT_MEMORY_PATH
+    destination = Path(output_path) if output_path is not None else project_memory.DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH
     try:
-        loaded = project_memory.load_phase4_project_memory(destination)
+        loaded = project_memory.load_project_evidence_memory(destination)
     except Exception:
-        return Phase4ProjectInspect(
+        return ProjectEvidenceInspect(
             enabled=True, status="error", schema_version=None, content_hash=None,
             project_id=requested_project_id, sample_limit=limit, project_count=0,
             returned_project_count=0, errors=("artifact_load_failed",),
         )
     if loaded.status == "missing":
-        return Phase4ProjectInspect(
+        return ProjectEvidenceInspect(
             enabled=True, status="missing", schema_version=None, content_hash=None,
             project_id=requested_project_id, sample_limit=limit, project_count=0,
             returned_project_count=0, warning_codes=("artifact_missing",),
         )
     if loaded.status != "ready" or loaded.snapshot is None:
-        return Phase4ProjectInspect(
+        return ProjectEvidenceInspect(
             enabled=True, status="invalid", schema_version=None, content_hash=None,
             project_id=requested_project_id, sample_limit=limit, project_count=0,
             returned_project_count=0,
@@ -1037,7 +1033,7 @@ def get_phase4_project_inspect(
     selected.sort(key=lambda memory: (memory.project_id, memory.project_memory_id))
     summaries = tuple(_inspect_summary(memory) for memory in selected[:limit])
     warnings = tuple(sorted(set(snapshot.diagnostics.warnings))[:MAX_PIPELINE_WARNINGS])
-    return Phase4ProjectInspect(
+    return ProjectEvidenceInspect(
         enabled=True,
         status="degraded" if warnings else "ready",
         schema_version=snapshot.schema_version,
@@ -1059,18 +1055,17 @@ __all__ = [
     "MAX_PIPELINE_ERRORS",
     "MAX_PIPELINE_WARNINGS",
     "NEXT_RECOMMENDED_ACTIONS",
-    "PHASE4_PIPELINE_STAGE_ORDER",
-    "PHASE4_PROJECT_MEMORY_FLAG",
+    "PROJECT_EVIDENCE_PIPELINE_STAGE_ORDER",
+    "PROJECT_EVIDENCE_MEMORY_FLAG",
     "PIPELINE_STAGE_STATUSES",
     "PIPELINE_STATUSES",
-    "Phase4PipelineHealth",
-    "Phase4PipelineResult",
-    "Phase4PipelineStageResult",
-    "Phase4ProjectInspect",
-    "Phase4ProjectInspectSummary",
-    "Phase4ProjectMemoryPipelineResult",
-    "get_phase4_pipeline_health",
-    "get_phase4_project_inspect",
-    "is_phase4_project_memory_enabled",
-    "run_phase4_project_memory_pipeline",
+    "ProjectEvidenceHealth",
+    "ProjectEvidencePipelineStageResult",
+    "ProjectEvidenceInspect",
+    "ProjectEvidenceInspectSummary",
+    "ProjectEvidencePipelineResult",
+    "get_project_evidence_health",
+    "inspect_project_evidence_memory",
+    "is_project_evidence_memory_enabled",
+    "run_project_evidence_pipeline",
 ]

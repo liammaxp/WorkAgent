@@ -1,4 +1,4 @@
-"""Deterministic, explainable quality scoring for Phase 4 Evidence Facts.
+"""Deterministic, explainable quality scoring for project evidence Evidence Facts.
 
 The scorer evaluates one already-synthesized fact at a time. It performs no
 cross-fact promotion, persistence, retrieval, JD analysis, network access, or
@@ -12,12 +12,12 @@ import re
 from statistics import median
 from typing import Any, Iterable, Mapping
 
-from backend.phase4_models import (
+from backend.project_evidence_models import (
     EvidenceStatus,
     EvidenceType,
     MetricSupport,
-    Phase4EvidenceFact,
-    Phase4SourceRef,
+    ProjectEvidenceFact,
+    EvidenceSourceRef,
 )
 
 
@@ -32,7 +32,7 @@ DIMENSION_MAXIMUMS = {
     "claim_safety": 10,
 }
 if sum(DIMENSION_MAXIMUMS.values()) != 100:  # pragma: no cover - import-time invariant
-    raise RuntimeError("Phase 4 evidence scoring dimensions must total 100")
+    raise RuntimeError("project evidence evidence scoring dimensions must total 100")
 
 GENERIC_PHRASES = frozenset({
     "added intelligent features",
@@ -71,15 +71,15 @@ GENERIC_IMPACT_PHRASES = frozenset({
     "optimized performance",
 })
 DIRECT_SOURCE_TYPES = frozenset({
-    "phase2_evidence_chunk",
-    "phase2_evidence_card",
-    "phase2_raw_change_summary",
-    "phase3_evidence_card",
-    "phase3_raw_change_summary",
+    "github_evidence_chunk",
+    "github_evidence_card",
+    "github_evidence_raw_change_summary",
+    "project_change_evidence_card",
+    "project_change_raw_change_summary",
 })
 CONTEXTUAL_SOURCE_TYPES = frozenset({
-    "phase2_capability_fact",
-    "phase3_capability_fact",
+    "github_evidence_capability_fact",
+    "project_change_capability_fact",
     "project_memory",
     "project_compact_facts",
     "compact_facts",
@@ -112,7 +112,7 @@ _APPROXIMATE_MARKER_RE = re.compile(
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceQualityEvaluation:
+class ProjectEvidenceQualityEvaluation:
     score: int
     breakdown: dict[str, Any]
     quality_band: str
@@ -124,7 +124,7 @@ class Phase4EvidenceQualityEvaluation:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceScoringDecision:
+class ProjectEvidenceScoringDecision:
     evidence_fact_id: str
     project_id: str
     original_status: str
@@ -136,7 +136,7 @@ class Phase4EvidenceScoringDecision:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceScoringGroupCount:
+class ProjectEvidenceScoringGroupCount:
     project_id: str
     structural_status: str
     quality_band: str
@@ -146,7 +146,7 @@ class Phase4EvidenceScoringGroupCount:
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceScoringReport:
+class ProjectEvidenceScoringReport:
     input_count: int
     output_count: int
     high_value_count: int
@@ -164,8 +164,8 @@ class Phase4EvidenceScoringReport:
     median_score: float
     average_score: float
     score_buckets: dict[str, int]
-    decisions: tuple[Phase4EvidenceScoringDecision, ...] = ()
-    grouped_counts: tuple[Phase4EvidenceScoringGroupCount, ...] = ()
+    decisions: tuple[ProjectEvidenceScoringDecision, ...] = ()
+    grouped_counts: tuple[ProjectEvidenceScoringGroupCount, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -259,7 +259,7 @@ def _implementation_score(values: list[str]) -> tuple[int, bool, bool]:
     return score, any(generic_flags), True
 
 
-def _ref_identity(ref: Phase4SourceRef) -> tuple[str, str, str, str, str, str, int | None, int | None]:
+def _ref_identity(ref: EvidenceSourceRef) -> tuple[str, str, str, str, str, str, int | None, int | None]:
     return (
         ref.project_id,
         ref.source_type,
@@ -272,7 +272,7 @@ def _ref_identity(ref: Phase4SourceRef) -> tuple[str, str, str, str, str, str, i
     )
 
 
-def _provenance_score(fact: Phase4EvidenceFact) -> tuple[int, bool, bool]:
+def _provenance_score(fact: ProjectEvidenceFact) -> tuple[int, bool, bool]:
     if not fact.source_refs:
         return 0, True, False
     if any(ref.project_id != fact.project_id for ref in fact.source_refs):
@@ -291,7 +291,7 @@ def _provenance_score(fact: Phase4EvidenceFact) -> tuple[int, bool, bool]:
     return 4, False, False
 
 
-def _claim_values(fact: Phase4EvidenceFact) -> list[str]:
+def _claim_values(fact: ProjectEvidenceFact) -> list[str]:
     return [
         fact.problem,
         fact.mechanism,
@@ -315,11 +315,11 @@ def _unsupported_claim(value: str, metric_support: MetricSupport) -> bool:
     return True
 
 
-def _unsafe_claim_count(fact: Phase4EvidenceFact) -> int:
+def _unsafe_claim_count(fact: ProjectEvidenceFact) -> int:
     return sum(_unsupported_claim(value, fact.metric_support) for value in _claim_values(fact))
 
 
-def _impact_score(fact: Phase4EvidenceFact, unsupported_count: int) -> tuple[int, bool]:
+def _impact_score(fact: ProjectEvidenceFact, unsupported_count: int) -> tuple[int, bool]:
     values = [_normalize(value) for value in fact.safe_impact if _normalize(value)]
     if not values or unsupported_count:
         return 0, any(value.casefold().strip(" .!?:;") in GENERIC_IMPACT_PHRASES for value in values)
@@ -337,7 +337,7 @@ def _impact_score(fact: Phase4EvidenceFact, unsupported_count: int) -> tuple[int
     return (7 if len(specific) >= 2 else 6), bool(generic)
 
 
-def _technical_score(fact: Phase4EvidenceFact) -> int:
+def _technical_score(fact: ProjectEvidenceFact) -> int:
     tag_count = len({tag.casefold() for tag in fact.technical_tags})
     tag_score = 0 if tag_count == 0 else 3 if tag_count == 1 else 5
     type_score = 0 if fact.evidence_type is EvidenceType.UNKNOWN else 2
@@ -345,11 +345,11 @@ def _technical_score(fact: Phase4EvidenceFact) -> int:
     return min(10, tag_score + type_score + identifier_score)
 
 
-def _source_category(fact: Phase4EvidenceFact) -> str:
+def _source_category(fact: ProjectEvidenceFact) -> str:
     types = {ref.source_type for ref in fact.source_refs}
     if types & DIRECT_SOURCE_TYPES:
         return "direct_evidence"
-    if types & {"phase2_capability_fact", "phase3_capability_fact"}:
+    if types & {"github_evidence_capability_fact", "project_change_capability_fact"}:
         return "capability_context"
     if types & {"project_memory", "project_compact_facts", "compact_facts"}:
         return "project_context"
@@ -366,11 +366,11 @@ def _quality_band(score: int) -> str:
     return "rejected_value"
 
 
-def evaluate_phase4_evidence_quality(
-    fact: Phase4EvidenceFact,
-) -> Phase4EvidenceQualityEvaluation:
-    if not isinstance(fact, Phase4EvidenceFact):
-        raise TypeError("evaluate_phase4_evidence_quality expects Phase4EvidenceFact")
+def evaluate_project_evidence_quality(
+    fact: ProjectEvidenceFact,
+) -> ProjectEvidenceQualityEvaluation:
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("evaluate_project_evidence_quality expects ProjectEvidenceFact")
     problem = _problem_score(fact.problem)
     mechanism, generic_mechanism, concrete_mechanism = _mechanism_score(fact.mechanism)
     implementation, generic_implementation, concrete_implementation = _implementation_score(fact.implementation)
@@ -426,7 +426,7 @@ def evaluate_phase4_evidence_quality(
     blocker_adjustment = -(pre_blocker_score - 39) if blockers and pre_blocker_score > 39 else 0
     score = max(0, min(100, pre_blocker_score + blocker_adjustment))
     if not isinstance(score, int) or not 0 <= score <= 100:  # pragma: no cover - invariant
-        raise ValueError("Phase 4 evidence quality score must be an integer from 0 to 100")
+        raise ValueError("project evidence evidence quality score must be an integer from 0 to 100")
     quality_band = _quality_band(score)
     recommended_status = (
         EvidenceStatus.REJECTED.value if blockers else fact.status.value
@@ -441,7 +441,7 @@ def evaluate_phase4_evidence_quality(
         "reason_codes": sorted(set(reasons)),
         "blocker_codes": sorted(set(blockers)),
     }
-    return Phase4EvidenceQualityEvaluation(
+    return ProjectEvidenceQualityEvaluation(
         score=score,
         breakdown=breakdown,
         quality_band=quality_band,
@@ -453,17 +453,17 @@ def evaluate_phase4_evidence_quality(
     )
 
 
-def score_phase4_evidence_fact(fact: Phase4EvidenceFact) -> Phase4EvidenceFact:
-    evaluation = evaluate_phase4_evidence_quality(fact)
+def score_project_evidence_fact(fact: ProjectEvidenceFact) -> ProjectEvidenceFact:
+    evaluation = evaluate_project_evidence_quality(fact)
     payload = fact.to_dict()
     payload["quality_score"] = evaluation.score
     payload["quality_breakdown"] = evaluation.breakdown
     if evaluation.blockers:
         payload["status"] = EvidenceStatus.REJECTED.value
-    return Phase4EvidenceFact.from_dict(payload)
+    return ProjectEvidenceFact.from_dict(payload)
 
 
-def _sort_key(fact: Phase4EvidenceFact) -> tuple[str, str, int, str, str]:
+def _sort_key(fact: ProjectEvidenceFact) -> tuple[str, str, int, str, str]:
     score = int(fact.quality_score) if fact.quality_score is not None else -1
     return (
         fact.project_id,
@@ -474,18 +474,18 @@ def _sort_key(fact: Phase4EvidenceFact) -> tuple[str, str, int, str, str]:
     )
 
 
-def score_phase4_evidence_facts(
-    facts: Iterable[Phase4EvidenceFact],
-) -> tuple[list[Phase4EvidenceFact], Phase4EvidenceScoringReport]:
+def score_project_evidence_facts(
+    facts: Iterable[ProjectEvidenceFact],
+) -> tuple[list[ProjectEvidenceFact], ProjectEvidenceScoringReport]:
     originals = list(facts)
-    scored: list[Phase4EvidenceFact] = []
-    evaluations: list[Phase4EvidenceQualityEvaluation] = []
-    decisions: list[Phase4EvidenceScoringDecision] = []
+    scored: list[ProjectEvidenceFact] = []
+    evaluations: list[ProjectEvidenceQualityEvaluation] = []
+    decisions: list[ProjectEvidenceScoringDecision] = []
     groups: dict[tuple[str, str, str, str, str], int] = {}
     status_changed = 0
     for fact in originals:
-        evaluation = evaluate_phase4_evidence_quality(fact)
-        current = score_phase4_evidence_fact(fact)
+        evaluation = evaluate_project_evidence_quality(fact)
+        current = score_project_evidence_fact(fact)
         evaluations.append(evaluation)
         scored.append(current)
         status_changed += int(fact.status is not current.status)
@@ -497,7 +497,7 @@ def score_phase4_evidence_facts(
             _source_category(current),
         )
         groups[group_key] = groups.get(group_key, 0) + 1
-        decisions.append(Phase4EvidenceScoringDecision(
+        decisions.append(ProjectEvidenceScoringDecision(
             evidence_fact_id=current.evidence_fact_id,
             project_id=current.project_id,
             original_status=fact.status.value,
@@ -531,7 +531,7 @@ def score_phase4_evidence_facts(
         "80-100": sum(score >= 80 for score in scores),
     }
     group_counts = tuple(
-        Phase4EvidenceScoringGroupCount(
+        ProjectEvidenceScoringGroupCount(
             project_id=key[0],
             structural_status=key[1],
             quality_band=key[2],
@@ -541,7 +541,7 @@ def score_phase4_evidence_facts(
         )
         for key, count in sorted(groups.items())
     )
-    report = Phase4EvidenceScoringReport(
+    report = ProjectEvidenceScoringReport(
         input_count=len(originals),
         output_count=len(scored),
         high_value_count=band_counts["high_value"],
@@ -567,11 +567,11 @@ def score_phase4_evidence_facts(
 
 __all__ = [
     "DIMENSION_MAXIMUMS",
-    "Phase4EvidenceQualityEvaluation",
-    "Phase4EvidenceScoringDecision",
-    "Phase4EvidenceScoringGroupCount",
-    "Phase4EvidenceScoringReport",
-    "evaluate_phase4_evidence_quality",
-    "score_phase4_evidence_fact",
-    "score_phase4_evidence_facts",
+    "ProjectEvidenceQualityEvaluation",
+    "ProjectEvidenceScoringDecision",
+    "ProjectEvidenceScoringGroupCount",
+    "ProjectEvidenceScoringReport",
+    "evaluate_project_evidence_quality",
+    "score_project_evidence_fact",
+    "score_project_evidence_facts",
 ]

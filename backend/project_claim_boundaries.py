@@ -1,4 +1,4 @@
-"""Deterministic, conservative Phase 4 claim-boundary generation.
+"""Deterministic, conservative project evidence claim-boundary generation.
 
 The module consumes already-scored Evidence Facts and already-accepted
 Capability Facts.  It does not persist data, inspect job descriptions, call a
@@ -13,17 +13,17 @@ import re
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from backend.phase4_capability_extractor import (
+from backend.project_capability_extractor import (
     SOURCE_CATEGORY_CAPABILITY,
     SOURCE_CATEGORY_DIRECT,
     SOURCE_CATEGORY_PROJECT,
-    classify_phase4_source_category,
+    classify_project_evidence_source_category,
 )
-from backend.phase4_capability_taxonomy import (
-    get_phase4_capability_definition,
-    validate_phase4_capability_type,
+from backend.project_capability_taxonomy import (
+    get_project_capability_definition,
+    validate_project_capability_type,
 )
-from backend.phase4_models import (
+from backend.project_evidence_models import (
     MAX_CLAIM_LENGTH,
     MAX_LIST_ITEMS,
     MAX_NOTES_LENGTH,
@@ -31,10 +31,10 @@ from backend.phase4_models import (
     Confidence,
     EvidenceStatus,
     MetricSupport,
-    Phase4CapabilityFact,
-    Phase4ClaimBoundary,
-    Phase4EvidenceFact,
-    build_phase4_stable_id,
+    ProjectCapabilityFact,
+    ProjectClaimBoundary,
+    ProjectEvidenceFact,
+    build_project_evidence_stable_id,
 )
 
 
@@ -225,7 +225,7 @@ _IMPACT_POLICY_PATTERNS = MappingProxyType({
 
 
 @dataclass(frozen=True)
-class Phase4StructuredClaim:
+class ProjectStructuredClaim:
     project_id: str
     claim_type: str
     value: str
@@ -262,7 +262,7 @@ class Phase4StructuredClaim:
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundaryDecision:
+class ProjectClaimBoundaryDecision:
     project_id: str
     decision_code: str
     evidence_fact_id: str = ""
@@ -270,7 +270,7 @@ class Phase4ClaimBoundaryDecision:
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundaryConflict:
+class ProjectClaimBoundaryConflict:
     project_id: str
     claim_type: str
     claim_hash: str
@@ -280,7 +280,7 @@ class Phase4ClaimBoundaryConflict:
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundaryGroupCount:
+class ProjectClaimBoundaryGroupCount:
     project_id: str
     claim_type: str
     confidence: str
@@ -290,19 +290,19 @@ class Phase4ClaimBoundaryGroupCount:
 
 
 @dataclass(frozen=True)
-class Phase4ForbiddenPolicyCount:
+class ProjectForbiddenPolicyCount:
     policy_code: str
     count: int
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundaryValidationResult:
+class ProjectClaimBoundaryValidationResult:
     valid: bool
     errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundaryReport:
+class ProjectClaimBoundaryReport:
     project_count: int
     evidence_fact_count: int
     capability_fact_count: int
@@ -329,10 +329,10 @@ class Phase4ClaimBoundaryReport:
     project_mismatch_count: int
     conflict_count: int
     truncated_claim_count: int
-    grouped_counts: tuple[Phase4ClaimBoundaryGroupCount, ...] = ()
-    forbidden_policy_counts: tuple[Phase4ForbiddenPolicyCount, ...] = ()
-    decisions: tuple[Phase4ClaimBoundaryDecision, ...] = ()
-    conflicts: tuple[Phase4ClaimBoundaryConflict, ...] = ()
+    grouped_counts: tuple[ProjectClaimBoundaryGroupCount, ...] = ()
+    forbidden_policy_counts: tuple[ProjectForbiddenPolicyCount, ...] = ()
+    decisions: tuple[ProjectClaimBoundaryDecision, ...] = ()
+    conflicts: tuple[ProjectClaimBoundaryConflict, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -340,7 +340,7 @@ class Phase4ClaimBoundaryReport:
 
 @dataclass(frozen=True)
 class _ClaimSourceResult:
-    claims: tuple[Phase4StructuredClaim, ...] = ()
+    claims: tuple[ProjectStructuredClaim, ...] = ()
     forbidden: tuple[str, ...] = ()
     blocked_claims: tuple[str, ...] = ()
     decision_code: str = "no_allowed_claim"
@@ -351,8 +351,8 @@ class _ClaimSourceResult:
 
 @dataclass(frozen=True)
 class _ProjectBoundaryResult:
-    boundary: Phase4ClaimBoundary | None
-    claims: tuple[Phase4StructuredClaim, ...]
+    boundary: ProjectClaimBoundary | None
+    claims: tuple[ProjectStructuredClaim, ...]
     forbidden: tuple[str, ...]
     evidence_boundary_count: int
     capability_boundary_count: int
@@ -362,29 +362,29 @@ class _ProjectBoundaryResult:
     unsupported_capability_count: int
     project_mismatch_count: int
     truncated_count: int
-    conflicts: tuple[Phase4ClaimBoundaryConflict, ...]
-    decisions: tuple[Phase4ClaimBoundaryDecision, ...]
+    conflicts: tuple[ProjectClaimBoundaryConflict, ...]
+    decisions: tuple[ProjectClaimBoundaryDecision, ...]
 
 
 def _normalize(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
-def _quality_score(fact: Phase4EvidenceFact) -> int:
+def _quality_score(fact: ProjectEvidenceFact) -> int:
     value = fact.quality_score
     if value is None or isinstance(value, bool):
         return 0
     return max(0, min(100, int(value)))
 
 
-def _quality_blockers(fact: Phase4EvidenceFact) -> tuple[str, ...]:
+def _quality_blockers(fact: ProjectEvidenceFact) -> tuple[str, ...]:
     values = fact.quality_breakdown.get("blocker_codes", ())
     if not isinstance(values, (list, tuple)):
         return ()
     return tuple(sorted({_normalize(value) for value in values if _normalize(value)}))
 
 
-def _valid_provenance(fact: Phase4EvidenceFact) -> bool:
+def _valid_provenance(fact: ProjectEvidenceFact) -> bool:
     return bool(fact.source_refs) and all(ref.project_id == fact.project_id for ref in fact.source_refs)
 
 
@@ -446,7 +446,7 @@ def _safe_claim_value(claim_type: str, value: str) -> str:
     return normalized
 
 
-def _fact_confidence(fact: Phase4EvidenceFact, source_category: str) -> str:
+def _fact_confidence(fact: ProjectEvidenceFact, source_category: str) -> str:
     if source_category == SOURCE_CATEGORY_PROJECT:
         return Confidence.LOW.value
     return Confidence.HIGH.value if _quality_score(fact) >= 80 else Confidence.MEDIUM.value
@@ -469,18 +469,18 @@ def _impact_blockers(value: str) -> tuple[str, ...]:
 
 
 def _new_claim(
-    fact: Phase4EvidenceFact,
+    fact: ProjectEvidenceFact,
     claim_type: str,
     value: str,
     rule_id: str,
     *,
     source_category: str,
     metric_support: MetricSupport = MetricSupport.NONE,
-) -> Phase4StructuredClaim | None:
+) -> ProjectStructuredClaim | None:
     safe_value = _safe_claim_value(claim_type, value)
     if not safe_value:
         return None
-    return Phase4StructuredClaim(
+    return ProjectStructuredClaim(
         project_id=fact.project_id,
         claim_type=claim_type,
         value=safe_value,
@@ -494,23 +494,23 @@ def _new_claim(
     )
 
 
-def _legacy_capability_policies(fact: Phase4EvidenceFact) -> tuple[str, ...]:
-    if classify_phase4_source_category(fact) != SOURCE_CATEGORY_CAPABILITY:
+def _legacy_capability_policies(fact: ProjectEvidenceFact) -> tuple[str, ...]:
+    if classify_project_evidence_source_category(fact) != SOURCE_CATEGORY_CAPABILITY:
         return ()
     policies: set[str] = {"legacy_capability_label_promotion"}
     for value in fact.technical_tags:
         try:
-            canonical = validate_phase4_capability_type(value)
+            canonical = validate_project_capability_type(value)
         except (TypeError, ValueError):
             continue
         policies.add(f"unsupported_capability:{canonical}")
     return tuple(sorted(policies))
 
 
-def _claims_from_fact(fact: Phase4EvidenceFact) -> _ClaimSourceResult:
-    if not isinstance(fact, Phase4EvidenceFact):
-        raise TypeError("claim-boundary generation expects Phase4EvidenceFact")
-    category = classify_phase4_source_category(fact)
+def _claims_from_fact(fact: ProjectEvidenceFact) -> _ClaimSourceResult:
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("claim-boundary generation expects ProjectEvidenceFact")
+    category = classify_project_evidence_source_category(fact)
     quality = _quality_score(fact)
     forbidden = set(GLOBAL_FORBIDDEN_POLICIES)
     forbidden.update(_legacy_capability_policies(fact))
@@ -551,7 +551,7 @@ def _claims_from_fact(fact: Phase4EvidenceFact) -> _ClaimSourceResult:
     if _generic_mechanism(fact.mechanism):
         return _ClaimSourceResult(forbidden=tuple(sorted(forbidden)), decision_code="generic_mechanism_blocked")
 
-    claims: list[Phase4StructuredClaim] = []
+    claims: list[ProjectStructuredClaim] = []
     blocked_claims: set[str] = set()
     unsupported_metric_count = 0
     unsupported_impact_count = 0
@@ -636,22 +636,22 @@ def _claims_from_fact(fact: Phase4EvidenceFact) -> _ClaimSourceResult:
 
 
 def _claims_from_capability(
-    capability: Phase4CapabilityFact,
-    evidence_facts_by_id: Mapping[str, Phase4EvidenceFact],
+    capability: ProjectCapabilityFact,
+    evidence_facts_by_id: Mapping[str, ProjectEvidenceFact],
 ) -> _ClaimSourceResult:
-    if not isinstance(capability, Phase4CapabilityFact):
-        raise TypeError("claim-boundary generation expects Phase4CapabilityFact")
+    if not isinstance(capability, ProjectCapabilityFact):
+        raise TypeError("claim-boundary generation expects ProjectCapabilityFact")
     forbidden = set(GLOBAL_FORBIDDEN_POLICIES)
     if not capability.present:
         forbidden.add("unsupported_capability")
         return _ClaimSourceResult(forbidden=tuple(sorted(forbidden)), decision_code="capability_not_present")
     try:
-        canonical = validate_phase4_capability_type(capability.capability_type)
-        definition = get_phase4_capability_definition(canonical)
+        canonical = validate_project_capability_type(capability.capability_type)
+        definition = get_project_capability_definition(canonical)
     except (TypeError, ValueError):
         forbidden.add("unsupported_capability")
         return _ClaimSourceResult(forbidden=tuple(sorted(forbidden)), decision_code="unknown_capability_type")
-    evidence: list[Phase4EvidenceFact] = []
+    evidence: list[ProjectEvidenceFact] = []
     for evidence_id in capability.source_evidence_fact_ids:
         fact = evidence_facts_by_id.get(evidence_id)
         if fact is None:
@@ -673,11 +673,11 @@ def _claims_from_capability(
     quality = max((_quality_score(fact) for fact in evidence), default=0)
     source_category = (
         SOURCE_CATEGORY_DIRECT
-        if any(classify_phase4_source_category(fact) == SOURCE_CATEGORY_DIRECT for fact in evidence)
+        if any(classify_project_evidence_source_category(fact) == SOURCE_CATEGORY_DIRECT for fact in evidence)
         else SOURCE_CATEGORY_PROJECT
     )
     confidence = capability.confidence.value
-    claim = Phase4StructuredClaim(
+    claim = ProjectStructuredClaim(
         project_id=capability.project_id,
         claim_type="capability",
         value=canonical,
@@ -696,7 +696,7 @@ def _claims_from_capability(
     )
 
 
-def _claim_key(claim: Phase4StructuredClaim) -> tuple[str, str]:
+def _claim_key(claim: ProjectStructuredClaim) -> tuple[str, str]:
     return (claim.claim_type, claim.value.casefold())
 
 
@@ -725,15 +725,15 @@ def _strongest_source_category(values: Iterable[str]) -> str:
     return min(values, key=lambda value: priority.get(value, 4), default="other")
 
 
-def _merge_claims(claims: Iterable[Phase4StructuredClaim]) -> list[Phase4StructuredClaim]:
-    grouped: dict[tuple[str, str], list[Phase4StructuredClaim]] = {}
+def _merge_claims(claims: Iterable[ProjectStructuredClaim]) -> list[ProjectStructuredClaim]:
+    grouped: dict[tuple[str, str], list[ProjectStructuredClaim]] = {}
     for claim in claims:
         grouped.setdefault(_claim_key(claim), []).append(claim)
-    merged: list[Phase4StructuredClaim] = []
+    merged: list[ProjectStructuredClaim] = []
     for key in sorted(grouped, key=lambda item: (CLAIM_TYPE_PRIORITY[item[0]], item[1])):
         items = grouped[key]
         exemplar = min(items, key=lambda item: (item.value.casefold(), item.value, item.rule_id))
-        merged.append(Phase4StructuredClaim(
+        merged.append(ProjectStructuredClaim(
             project_id=exemplar.project_id,
             claim_type=exemplar.claim_type,
             value=exemplar.value,
@@ -748,7 +748,7 @@ def _merge_claims(claims: Iterable[Phase4StructuredClaim]) -> list[Phase4Structu
     return merged
 
 
-def _claim_rank(claim: Phase4StructuredClaim) -> tuple[int, int, int, int, str]:
+def _claim_rank(claim: ProjectStructuredClaim) -> tuple[int, int, int, int, str]:
     source_priority = 0 if claim.source_category == SOURCE_CATEGORY_DIRECT else 1
     return (
         -claim.quality_score,
@@ -759,11 +759,11 @@ def _claim_rank(claim: Phase4StructuredClaim) -> tuple[int, int, int, int, str]:
     )
 
 
-def _limit_claims(claims: Iterable[Phase4StructuredClaim]) -> tuple[list[Phase4StructuredClaim], int]:
-    grouped: dict[str, list[Phase4StructuredClaim]] = {}
+def _limit_claims(claims: Iterable[ProjectStructuredClaim]) -> tuple[list[ProjectStructuredClaim], int]:
+    grouped: dict[str, list[ProjectStructuredClaim]] = {}
     for claim in claims:
         grouped.setdefault(claim.claim_type, []).append(claim)
-    selected: list[Phase4StructuredClaim] = []
+    selected: list[ProjectStructuredClaim] = []
     truncated = 0
     for claim_type in sorted(grouped, key=lambda value: CLAIM_TYPE_PRIORITY[value]):
         ordered = sorted(grouped[claim_type], key=_claim_rank)
@@ -778,7 +778,7 @@ def _limit_claims(claims: Iterable[Phase4StructuredClaim]) -> tuple[list[Phase4S
     return selected, truncated
 
 
-def _claim_note(claim: Phase4StructuredClaim) -> str:
+def _claim_note(claim: ProjectStructuredClaim) -> str:
     evidence = ",".join(claim.evidence_fact_ids)
     capabilities = ",".join(claim.capability_fact_ids)
     return (
@@ -787,7 +787,7 @@ def _claim_note(claim: Phase4StructuredClaim) -> str:
     )
 
 
-def _boundary_metric_support(claims: Iterable[Phase4StructuredClaim]) -> MetricSupport:
+def _boundary_metric_support(claims: Iterable[ProjectStructuredClaim]) -> MetricSupport:
     values = [claim.metric_support for claim in claims if claim.claim_type == "metric"]
     if not values:
         return MetricSupport.NONE
@@ -802,11 +802,11 @@ def _build_boundary(
     project_id: str,
     subject_type: ClaimSubjectType,
     subject_id: str,
-    claims: Iterable[Phase4StructuredClaim],
+    claims: Iterable[ProjectStructuredClaim],
     forbidden_values: Iterable[str],
-) -> tuple[Phase4ClaimBoundary | None, tuple[Phase4StructuredClaim, ...], tuple[str, ...], int]:
+) -> tuple[ProjectClaimBoundary | None, tuple[ProjectStructuredClaim, ...], tuple[str, ...], int]:
     limited, truncated = _limit_claims(_merge_claims(claims))
-    supported: list[Phase4StructuredClaim] = []
+    supported: list[ProjectStructuredClaim] = []
     for claim in limited:
         if len(_claim_note(claim)) > MAX_NOTES_LENGTH:
             truncated += 1
@@ -826,7 +826,7 @@ def _build_boundary(
         return None, (), tuple(forbidden), truncated
     notes = sorted(_claim_note(claim) for claim in supported)
     metric_support = _boundary_metric_support(supported)
-    boundary_id = build_phase4_stable_id("p4claim_", project_id, {
+    boundary_id = build_project_evidence_stable_id("pcb_", project_id, {
         "subject_type": subject_type.value,
         "subject_id": subject_id,
         "allowed_claims": allowed,
@@ -834,7 +834,7 @@ def _build_boundary(
         "metric_support": metric_support.value,
         "notes": notes,
     })
-    boundary = Phase4ClaimBoundary(
+    boundary = ProjectClaimBoundary(
         project_id=project_id,
         subject_type=subject_type,
         subject_id=subject_id,
@@ -847,7 +847,7 @@ def _build_boundary(
     return boundary, tuple(supported), tuple(forbidden), truncated
 
 
-def build_phase4_evidence_claim_boundary(fact: Phase4EvidenceFact) -> Phase4ClaimBoundary | None:
+def build_project_evidence_claim_boundary(fact: ProjectEvidenceFact) -> ProjectClaimBoundary | None:
     """Build one evidence-subject boundary without mutating the fact."""
 
     result = _claims_from_fact(fact)
@@ -861,11 +861,11 @@ def build_phase4_evidence_claim_boundary(fact: Phase4EvidenceFact) -> Phase4Clai
     return boundary
 
 
-def build_phase4_capability_claim_boundary(
-    capability: Phase4CapabilityFact,
+def build_project_capability_claim_boundary(
+    capability: ProjectCapabilityFact,
     *,
-    evidence_facts_by_id: Mapping[str, Phase4EvidenceFact],
-) -> Phase4ClaimBoundary | None:
+    evidence_facts_by_id: Mapping[str, ProjectEvidenceFact],
+) -> ProjectClaimBoundary | None:
     """Build one boundary only for a present, canonical, fully-resolved capability."""
 
     result = _claims_from_capability(capability, evidence_facts_by_id)
@@ -882,24 +882,24 @@ def build_phase4_capability_claim_boundary(
 def _project_subject_id(project_id: str) -> str:
     if len(project_id) <= 100:
         return project_id
-    return build_phase4_stable_id("p4claim_", project_id, {"subject_type": "project"})
+    return build_project_evidence_stable_id("pcb_", project_id, {"subject_type": "project"})
 
 
 def _build_project_result(
     project_id: str,
-    evidence_facts: Iterable[Phase4EvidenceFact],
-    capability_facts: Iterable[Phase4CapabilityFact],
+    evidence_facts: Iterable[ProjectEvidenceFact],
+    capability_facts: Iterable[ProjectCapabilityFact],
     *,
-    evidence_facts_by_id: Mapping[str, Phase4EvidenceFact] | None = None,
+    evidence_facts_by_id: Mapping[str, ProjectEvidenceFact] | None = None,
 ) -> _ProjectBoundaryResult:
     if not isinstance(project_id, str) or not project_id.strip():
         raise ValueError("project_id must not be blank")
     facts = list(evidence_facts)
     capabilities = list(capability_facts)
-    if any(not isinstance(fact, Phase4EvidenceFact) for fact in facts):
-        raise TypeError("evidence_facts must contain Phase4EvidenceFact values")
-    if any(not isinstance(capability, Phase4CapabilityFact) for capability in capabilities):
-        raise TypeError("capability_facts must contain Phase4CapabilityFact values")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("evidence_facts must contain ProjectEvidenceFact values")
+    if any(not isinstance(capability, ProjectCapabilityFact) for capability in capabilities):
+        raise TypeError("capability_facts must contain ProjectCapabilityFact values")
     mismatched = sum(fact.project_id != project_id for fact in facts) + sum(
         capability.project_id != project_id for capability in capabilities
     )
@@ -908,10 +908,10 @@ def _build_project_result(
     by_id = dict(evidence_facts_by_id) if evidence_facts_by_id is not None else {
         fact.evidence_fact_id: fact for fact in facts
     }
-    claims: list[Phase4StructuredClaim] = []
+    claims: list[ProjectStructuredClaim] = []
     forbidden: set[str] = set(GLOBAL_FORBIDDEN_POLICIES)
     blocked: set[str] = set()
-    decisions: list[Phase4ClaimBoundaryDecision] = []
+    decisions: list[ProjectClaimBoundaryDecision] = []
     evidence_boundary_count = 0
     capability_boundary_count = 0
     qualifying_evidence = 0
@@ -931,7 +931,7 @@ def _build_project_result(
         if any(claim.serialized.casefold() not in blocked_for_fact for claim in result.claims):
             evidence_boundary_count += 1
             qualifying_evidence += 1
-        decisions.append(Phase4ClaimBoundaryDecision(
+        decisions.append(ProjectClaimBoundaryDecision(
             project_id=project_id,
             evidence_fact_id=fact.evidence_fact_id,
             decision_code=result.decision_code,
@@ -945,7 +945,7 @@ def _build_project_result(
             capability_boundary_count += 1
         else:
             unsupported_capability += 1
-        decisions.append(Phase4ClaimBoundaryDecision(
+        decisions.append(ProjectClaimBoundaryDecision(
             project_id=project_id,
             capability_fact_id=capability.capability_id,
             decision_code=result.decision_code,
@@ -954,14 +954,14 @@ def _build_project_result(
         unsupported_capability += 1
 
     merged = _merge_claims(claims)
-    conflicts: list[Phase4ClaimBoundaryConflict] = []
-    safe_claims: list[Phase4StructuredClaim] = []
+    conflicts: list[ProjectClaimBoundaryConflict] = []
+    safe_claims: list[ProjectStructuredClaim] = []
     blocked_folded = {value.casefold() for value in blocked}
     for claim in merged:
         if claim.serialized.casefold() in blocked_folded or (
             claim.claim_type == "metric" and claim.metric_support == MetricSupport.NONE.value
         ):
-            conflicts.append(Phase4ClaimBoundaryConflict(
+            conflicts.append(ProjectClaimBoundaryConflict(
                 project_id=project_id,
                 claim_type=claim.claim_type,
                 claim_hash=_claim_hash(claim.serialized),
@@ -998,30 +998,30 @@ def _build_project_result(
     )
 
 
-def build_phase4_project_claim_boundary(
+def build_project_claim_boundary(
     project_id: str,
-    evidence_facts: Iterable[Phase4EvidenceFact],
-    capability_facts: Iterable[Phase4CapabilityFact] = (),
-) -> Phase4ClaimBoundary | None:
+    evidence_facts: Iterable[ProjectEvidenceFact],
+    capability_facts: Iterable[ProjectCapabilityFact] = (),
+) -> ProjectClaimBoundary | None:
     """Aggregate exact-project claims; project aliases are never inferred."""
 
     return _build_project_result(project_id, evidence_facts, capability_facts).boundary
 
 
-def _payload_hash(value: Phase4EvidenceFact | Phase4CapabilityFact) -> str:
+def _payload_hash(value: ProjectEvidenceFact | ProjectCapabilityFact) -> str:
     return hashlib.sha256(value.to_json().encode("utf-8")).hexdigest()
 
 
 def _dedupe_records(
-    records: Iterable[Phase4EvidenceFact | Phase4CapabilityFact],
+    records: Iterable[ProjectEvidenceFact | ProjectCapabilityFact],
     id_name: str,
-) -> tuple[list[Phase4EvidenceFact | Phase4CapabilityFact], set[str], list[Phase4ClaimBoundaryConflict]]:
-    grouped: dict[str, list[Phase4EvidenceFact | Phase4CapabilityFact]] = {}
+) -> tuple[list[ProjectEvidenceFact | ProjectCapabilityFact], set[str], list[ProjectClaimBoundaryConflict]]:
+    grouped: dict[str, list[ProjectEvidenceFact | ProjectCapabilityFact]] = {}
     for record in records:
         grouped.setdefault(getattr(record, id_name), []).append(record)
-    output: list[Phase4EvidenceFact | Phase4CapabilityFact] = []
+    output: list[ProjectEvidenceFact | ProjectCapabilityFact] = []
     invalid_ids: set[str] = set()
-    conflicts: list[Phase4ClaimBoundaryConflict] = []
+    conflicts: list[ProjectClaimBoundaryConflict] = []
     for record_id in sorted(grouped):
         items = grouped[record_id]
         payloads = {_payload_hash(item) for item in items}
@@ -1029,7 +1029,7 @@ def _dedupe_records(
         if len(payloads) > 1 or len(projects) > 1:
             invalid_ids.add(record_id)
             for project_id in sorted(projects):
-                conflicts.append(Phase4ClaimBoundaryConflict(
+                conflicts.append(ProjectClaimBoundaryConflict(
                     project_id=project_id,
                     claim_type="evidence" if id_name == "evidence_fact_id" else "capability",
                     claim_hash=hashlib.sha256(record_id.encode("utf-8")).hexdigest()[:16],
@@ -1040,18 +1040,18 @@ def _dedupe_records(
     return output, invalid_ids, conflicts
 
 
-def build_phase4_claim_boundaries_by_project(
-    evidence_facts: Iterable[Phase4EvidenceFact],
-    capability_facts: Iterable[Phase4CapabilityFact] = (),
-) -> tuple[dict[str, Phase4ClaimBoundary], Phase4ClaimBoundaryReport]:
+def build_project_claim_boundaries_by_project(
+    evidence_facts: Iterable[ProjectEvidenceFact],
+    capability_facts: Iterable[ProjectCapabilityFact] = (),
+) -> tuple[dict[str, ProjectClaimBoundary], ProjectClaimBoundaryReport]:
     """Build deterministic project boundaries and a content-free audit report."""
 
     evidence_records = list(evidence_facts)
     capability_records = list(capability_facts)
-    if any(not isinstance(fact, Phase4EvidenceFact) for fact in evidence_records):
-        raise TypeError("evidence_facts must contain Phase4EvidenceFact values")
-    if any(not isinstance(capability, Phase4CapabilityFact) for capability in capability_records):
-        raise TypeError("capability_facts must contain Phase4CapabilityFact values")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in evidence_records):
+        raise TypeError("evidence_facts must contain ProjectEvidenceFact values")
+    if any(not isinstance(capability, ProjectCapabilityFact) for capability in capability_records):
+        raise TypeError("capability_facts must contain ProjectCapabilityFact values")
     projects = sorted({item.project_id for item in [*evidence_records, *capability_records]})
     unique_evidence_raw, invalid_evidence_ids, global_conflicts = _dedupe_records(
         evidence_records, "evidence_fact_id"
@@ -1059,15 +1059,15 @@ def build_phase4_claim_boundaries_by_project(
     unique_capability_raw, invalid_capability_ids, capability_conflicts = _dedupe_records(
         capability_records, "capability_id"
     )
-    unique_evidence = [item for item in unique_evidence_raw if isinstance(item, Phase4EvidenceFact)]
-    unique_capabilities = [item for item in unique_capability_raw if isinstance(item, Phase4CapabilityFact)]
+    unique_evidence = [item for item in unique_evidence_raw if isinstance(item, ProjectEvidenceFact)]
+    unique_capabilities = [item for item in unique_capability_raw if isinstance(item, ProjectCapabilityFact)]
     global_evidence_by_id = {fact.evidence_fact_id: fact for fact in unique_evidence}
     global_conflicts.extend(capability_conflicts)
-    boundaries: dict[str, Phase4ClaimBoundary] = {}
-    all_claims: list[Phase4StructuredClaim] = []
+    boundaries: dict[str, ProjectClaimBoundary] = {}
+    all_claims: list[ProjectStructuredClaim] = []
     all_forbidden: list[str] = []
-    all_decisions: list[Phase4ClaimBoundaryDecision] = []
-    all_conflicts: list[Phase4ClaimBoundaryConflict] = list(global_conflicts)
+    all_decisions: list[ProjectClaimBoundaryDecision] = []
+    all_conflicts: list[ProjectClaimBoundaryConflict] = list(global_conflicts)
     qualifying = evidence_boundaries = capability_boundaries = 0
     unsupported_metric = unsupported_impact = unsupported_capability = 0
     project_mismatch = truncated = 0
@@ -1110,7 +1110,7 @@ def build_phase4_claim_boundaries_by_project(
     for value in all_forbidden:
         policy = value.partition(":")[0]
         forbidden_counts[policy] = forbidden_counts.get(policy, 0) + 1
-    report = Phase4ClaimBoundaryReport(
+    report = ProjectClaimBoundaryReport(
         project_count=len(projects),
         evidence_fact_count=len(evidence_records),
         capability_fact_count=len(capability_records),
@@ -1131,7 +1131,7 @@ def build_phase4_claim_boundaries_by_project(
         rejected_fact_blocked_count=sum(fact.status is EvidenceStatus.REJECTED for fact in evidence_records),
         low_quality_blocked_count=sum(_quality_score(fact) < MIN_DIRECT_CLAIM_SCORE for fact in evidence_records),
         contextual_only_restricted_count=sum(
-            classify_phase4_source_category(fact) == SOURCE_CATEGORY_PROJECT for fact in evidence_records
+            classify_project_evidence_source_category(fact) == SOURCE_CATEGORY_PROJECT for fact in evidence_records
         ),
         unsupported_metric_blocked_count=unsupported_metric,
         unsupported_impact_blocked_count=unsupported_impact,
@@ -1140,7 +1140,7 @@ def build_phase4_claim_boundaries_by_project(
         conflict_count=len(all_conflicts),
         truncated_claim_count=truncated,
         grouped_counts=tuple(
-            Phase4ClaimBoundaryGroupCount(
+            ProjectClaimBoundaryGroupCount(
                 project_id=key[0],
                 claim_type=key[1],
                 confidence=key[2],
@@ -1151,7 +1151,7 @@ def build_phase4_claim_boundaries_by_project(
             for key, count in sorted(group_counts.items())
         ),
         forbidden_policy_counts=tuple(
-            Phase4ForbiddenPolicyCount(policy_code=code, count=count)
+            ProjectForbiddenPolicyCount(policy_code=code, count=count)
             for code, count in sorted(forbidden_counts.items())
         ),
         decisions=tuple(sorted(all_decisions, key=lambda item: (
@@ -1173,16 +1173,16 @@ def _parse_claim_meta(note: str) -> tuple[str, str, str, str, str, tuple[str, ..
     return parts[1], parts[2], parts[3], parts[4], parts[5], evidence, capabilities
 
 
-def validate_phase4_claim_boundary(
-    boundary: Phase4ClaimBoundary,
+def validate_project_claim_boundary(
+    boundary: ProjectClaimBoundary,
     *,
-    evidence_facts_by_id: Mapping[str, Phase4EvidenceFact] | None = None,
-    capability_facts_by_id: Mapping[str, Phase4CapabilityFact] | None = None,
-) -> Phase4ClaimBoundaryValidationResult:
+    evidence_facts_by_id: Mapping[str, ProjectEvidenceFact] | None = None,
+    capability_facts_by_id: Mapping[str, ProjectCapabilityFact] | None = None,
+) -> ProjectClaimBoundaryValidationResult:
     """Validate structure, safety, ordering, and optional support bindings."""
 
-    if not isinstance(boundary, Phase4ClaimBoundary):
-        raise TypeError("validate_phase4_claim_boundary expects Phase4ClaimBoundary")
+    if not isinstance(boundary, ProjectClaimBoundary):
+        raise TypeError("validate_project_claim_boundary expects ProjectClaimBoundary")
     errors: set[str] = set()
     if not _normalize(boundary.project_id):
         errors.add("missing_project_id")
@@ -1258,7 +1258,7 @@ def validate_phase4_claim_boundary(
             errors.add("invalid_claim_rule_id")
         claim_type, value = claims_by_hash[claim_hash]
         if evidence_facts_by_id is not None:
-            resolved: list[Phase4EvidenceFact] = []
+            resolved: list[ProjectEvidenceFact] = []
             for evidence_id in evidence_ids:
                 fact = evidence_facts_by_id.get(evidence_id)
                 if fact is None:
@@ -1269,7 +1269,7 @@ def validate_phase4_claim_boundary(
                     errors.add("cross_project_evidence_binding")
             if claim_type == "technology" and not any(
                 fact.status is EvidenceStatus.ACCEPTED
-                and classify_phase4_source_category(fact) == SOURCE_CATEGORY_DIRECT
+                and classify_project_evidence_source_category(fact) == SOURCE_CATEGORY_DIRECT
                 and _quality_score(fact) >= MIN_DIRECT_CLAIM_SCORE
                 and any(tag.casefold() == value.casefold() for tag in fact.technical_tags)
                 and _concrete_implementation(fact.implementation)
@@ -1281,7 +1281,7 @@ def validate_phase4_claim_boundary(
             ):
                 errors.add("metric_without_supported_evidence")
         if capability_facts_by_id is not None:
-            resolved_capabilities: list[Phase4CapabilityFact] = []
+            resolved_capabilities: list[ProjectCapabilityFact] = []
             for capability_id in capability_ids:
                 capability = capability_facts_by_id.get(capability_id)
                 if capability is None:
@@ -1296,7 +1296,7 @@ def validate_phase4_claim_boundary(
                 matches = False
                 for capability in resolved_capabilities:
                     try:
-                        canonical = validate_phase4_capability_type(capability.capability_type)
+                        canonical = validate_project_capability_type(capability.capability_type)
                     except (TypeError, ValueError):
                         errors.add("unknown_capability_type")
                         continue
@@ -1308,10 +1308,10 @@ def validate_phase4_claim_boundary(
             errors.add("capability_claim_without_fact")
     if set(claims_by_hash) - supported_hashes:
         errors.add("missing_claim_support_metadata")
-    return Phase4ClaimBoundaryValidationResult(valid=not errors, errors=tuple(sorted(errors)))
+    return ProjectClaimBoundaryValidationResult(valid=not errors, errors=tuple(sorted(errors)))
 
 
-def list_phase4_claim_types() -> tuple[str, ...]:
+def list_project_claim_types() -> tuple[str, ...]:
     return CLAIM_TYPES
 
 
@@ -1323,17 +1323,17 @@ __all__ = [
     "MAX_DECISION_SAMPLES",
     "MIN_CONTEXT_CLAIM_SCORE",
     "MIN_DIRECT_CLAIM_SCORE",
-    "Phase4ClaimBoundaryConflict",
-    "Phase4ClaimBoundaryDecision",
-    "Phase4ClaimBoundaryGroupCount",
-    "Phase4ClaimBoundaryReport",
-    "Phase4ClaimBoundaryValidationResult",
-    "Phase4ForbiddenPolicyCount",
-    "Phase4StructuredClaim",
-    "build_phase4_capability_claim_boundary",
-    "build_phase4_claim_boundaries_by_project",
-    "build_phase4_evidence_claim_boundary",
-    "build_phase4_project_claim_boundary",
-    "list_phase4_claim_types",
-    "validate_phase4_claim_boundary",
+    "ProjectClaimBoundaryConflict",
+    "ProjectClaimBoundaryDecision",
+    "ProjectClaimBoundaryGroupCount",
+    "ProjectClaimBoundaryReport",
+    "ProjectClaimBoundaryValidationResult",
+    "ProjectForbiddenPolicyCount",
+    "ProjectStructuredClaim",
+    "build_project_capability_claim_boundary",
+    "build_project_claim_boundaries_by_project",
+    "build_project_evidence_claim_boundary",
+    "build_project_claim_boundary",
+    "list_project_claim_types",
+    "validate_project_claim_boundary",
 ]

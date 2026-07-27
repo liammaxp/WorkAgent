@@ -1,7 +1,7 @@
-"""Deterministic, validated persistence for Phase 4 Project Memory.
+"""Deterministic, validated persistence for project evidence memory.
 
-Step 9 deliberately accepts already-built Phase 4 records.  It does not load
-upstream artifacts, run extraction, expose APIs, or perform retrieval.  The
+This module deliberately accepts already-built project evidence records. It does
+not load upstream artifacts, run extraction, expose APIs, or perform retrieval. The
 persisted identity excludes timestamps, destination paths, and transient
 diagnostics; it includes every safe semantic record stored in each project.
 """
@@ -18,26 +18,26 @@ import re
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.phase4_claim_boundary import (
-    Phase4ClaimBoundaryReport,
-    validate_phase4_claim_boundary,
+from backend.project_claim_boundaries import (
+    ProjectClaimBoundaryReport,
+    validate_project_claim_boundary,
 )
-from backend.phase4_models import (
-    PHASE4_SCHEMA_VERSION,
+from backend.project_evidence_models import (
+    PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION,
     ClaimSubjectType,
     EvidenceStatus,
-    Phase4CapabilityFact,
-    Phase4ClaimBoundary,
-    Phase4EvidenceFact,
-    Phase4PipelineWarning,
-    Phase4ProjectMemory,
+    ProjectCapabilityFact,
+    ProjectClaimBoundary,
+    ProjectEvidenceFact,
+    ProjectEvidencePipelineWarning,
+    ProjectEvidenceMemory,
     WarningSeverity,
-    build_phase4_stable_id,
+    build_project_evidence_stable_id,
 )
 
 
 ROOT_DIR = Path(__file__).parents[1]
-DEFAULT_PHASE4_PROJECT_MEMORY_PATH = ROOT_DIR / "information" / "project_memory_phase4.json"
+DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH = ROOT_DIR / "information" / "project_evidence_memory.json"
 
 MAX_PROJECTS = 1_000
 MAX_EVIDENCE_FACTS = 100_000
@@ -79,12 +79,12 @@ _FIXED_WARNING_MESSAGES = {
 }
 
 
-class Phase4ProjectMemoryIntegrityError(ValueError):
+class ProjectEvidenceMemoryIntegrityError(ValueError):
     """Raised when deterministic IDs conflict or references fail closed."""
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryDiagnostics:
+class ProjectEvidenceMemoryDiagnostics:
     evidence_fact_count: int = 0
     capability_fact_count: int = 0
     claim_boundary_count: int = 0
@@ -135,7 +135,7 @@ class Phase4ProjectMemoryDiagnostics:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "Phase4ProjectMemoryDiagnostics":
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ProjectEvidenceMemoryDiagnostics":
         if not isinstance(payload, Mapping):
             raise TypeError("diagnostics must be an object")
         allowed = set(_DIAGNOSTIC_COUNT_FIELDS) | {"claim_type_truncation_counts", "warnings"}
@@ -149,12 +149,12 @@ class Phase4ProjectMemoryDiagnostics:
     @classmethod
     def from_claim_boundary_report(
         cls,
-        report: Phase4ClaimBoundaryReport,
+        report: ProjectClaimBoundaryReport,
         *,
         projects_with_truncation: int = 0,
         claim_type_truncation_counts: Mapping[str, int] | None = None,
         warnings: Iterable[str] = (),
-    ) -> "Phase4ProjectMemoryDiagnostics":
+    ) -> "ProjectEvidenceMemoryDiagnostics":
         required_report_fields = (
             "evidence_fact_count", "capability_fact_count", "evidence_boundaries_created",
             "capability_boundaries_created", "project_boundaries_created", "allowed_claim_count",
@@ -164,10 +164,10 @@ class Phase4ProjectMemoryDiagnostics:
             "unsupported_impact_blocked_count", "unsupported_capability_blocked_count",
             "project_mismatch_count", "conflict_count",
         )
-        if not isinstance(report, Phase4ClaimBoundaryReport) and not all(
+        if not isinstance(report, ProjectClaimBoundaryReport) and not all(
             hasattr(report, name) for name in required_report_fields
         ):
-            raise TypeError("report must be a Phase4ClaimBoundaryReport")
+            raise TypeError("report must be a ProjectClaimBoundaryReport")
         warning_codes = set(warnings)
         if report.truncated_claim_count:
             warning_codes.add("claim_budget_truncated")
@@ -222,7 +222,7 @@ _DIAGNOSTIC_COUNT_FIELDS = (
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryBuildReport:
+class ProjectEvidenceMemoryBuildReport:
     project_count: int
     evidence_fact_count: int
     capability_fact_count: int
@@ -239,18 +239,18 @@ class Phase4ProjectMemoryBuildReport:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemorySnapshot:
+class ProjectEvidenceMemorySnapshot:
     schema_version: str
     content_hash: str
-    projects: tuple[Phase4ProjectMemory, ...]
-    diagnostics: Phase4ProjectMemoryDiagnostics
+    projects: tuple[ProjectEvidenceMemory, ...]
+    diagnostics: ProjectEvidenceMemoryDiagnostics
 
     def to_dict(self) -> dict[str, Any]:
         return _snapshot_payload(self, include_hash=True)
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryValidationReport:
+class ProjectEvidenceMemoryValidationReport:
     valid: bool
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -266,7 +266,7 @@ class Phase4ProjectMemoryValidationReport:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryPersistenceReport:
+class ProjectEvidenceMemoryPersistenceReport:
     status: str
     path: str
     schema_version: str
@@ -288,10 +288,10 @@ class Phase4ProjectMemoryPersistenceReport:
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemoryLoadResult:
+class ProjectEvidenceMemoryLoadResult:
     status: str
-    snapshot: Phase4ProjectMemorySnapshot | None
-    validation: Phase4ProjectMemoryValidationReport
+    snapshot: ProjectEvidenceMemorySnapshot | None
+    validation: ProjectEvidenceMemoryValidationReport
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -328,10 +328,10 @@ def _reject_prohibited_content(value: Any, *, field_name: str = "root") -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
-                raise Phase4ProjectMemoryIntegrityError("non_string_storage_field")
+                raise ProjectEvidenceMemoryIntegrityError("non_string_storage_field")
             normalized = _normalized_field_name(key)
             if normalized in _FORBIDDEN_STORAGE_FIELDS:
-                raise Phase4ProjectMemoryIntegrityError(f"prohibited_storage_field:{normalized}")
+                raise ProjectEvidenceMemoryIntegrityError(f"prohibited_storage_field:{normalized}")
             _reject_prohibited_content(item, field_name=normalized)
         return
     if isinstance(value, (list, tuple)):
@@ -339,15 +339,15 @@ def _reject_prohibited_content(value: Any, *, field_name: str = "root") -> None:
             _reject_prohibited_content(item, field_name=field_name)
         return
     if isinstance(value, float) and not math.isfinite(value):
-        raise Phase4ProjectMemoryIntegrityError("non_finite_number")
+        raise ProjectEvidenceMemoryIntegrityError("non_finite_number")
     if isinstance(value, str):
         if _PRIVATE_KEY_RE.search(value):
-            raise Phase4ProjectMemoryIntegrityError("private_key_value")
+            raise ProjectEvidenceMemoryIntegrityError("private_key_value")
         if _BEARER_SECRET_RE.fullmatch(value) or _KNOWN_TOKEN_RE.fullmatch(value.strip()):
-            raise Phase4ProjectMemoryIntegrityError("secret_like_value")
+            raise ProjectEvidenceMemoryIntegrityError("secret_like_value")
         return
     if value is not None and not isinstance(value, (bool, int)):
-        raise Phase4ProjectMemoryIntegrityError("non_json_value")
+        raise ProjectEvidenceMemoryIntegrityError("non_json_value")
 
 
 def _is_absolute_source_path(value: str | None) -> bool:
@@ -387,16 +387,16 @@ def _dedupe_records(
         elif previous[0] == serialized:
             duplicates += 1
         else:
-            raise Phase4ProjectMemoryIntegrityError(f"same_{id_field}_different_payload")
+            raise ProjectEvidenceMemoryIntegrityError(f"same_{id_field}_different_payload")
     return [by_id[key][1] for key in sorted(by_id)], duplicates
 
 
-def _source_hash_summary(facts: Sequence[Phase4EvidenceFact]) -> dict[str, Any]:
+def _source_hash_summary(facts: Sequence[ProjectEvidenceFact]) -> dict[str, Any]:
     by_type: dict[str, list[dict[str, Any]]] = {}
     for fact in facts:
         for ref in fact.source_refs:
             if _is_absolute_source_path(ref.file_path):
-                raise Phase4ProjectMemoryIntegrityError("absolute_source_path")
+                raise ProjectEvidenceMemoryIntegrityError("absolute_source_path")
             by_type.setdefault(ref.source_type, []).append({
                 "source_id": ref.source_id,
                 "content_hash": ref.content_hash,
@@ -417,7 +417,7 @@ def _source_hash_summary(facts: Sequence[Phase4EvidenceFact]) -> dict[str, Any]:
     return result
 
 
-def _quality_summary(facts: Sequence[Phase4EvidenceFact]) -> dict[str, int]:
+def _quality_summary(facts: Sequence[ProjectEvidenceFact]) -> dict[str, int]:
     return {
         "accepted_count": sum(fact.status is EvidenceStatus.ACCEPTED for fact in facts),
         "supporting_count": sum(fact.status is EvidenceStatus.SUPPORTING for fact in facts),
@@ -426,8 +426,8 @@ def _quality_summary(facts: Sequence[Phase4EvidenceFact]) -> dict[str, int]:
     }
 
 
-def _expected_project_memory_id(memory: Phase4ProjectMemory) -> str:
-    return build_phase4_stable_id("p4pm_", memory.project_id, {
+def _expected_project_memory_id(memory: ProjectEvidenceMemory) -> str:
+    return build_project_evidence_stable_id("pem_", memory.project_id, {
         "schema_version": memory.schema_version,
         "project_id": memory.project_id,
         "project_name": memory.project_name,
@@ -442,10 +442,10 @@ def _expected_project_memory_id(memory: Phase4ProjectMemory) -> str:
 def _project_subject_id(project_id: str) -> str:
     if len(project_id) <= 100:
         return project_id
-    return build_phase4_stable_id("p4claim_", project_id, {"subject_type": "project"})
+    return build_project_evidence_stable_id("pcb_", project_id, {"subject_type": "project"})
 
 
-def _validate_project_cross_references(memory: Phase4ProjectMemory) -> tuple[str, ...]:
+def _validate_project_cross_references(memory: ProjectEvidenceMemory) -> tuple[str, ...]:
     errors: set[str] = set()
     evidence_by_id = {fact.evidence_fact_id: fact for fact in memory.evidence_facts}
     capability_by_id = {fact.capability_id: fact for fact in memory.capability_facts}
@@ -485,7 +485,7 @@ def _validate_project_cross_references(memory: Phase4ProjectMemory) -> tuple[str
         elif boundary.subject_type is ClaimSubjectType.PROJECT:
             if boundary.subject_id != _project_subject_id(memory.project_id):
                 errors.add("project_boundary_subject_mismatch")
-        result = validate_phase4_claim_boundary(
+        result = validate_project_claim_boundary(
             boundary,
             evidence_facts_by_id=evidence_by_id,
             capability_facts_by_id=capability_by_id,
@@ -494,26 +494,26 @@ def _validate_project_cross_references(memory: Phase4ProjectMemory) -> tuple[str
     return tuple(sorted(errors))
 
 
-def build_phase4_project_memories(
-    evidence_facts: Iterable[Phase4EvidenceFact],
-    capability_facts: Iterable[Phase4CapabilityFact],
-    claim_boundaries: Iterable[Phase4ClaimBoundary],
+def build_project_evidence_memories(
+    evidence_facts: Iterable[ProjectEvidenceFact],
+    capability_facts: Iterable[ProjectCapabilityFact],
+    claim_boundaries: Iterable[ProjectClaimBoundary],
     *,
-    diagnostics: Phase4ProjectMemoryDiagnostics | None = None,
-) -> tuple[list[Phase4ProjectMemory], Phase4ProjectMemoryBuildReport]:
+    diagnostics: ProjectEvidenceMemoryDiagnostics | None = None,
+) -> tuple[list[ProjectEvidenceMemory], ProjectEvidenceMemoryBuildReport]:
     """Group validated records by exact project ID without file access."""
 
     evidence_input = list(evidence_facts)
     capability_input = list(capability_facts)
     boundary_input = list(claim_boundaries)
     evidence, duplicate_evidence = _dedupe_records(
-        evidence_input, expected_type=Phase4EvidenceFact, id_field="evidence_fact_id"
+        evidence_input, expected_type=ProjectEvidenceFact, id_field="evidence_fact_id"
     )
     capabilities, duplicate_capabilities = _dedupe_records(
-        capability_input, expected_type=Phase4CapabilityFact, id_field="capability_id"
+        capability_input, expected_type=ProjectCapabilityFact, id_field="capability_id"
     )
     boundaries, duplicate_boundaries = _dedupe_records(
-        boundary_input, expected_type=Phase4ClaimBoundary, id_field="boundary_id"
+        boundary_input, expected_type=ProjectClaimBoundary, id_field="boundary_id"
     )
     not_present = sum(not capability.present for capability in capabilities)
     capabilities = [capability for capability in capabilities if capability.present]
@@ -521,14 +521,14 @@ def build_phase4_project_memories(
         item.project_id for item in [*evidence, *capabilities, *boundaries]
     })
     if len(project_ids) > MAX_PROJECTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_project_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_project_count_exceeded")
     if len(evidence) > MAX_EVIDENCE_FACTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_evidence_fact_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_evidence_fact_count_exceeded")
     if len(capabilities) > MAX_CAPABILITY_FACTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_capability_fact_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_capability_fact_count_exceeded")
     if len(boundaries) > MAX_CLAIM_BOUNDARIES:
-        raise Phase4ProjectMemoryIntegrityError("maximum_claim_boundary_count_exceeded")
-    memories: list[Phase4ProjectMemory] = []
+        raise ProjectEvidenceMemoryIntegrityError("maximum_claim_boundary_count_exceeded")
+    memories: list[ProjectEvidenceMemory] = []
     context_only = 0
     for project_id in project_ids:
         project_evidence = [fact for fact in evidence if fact.project_id == project_id]
@@ -541,7 +541,7 @@ def build_phase4_project_memories(
             context_only += 1
             warning_codes.append("context_only_project")
         warnings = [
-            Phase4PipelineWarning(
+            ProjectEvidencePipelineWarning(
                 code=code,
                 message=_FIXED_WARNING_MESSAGES[code],
                 project_id=project_id,
@@ -549,7 +549,7 @@ def build_phase4_project_memories(
             )
             for code in sorted(set(warning_codes))
         ]
-        memory = Phase4ProjectMemory(
+        memory = ProjectEvidenceMemory(
             project_id=project_id,
             project_name=project_id,
             source_hashes=_source_hash_summary(project_evidence),
@@ -565,14 +565,14 @@ def build_phase4_project_memories(
         )
         cross_reference_errors = _validate_project_cross_references(memory)
         if cross_reference_errors:
-            raise Phase4ProjectMemoryIntegrityError(";".join(cross_reference_errors))
+            raise ProjectEvidenceMemoryIntegrityError(";".join(cross_reference_errors))
         _reject_prohibited_content(memory.to_dict())
         memories.append(memory)
     memories.sort(key=lambda item: (item.project_id, item.project_memory_id))
     report_warnings = set(diagnostics.warnings if diagnostics is not None else ())
     if not capabilities:
         report_warnings.add("capability_facts_empty")
-    report = Phase4ProjectMemoryBuildReport(
+    report = ProjectEvidenceMemoryBuildReport(
         project_count=len(memories),
         evidence_fact_count=len(evidence),
         capability_fact_count=len(capabilities),
@@ -588,7 +588,7 @@ def build_phase4_project_memories(
 
 
 def _snapshot_payload(
-    snapshot: Phase4ProjectMemorySnapshot,
+    snapshot: ProjectEvidenceMemorySnapshot,
     *,
     include_hash: bool,
 ) -> dict[str, Any]:
@@ -603,11 +603,11 @@ def _snapshot_payload(
     return payload
 
 
-def _snapshot_content_hash(snapshot: Phase4ProjectMemorySnapshot) -> str:
+def _snapshot_content_hash(snapshot: ProjectEvidenceMemorySnapshot) -> str:
     return _payload_hash(_snapshot_payload(snapshot, include_hash=False))
 
 
-def _snapshot_counts(projects: Sequence[Phase4ProjectMemory]) -> tuple[int, int, int, int]:
+def _snapshot_counts(projects: Sequence[ProjectEvidenceMemory]) -> tuple[int, int, int, int]:
     return (
         len(projects),
         sum(len(project.evidence_facts) for project in projects),
@@ -616,47 +616,47 @@ def _snapshot_counts(projects: Sequence[Phase4ProjectMemory]) -> tuple[int, int,
     )
 
 
-def build_phase4_project_memory_snapshot(
-    project_memories: Iterable[Phase4ProjectMemory],
+def build_project_evidence_memory_snapshot(
+    project_memories: Iterable[ProjectEvidenceMemory],
     *,
-    diagnostics: Phase4ProjectMemoryDiagnostics | None = None,
-) -> Phase4ProjectMemorySnapshot:
+    diagnostics: ProjectEvidenceMemoryDiagnostics | None = None,
+) -> ProjectEvidenceMemorySnapshot:
     """Construct and hash a canonical immutable snapshot without writing it."""
 
     projects = list(project_memories)
-    if any(not isinstance(project, Phase4ProjectMemory) for project in projects):
-        raise TypeError("project_memories must contain Phase4ProjectMemory values")
-    by_id: dict[str, tuple[str, Phase4ProjectMemory]] = {}
+    if any(not isinstance(project, ProjectEvidenceMemory) for project in projects):
+        raise TypeError("project_memories must contain ProjectEvidenceMemory values")
+    by_id: dict[str, tuple[str, ProjectEvidenceMemory]] = {}
     project_ids: set[str] = set()
     for project in projects:
         payload = _record_payload(project)
         serialized = _canonical_json_bytes(payload).decode("utf-8")
         previous = by_id.get(project.project_memory_id)
         if previous is not None and previous[0] != serialized:
-            raise Phase4ProjectMemoryIntegrityError("same_project_memory_id_different_payload")
+            raise ProjectEvidenceMemoryIntegrityError("same_project_memory_id_different_payload")
         if project.project_id in project_ids:
-            raise Phase4ProjectMemoryIntegrityError("duplicate_project_id")
+            raise ProjectEvidenceMemoryIntegrityError("duplicate_project_id")
         project_ids.add(project.project_id)
         by_id[project.project_memory_id] = (serialized, project)
     if any(project.project_memory_id != _expected_project_memory_id(project) for project in projects):
-        raise Phase4ProjectMemoryIntegrityError("invalid_project_memory_id")
+        raise ProjectEvidenceMemoryIntegrityError("invalid_project_memory_id")
     ordered = tuple(sorted((item[1] for item in by_id.values()), key=lambda item: (
         item.project_id, item.project_memory_id,
     )))
     project_count, evidence_count, capability_count, boundary_count = _snapshot_counts(ordered)
     if project_count > MAX_PROJECTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_project_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_project_count_exceeded")
     if evidence_count > MAX_EVIDENCE_FACTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_evidence_fact_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_evidence_fact_count_exceeded")
     if capability_count > MAX_CAPABILITY_FACTS:
-        raise Phase4ProjectMemoryIntegrityError("maximum_capability_fact_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_capability_fact_count_exceeded")
     if boundary_count > MAX_CLAIM_BOUNDARIES:
-        raise Phase4ProjectMemoryIntegrityError("maximum_claim_boundary_count_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_claim_boundary_count_exceeded")
     project_boundary_count = sum(
         boundary.subject_type is ClaimSubjectType.PROJECT
         for project in ordered for boundary in project.claim_boundaries
     )
-    base = diagnostics or Phase4ProjectMemoryDiagnostics(
+    base = diagnostics or ProjectEvidenceMemoryDiagnostics(
         allowed_claim_count=sum(
             len(boundary.allowed_claims) for project in ordered for boundary in project.claim_boundaries
         ),
@@ -671,16 +671,16 @@ def build_phase4_project_memory_snapshot(
         claim_boundary_count=boundary_count,
         project_boundary_count=project_boundary_count,
     )
-    snapshot = Phase4ProjectMemorySnapshot(
-        schema_version=PHASE4_SCHEMA_VERSION,
+    snapshot = ProjectEvidenceMemorySnapshot(
+        schema_version=PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION,
         content_hash="",
         projects=ordered,
         diagnostics=normalized_diagnostics,
     )
     snapshot = replace(snapshot, content_hash=_snapshot_content_hash(snapshot))
-    validation = validate_phase4_project_memory_snapshot(snapshot)
+    validation = validate_project_evidence_memory_snapshot(snapshot)
     if not validation.valid:
-        raise Phase4ProjectMemoryIntegrityError(validation.errors[0])
+        raise ProjectEvidenceMemoryIntegrityError(validation.errors[0])
     return snapshot
 
 
@@ -688,28 +688,28 @@ def _bounded_errors(errors: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(set(errors))[:MAX_VALIDATION_ERRORS])
 
 
-def validate_phase4_project_memory_snapshot(
-    snapshot: Phase4ProjectMemorySnapshot,
-) -> Phase4ProjectMemoryValidationReport:
+def validate_project_evidence_memory_snapshot(
+    snapshot: ProjectEvidenceMemorySnapshot,
+) -> ProjectEvidenceMemoryValidationReport:
     """Validate schema, identities, references, limits, safety, and hash."""
 
     errors: set[str] = set()
-    if not isinstance(snapshot, Phase4ProjectMemorySnapshot):
-        return Phase4ProjectMemoryValidationReport(valid=False, errors=("invalid_snapshot_type",))
-    if snapshot.schema_version != PHASE4_SCHEMA_VERSION:
+    if not isinstance(snapshot, ProjectEvidenceMemorySnapshot):
+        return ProjectEvidenceMemoryValidationReport(valid=False, errors=("invalid_snapshot_type",))
+    if snapshot.schema_version != PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION:
         errors.add("unsupported_schema_version" if snapshot.schema_version else "missing_schema_version")
-    if not isinstance(snapshot.diagnostics, Phase4ProjectMemoryDiagnostics):
+    if not isinstance(snapshot.diagnostics, ProjectEvidenceMemoryDiagnostics):
         errors.add("invalid_diagnostics")
-        diagnostics = Phase4ProjectMemoryDiagnostics()
+        diagnostics = ProjectEvidenceMemoryDiagnostics()
     else:
         diagnostics = snapshot.diagnostics
     projects = snapshot.projects
     if not isinstance(projects, tuple):
         errors.add("projects_must_be_tuple")
         projects = tuple(projects) if isinstance(projects, (list, tuple)) else ()
-    if any(not isinstance(project, Phase4ProjectMemory) for project in projects):
+    if any(not isinstance(project, ProjectEvidenceMemory) for project in projects):
         errors.add("invalid_project_memory_type")
-        projects = tuple(project for project in projects if isinstance(project, Phase4ProjectMemory))
+        projects = tuple(project for project in projects if isinstance(project, ProjectEvidenceMemory))
     ordered = tuple(sorted(projects, key=lambda item: (item.project_id, item.project_memory_id)))
     if tuple(projects) != ordered:
         errors.add("non_deterministic_project_order")
@@ -730,8 +730,8 @@ def validate_phase4_project_memory_snapshot(
     for project in ordered:
         try:
             payload = _record_payload(project)
-            Phase4ProjectMemory.from_dict(payload)
-        except (TypeError, ValueError, Phase4ProjectMemoryIntegrityError):
+            ProjectEvidenceMemory.from_dict(payload)
+        except (TypeError, ValueError, ProjectEvidenceMemoryIntegrityError):
             errors.add("invalid_project_memory")
             continue
         if project.project_id in project_ids:
@@ -775,7 +775,7 @@ def validate_phase4_project_memory_snapshot(
         serialized_size = len(_canonical_json_bytes(payload, pretty=True)) + 1
         if serialized_size > MAX_SERIALIZED_SIZE:
             errors.add("maximum_serialized_size_exceeded")
-    except (TypeError, ValueError, Phase4ProjectMemoryIntegrityError):
+    except (TypeError, ValueError, ProjectEvidenceMemoryIntegrityError):
         errors.add("unsafe_snapshot_content")
     if not isinstance(snapshot.content_hash, str) or not _SHA256_RE.fullmatch(snapshot.content_hash):
         errors.add("invalid_content_hash")
@@ -783,10 +783,10 @@ def validate_phase4_project_memory_snapshot(
         try:
             if snapshot.content_hash != _snapshot_content_hash(snapshot):
                 errors.add("content_hash_mismatch")
-        except (TypeError, ValueError, Phase4ProjectMemoryIntegrityError):
+        except (TypeError, ValueError, ProjectEvidenceMemoryIntegrityError):
             errors.add("content_hash_unavailable")
     final_errors = _bounded_errors(errors)
-    return Phase4ProjectMemoryValidationReport(
+    return ProjectEvidenceMemoryValidationReport(
         valid=not final_errors,
         errors=final_errors,
         warnings=tuple(diagnostics.warnings[:MAX_WARNINGS]),
@@ -799,19 +799,19 @@ def validate_phase4_project_memory_snapshot(
     )
 
 
-def serialize_phase4_project_memory_snapshot(
-    snapshot: Phase4ProjectMemorySnapshot,
+def serialize_project_evidence_memory_snapshot(
+    snapshot: ProjectEvidenceMemorySnapshot,
 ) -> bytes:
     """Return canonical UTF-8 JSON with exactly one trailing newline."""
 
-    validation = validate_phase4_project_memory_snapshot(snapshot)
+    validation = validate_project_evidence_memory_snapshot(snapshot)
     if not validation.valid:
-        raise Phase4ProjectMemoryIntegrityError(f"invalid_snapshot:{validation.errors[0]}")
+        raise ProjectEvidenceMemoryIntegrityError(f"invalid_snapshot:{validation.errors[0]}")
     payload = _snapshot_payload(snapshot, include_hash=True)
     _reject_prohibited_content(payload)
     serialized = _canonical_json_bytes(payload, pretty=True) + b"\n"
     if len(serialized) > MAX_SERIALIZED_SIZE:
-        raise Phase4ProjectMemoryIntegrityError("maximum_serialized_size_exceeded")
+        raise ProjectEvidenceMemoryIntegrityError("maximum_serialized_size_exceeded")
     return serialized
 
 
@@ -828,29 +828,29 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _empty_validation(*errors: str) -> Phase4ProjectMemoryValidationReport:
-    return Phase4ProjectMemoryValidationReport(valid=False, errors=_bounded_errors(errors))
+def _empty_validation(*errors: str) -> ProjectEvidenceMemoryValidationReport:
+    return ProjectEvidenceMemoryValidationReport(valid=False, errors=_bounded_errors(errors))
 
 
-def load_phase4_project_memory(
+def load_project_evidence_memory(
     path: str | Path | None = None,
-) -> Phase4ProjectMemoryLoadResult:
+) -> ProjectEvidenceMemoryLoadResult:
     """Safely load one complete snapshot; never return partial project data."""
 
-    destination = Path(path) if path is not None else DEFAULT_PHASE4_PROJECT_MEMORY_PATH
+    destination = Path(path) if path is not None else DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH
     if not destination.exists():
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="missing", snapshot=None, validation=_empty_validation("artifact_missing"),
             warnings=("artifact_missing",),
         )
     if destination.is_dir():
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="error", snapshot=None, validation=_empty_validation("destination_is_directory"),
             warnings=("destination_is_directory",),
         )
     try:
         if destination.stat().st_size > MAX_SERIALIZED_SIZE:
-            return Phase4ProjectMemoryLoadResult(
+            return ProjectEvidenceMemoryLoadResult(
                 status="invalid", snapshot=None,
                 validation=_empty_validation("maximum_serialized_size_exceeded"),
                 warnings=("maximum_serialized_size_exceeded",),
@@ -858,40 +858,40 @@ def load_phase4_project_memory(
         raw = destination.read_bytes()
         payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     except Exception:
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("malformed_artifact"),
             warnings=("malformed_artifact",),
         )
     if not isinstance(payload, dict):
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("invalid_snapshot_shape"),
             warnings=("invalid_snapshot_shape",),
         )
     schema_version = payload.get("schema_version")
     if schema_version is None:
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("missing_schema_version"),
             warnings=("missing_schema_version",),
         )
-    if schema_version != PHASE4_SCHEMA_VERSION:
-        return Phase4ProjectMemoryLoadResult(
+    if schema_version != PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION:
+        return ProjectEvidenceMemoryLoadResult(
             status="unsupported_version", snapshot=None,
             validation=_empty_validation("unsupported_schema_version"),
             warnings=("unsupported_schema_version",),
         )
     required = {"schema_version", "content_hash", "project_count", "projects", "diagnostics"}
     if set(payload) != required:
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("invalid_snapshot_fields"),
             warnings=("invalid_snapshot_fields",),
         )
     if isinstance(payload.get("project_count"), bool) or not isinstance(payload.get("project_count"), int):
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("invalid_project_count"),
             warnings=("invalid_project_count",),
         )
     if not isinstance(payload.get("projects"), list) or payload["project_count"] != len(payload["projects"]):
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("project_count_mismatch"),
             warnings=("project_count_mismatch",),
         )
@@ -899,35 +899,35 @@ def load_phase4_project_memory(
         for project in payload["projects"]:
             if not isinstance(project, Mapping) or "project_memory_id" not in project:
                 raise ValueError("missing project memory ID")
-        projects = tuple(Phase4ProjectMemory.from_dict(item) for item in payload["projects"])
-        diagnostics = Phase4ProjectMemoryDiagnostics.from_dict(payload["diagnostics"])
-        snapshot = Phase4ProjectMemorySnapshot(
+        projects = tuple(ProjectEvidenceMemory.from_dict(item) for item in payload["projects"])
+        diagnostics = ProjectEvidenceMemoryDiagnostics.from_dict(payload["diagnostics"])
+        snapshot = ProjectEvidenceMemorySnapshot(
             schema_version=schema_version,
             content_hash=payload.get("content_hash"),
             projects=projects,
             diagnostics=diagnostics,
         )
-    except (TypeError, ValueError, Phase4ProjectMemoryIntegrityError):
-        return Phase4ProjectMemoryLoadResult(
+    except (TypeError, ValueError, ProjectEvidenceMemoryIntegrityError):
+        return ProjectEvidenceMemoryLoadResult(
             status="invalid", snapshot=None, validation=_empty_validation("invalid_snapshot_payload"),
             warnings=("invalid_snapshot_payload",),
         )
-    validation = validate_phase4_project_memory_snapshot(snapshot)
+    validation = validate_project_evidence_memory_snapshot(snapshot)
     if not validation.valid:
         status = "hash_mismatch" if any(
             code in validation.errors for code in ("content_hash_mismatch", "invalid_content_hash")
         ) else "invalid"
-        return Phase4ProjectMemoryLoadResult(
+        return ProjectEvidenceMemoryLoadResult(
             status=status, snapshot=None, validation=validation, warnings=validation.errors,
         )
-    return Phase4ProjectMemoryLoadResult(
+    return ProjectEvidenceMemoryLoadResult(
         status="ready", snapshot=snapshot, validation=validation,
         warnings=tuple(diagnostics.warnings),
     )
 
 
 def _persistence_report(
-    snapshot: Phase4ProjectMemorySnapshot,
+    snapshot: ProjectEvidenceMemorySnapshot,
     destination: Path,
     *,
     status: str,
@@ -935,9 +935,9 @@ def _persistence_report(
     previous_artifact_preserved: bool = False,
     round_trip_validated: bool = False,
     warnings: Iterable[str] = (),
-) -> Phase4ProjectMemoryPersistenceReport:
+) -> ProjectEvidenceMemoryPersistenceReport:
     project_count, evidence_count, capability_count, boundary_count = _snapshot_counts(snapshot.projects)
-    return Phase4ProjectMemoryPersistenceReport(
+    return ProjectEvidenceMemoryPersistenceReport(
         status=status,
         path=str(destination),
         schema_version=snapshot.schema_version,
@@ -1015,24 +1015,24 @@ def _restore_previous_artifact(destination: Path, previous_bytes: bytes | None) 
                 pass
 
 
-def persist_phase4_project_memory(
-    snapshot: Phase4ProjectMemorySnapshot,
+def persist_project_evidence_memory(
+    snapshot: ProjectEvidenceMemorySnapshot,
     path: str | Path | None = None,
     *,
     replace_invalid: bool = False,
-) -> Phase4ProjectMemoryPersistenceReport:
+) -> ProjectEvidenceMemoryPersistenceReport:
     """Atomically persist a validated snapshot with unchanged-write detection."""
 
-    destination = Path(path) if path is not None else DEFAULT_PHASE4_PROJECT_MEMORY_PATH
-    validation = validate_phase4_project_memory_snapshot(snapshot)
+    destination = Path(path) if path is not None else DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH
+    validation = validate_project_evidence_memory_snapshot(snapshot)
     if not validation.valid:
         return _persistence_report(
             snapshot, destination, status="failed", previous_artifact_preserved=destination.exists(),
             warnings=("invalid_snapshot",),
         )
     try:
-        serialized = serialize_phase4_project_memory_snapshot(snapshot)
-    except (TypeError, ValueError, Phase4ProjectMemoryIntegrityError):
+        serialized = serialize_project_evidence_memory_snapshot(snapshot)
+    except (TypeError, ValueError, ProjectEvidenceMemoryIntegrityError):
         return _persistence_report(
             snapshot, destination, status="failed", previous_artifact_preserved=destination.exists(),
             warnings=("serialization_failed",),
@@ -1045,7 +1045,7 @@ def persist_phase4_project_memory(
     previous_bytes: bytes | None = None
     existed = destination.exists()
     if existed:
-        existing = load_phase4_project_memory(destination)
+        existing = load_project_evidence_memory(destination)
         if existing.status == "ready" and existing.snapshot is not None:
             if existing.snapshot.content_hash == snapshot.content_hash:
                 return _persistence_report(
@@ -1079,7 +1079,7 @@ def persist_phase4_project_memory(
     temp_path: Path | None = None
     try:
         temp_path = _write_temp_bytes(destination, serialized)
-        temp_load = load_phase4_project_memory(temp_path)
+        temp_load = load_project_evidence_memory(temp_path)
         if temp_load.status != "ready" or temp_load.snapshot != snapshot:
             return _persistence_report(
                 snapshot, destination, status="failed", previous_artifact_preserved=existed,
@@ -1094,7 +1094,7 @@ def persist_phase4_project_memory(
             )
         temp_path = None
         _sync_parent_directory(destination.parent)
-        loaded = load_phase4_project_memory(destination)
+        loaded = load_project_evidence_memory(destination)
         if loaded.status != "ready" or loaded.snapshot != snapshot:
             preserved = _restore_previous_artifact(destination, previous_bytes)
             return _persistence_report(
@@ -1122,46 +1122,46 @@ def persist_phase4_project_memory(
                 pass
 
 
-def build_and_persist_phase4_project_memory(
-    evidence_facts: Iterable[Phase4EvidenceFact],
-    capability_facts: Iterable[Phase4CapabilityFact],
-    claim_boundaries: Iterable[Phase4ClaimBoundary],
+def build_and_persist_project_evidence_memory(
+    evidence_facts: Iterable[ProjectEvidenceFact],
+    capability_facts: Iterable[ProjectCapabilityFact],
+    claim_boundaries: Iterable[ProjectClaimBoundary],
     *,
-    diagnostics: Phase4ProjectMemoryDiagnostics | None = None,
+    diagnostics: ProjectEvidenceMemoryDiagnostics | None = None,
     path: str | Path | None = None,
     replace_invalid: bool = False,
-) -> Phase4ProjectMemoryPersistenceReport:
+) -> ProjectEvidenceMemoryPersistenceReport:
     """Convenience wrapper over supplied records; it is not pipeline orchestration."""
 
-    memories, _report = build_phase4_project_memories(
+    memories, _report = build_project_evidence_memories(
         evidence_facts, capability_facts, claim_boundaries, diagnostics=diagnostics
     )
-    snapshot = build_phase4_project_memory_snapshot(memories, diagnostics=diagnostics)
-    return persist_phase4_project_memory(
+    snapshot = build_project_evidence_memory_snapshot(memories, diagnostics=diagnostics)
+    return persist_project_evidence_memory(
         snapshot, path=path, replace_invalid=replace_invalid
     )
 
 
 __all__ = [
-    "DEFAULT_PHASE4_PROJECT_MEMORY_PATH",
+    "DEFAULT_PROJECT_EVIDENCE_MEMORY_PATH",
     "MAX_CAPABILITY_FACTS",
     "MAX_CLAIM_BOUNDARIES",
     "MAX_EVIDENCE_FACTS",
     "MAX_PROJECTS",
     "MAX_SERIALIZED_SIZE",
     "MAX_WARNINGS",
-    "Phase4ProjectMemoryBuildReport",
-    "Phase4ProjectMemoryDiagnostics",
-    "Phase4ProjectMemoryIntegrityError",
-    "Phase4ProjectMemoryLoadResult",
-    "Phase4ProjectMemoryPersistenceReport",
-    "Phase4ProjectMemorySnapshot",
-    "Phase4ProjectMemoryValidationReport",
-    "build_and_persist_phase4_project_memory",
-    "build_phase4_project_memories",
-    "build_phase4_project_memory_snapshot",
-    "load_phase4_project_memory",
-    "persist_phase4_project_memory",
-    "serialize_phase4_project_memory_snapshot",
-    "validate_phase4_project_memory_snapshot",
+    "ProjectEvidenceMemoryBuildReport",
+    "ProjectEvidenceMemoryDiagnostics",
+    "ProjectEvidenceMemoryIntegrityError",
+    "ProjectEvidenceMemoryLoadResult",
+    "ProjectEvidenceMemoryPersistenceReport",
+    "ProjectEvidenceMemorySnapshot",
+    "ProjectEvidenceMemoryValidationReport",
+    "build_and_persist_project_evidence_memory",
+    "build_project_evidence_memories",
+    "build_project_evidence_memory_snapshot",
+    "load_project_evidence_memory",
+    "persist_project_evidence_memory",
+    "serialize_project_evidence_memory_snapshot",
+    "validate_project_evidence_memory_snapshot",
 ]

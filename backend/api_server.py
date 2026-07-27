@@ -40,7 +40,7 @@ import evidence_chunker
 import evidence_memory
 import evidence_pipeline
 import main as agent
-import phase3_pipeline
+import project_change_pipeline
 from tech_ontology import (
     build_tech_ontology_index,
     enrich_jd_profile_with_tech_ontology,
@@ -75,7 +75,7 @@ agent_task_cancellations: dict[str, threading.Event] = {}
 agent_task_adapters: dict[str, list[Any]] = {}
 background_task_lock = threading.Lock()
 background_agent_tasks: dict[str, dict[str, Any]] = {}
-GITHUB_CONTEXT_PHASE2_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 GITHUB_CONTEXT_STATUS_ENV = "USE_GITHUB_CONTEXT_STATUS_V2"
 GITHUB_CONTEXT_ENABLED_VALUES = {"1", "true", "yes", "on"}
 
@@ -85,22 +85,22 @@ def github_context_env_enabled(name: str, default: str = "1") -> bool:
 
 
 USE_GITHUB_CONTEXT_STATUS_V2 = github_context_env_enabled(
-    GITHUB_CONTEXT_PHASE2_ENV,
+    GITHUB_EVIDENCE_MEMORY_ENV,
     default=os.getenv(GITHUB_CONTEXT_STATUS_ENV, "1"),
 )
 GITHUB_CONTEXT_STATUS_MAX_JSON_CHARS = 1_000_000
 GITHUB_CONTEXT_STATUS_DISABLED_MESSAGE = (
-    "GitHub context diagnostics are disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable."
+    "GitHub context diagnostics are disabled. Set USE_GITHUB_EVIDENCE_MEMORY=1 to enable."
 )
-GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
-GITHUB_CONTEXT_PHASE2_STORAGE_MISSING_MESSAGE = (
+GITHUB_EVIDENCE_DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
+GITHUB_EVIDENCE_STORAGE_MISSING_MESSAGE = (
     "GitHub context evidence memory is enabled, but storage is not initialized yet."
 )
-GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT = 10
-GITHUB_CONTEXT_PHASE2_PREVIEW_MAX_LIMIT = 50
-GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS = 240
+GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT = 10
+GITHUB_EVIDENCE_PREVIEW_MAX_LIMIT = 50
+GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS = 240
 GITHUB_CONTEXT_PREVIEW_DISABLED_MESSAGE = (
-    "GitHub context preview is disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable."
+    "GitHub context preview is disabled. Set USE_GITHUB_EVIDENCE_MEMORY=1 to enable."
 )
 GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT = 5
 GITHUB_CONTEXT_PREVIEW_MAX_LIMIT = 20
@@ -852,7 +852,7 @@ class GitHubContextBody(BaseModel):
     agent_task_id: str = ""
 
 
-class Phase2PipelineBuildBody(BaseModel):
+class GitHubEvidencePipelineBuildBody(BaseModel):
     project_id: str = ""
     limit: Optional[int] = None
     stages: Optional[list[str] | str] = None
@@ -15691,19 +15691,19 @@ def read_github_repo_source(resume_source: str, project_name: str = "", project_
 GITHUB_REPO_SCAN_STATE_VERSION = 1
 
 
-# Phase 1 only:
+# GitHub context only:
 # GitHub context persistence/status/preview/raw inspect.
 # Do not modify resume generation, project ranking, bullet writing,
-# LaTeX merge, or quality gates in this phase.
+# LaTeX merge, or quality gates in this refactor.
 def github_context_status_v2_enabled() -> bool:
     return USE_GITHUB_CONTEXT_STATUS_V2
 
 
-def is_github_context_phase2_enabled() -> bool:
-    return github_context_env_enabled(GITHUB_CONTEXT_PHASE2_ENV, default="1")
+def is_github_evidence_enabled() -> bool:
+    return github_context_env_enabled(GITHUB_EVIDENCE_MEMORY_ENV, default="1")
 
 
-def github_context_phase2_zero_counts() -> dict[str, int]:
+def github_evidence_zero_counts() -> dict[str, int]:
     return {
         "raw_sources_count": 0,
         "chunks_count": 0,
@@ -15713,7 +15713,7 @@ def github_context_phase2_zero_counts() -> dict[str, int]:
     }
 
 
-def github_context_phase2_zero_raw_summary() -> dict[str, Any]:
+def github_evidence_zero_raw_summary() -> dict[str, Any]:
     return {
         "raw_chars": 0,
         "repos_count": 0,
@@ -15721,32 +15721,32 @@ def github_context_phase2_zero_raw_summary() -> dict[str, Any]:
     }
 
 
-def get_github_context_phase2_status() -> dict[str, Any]:
-    enabled = is_github_context_phase2_enabled()
-    zero_counts = github_context_phase2_zero_counts()
-    zero_raw_summary = github_context_phase2_zero_raw_summary()
+def get_github_evidence_status() -> dict[str, Any]:
+    enabled = is_github_evidence_enabled()
+    zero_counts = github_evidence_zero_counts()
+    zero_raw_summary = github_evidence_zero_raw_summary()
     if not enabled:
         return {
             "enabled": False,
             "available": False,
-            "phase": "phase2",
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "memory_type": "github_evidence",
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "pipeline_complete": False,
-            "next_recommended_action": "enable_phase2",
+            "next_recommended_action": "enable_github_evidence_memory",
             **zero_counts,
             **zero_raw_summary,
         }
 
     try:
-        counts = evidence_memory.get_phase2_memory_counts()
+        counts = evidence_memory.get_github_evidence_memory_counts()
         raw_summary = evidence_memory.github_raw_source_stats()
     except Exception as error:  # pragma: no cover - defensive status safety
-        logger.warning("GitHub context Phase 2 status count read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence status count read failed: %s", error)
         return {
             "enabled": True,
             "available": False,
-            "phase": "phase2",
-            "message": "GitHub context Phase 2 is enabled, but status counts could not be read.",
+            "memory_type": "github_evidence",
+            "message": "GitHub context GitHub evidence is enabled, but status counts could not be read.",
             "pipeline_complete": False,
             "next_recommended_action": "inspect_storage_error",
             **zero_counts,
@@ -15756,7 +15756,7 @@ def get_github_context_phase2_status() -> dict[str, Any]:
         }
 
     available = any(counts.values())
-    message = "GitHub context Phase 2 is enabled." if available else GITHUB_CONTEXT_PHASE2_STORAGE_MISSING_MESSAGE
+    message = "GitHub context GitHub evidence is enabled." if available else GITHUB_EVIDENCE_STORAGE_MISSING_MESSAGE
     pipeline_health = {
         "has_raw_sources": counts.get("raw_sources_count", 0) > 0,
         "has_chunks": counts.get("chunks_count", 0) > 0,
@@ -15768,7 +15768,7 @@ def get_github_context_phase2_status() -> dict[str, Any]:
     return {
         "enabled": True,
         "available": available,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "message": message,
         "pipeline_complete": next_recommended_action == "inspect",
         "next_recommended_action": next_recommended_action,
@@ -15779,7 +15779,7 @@ def get_github_context_phase2_status() -> dict[str, Any]:
     }
 
 
-def phase2_context_repo(context: dict[str, Any]) -> str:
+def github_evidence_context_repo(context: dict[str, Any]) -> str:
     repo = str(context.get("repository") or "").strip()
     if repo:
         return repo
@@ -15792,7 +15792,7 @@ def phase2_context_repo(context: dict[str, Any]) -> str:
     return ""
 
 
-def phase2_context_project_id(
+def github_evidence_context_project_id(
     context: dict[str, Any],
     project_id: str = "",
     project_name: str = "",
@@ -15802,12 +15802,12 @@ def phase2_context_project_id(
         or str(project_id or "").strip()
         or str(context.get("project_name") or "").strip()
         or str(project_name or "").strip()
-        or phase2_context_repo(context)
+        or github_evidence_context_repo(context)
         or "unknown"
     )
 
 
-def phase2_context_latest_commit_sha(context: dict[str, Any]) -> str:
+def github_evidence_context_latest_commit_sha(context: dict[str, Any]) -> str:
     incremental = context.get("incremental_update")
     if isinstance(incremental, dict):
         head_sha = str(incremental.get("head_sha") or "").strip()
@@ -15816,22 +15816,22 @@ def phase2_context_latest_commit_sha(context: dict[str, Any]) -> str:
     return str(context.get("latest_commit_sha") or context.get("commit_sha") or "").strip()
 
 
-def phase2_context_raw_json(context: dict[str, Any]) -> str:
+def github_evidence_context_raw_json(context: dict[str, Any]) -> str:
     return json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2, default=str)
 
 
-def phase2_common_raw_source_metadata(context: dict[str, Any], source_kind: str) -> dict[str, Any]:
+def github_evidence_common_raw_source_metadata(context: dict[str, Any], source_kind: str) -> dict[str, Any]:
     return {
-        "source": "github_context_phase2",
+        "source": "github_evidence",
         "source_kind": source_kind,
-        "repository": phase2_context_repo(context),
+        "repository": github_evidence_context_repo(context),
         "url": str(context.get("url") or ""),
         "default_branch": str(context.get("default_branch") or ""),
         "incremental_update": context.get("incremental_update") if isinstance(context.get("incremental_update"), dict) else {},
     }
 
 
-def phase2_raw_source_from_context(
+def github_evidence_raw_source_from_context(
     context: dict[str, Any],
     *,
     project_id: str,
@@ -15851,7 +15851,7 @@ def phase2_raw_source_from_context(
         path=path,
         commit_sha=commit_sha,
         raw_text=raw_text,
-        metadata=metadata or phase2_common_raw_source_metadata(context, source_type),
+        metadata=metadata or github_evidence_common_raw_source_metadata(context, source_type),
     )
 
 
@@ -15867,13 +15867,13 @@ def build_github_raw_source_records_from_context(
     for context in contexts:
         if not isinstance(context, dict):
             continue
-        repo = phase2_context_repo(context)
-        current_project_id = phase2_context_project_id(context, project_id=project_id, project_name=project_name)
-        latest_sha = phase2_context_latest_commit_sha(context)
+        repo = github_evidence_context_repo(context)
+        current_project_id = github_evidence_context_project_id(context, project_id=project_id, project_name=project_name)
+        latest_sha = github_evidence_context_latest_commit_sha(context)
         before_count = len(records)
 
         readme = str(context.get("readme") or "")
-        readme_record = phase2_raw_source_from_context(
+        readme_record = github_evidence_raw_source_from_context(
             context,
             project_id=current_project_id,
             repo=repo,
@@ -15882,7 +15882,7 @@ def build_github_raw_source_records_from_context(
             commit_sha=latest_sha,
             raw_text=readme,
             metadata={
-                **phase2_common_raw_source_metadata(context, "readme"),
+                **github_evidence_common_raw_source_metadata(context, "readme"),
                 "summary": f"README for {repo or current_project_id}",
             },
         )
@@ -15901,7 +15901,7 @@ def build_github_raw_source_records_from_context(
             for commit in evidence.get("commits") or []:
                 if isinstance(commit, dict):
                     records.extend(
-                        phase2_commit_patch_records(
+                        github_evidence_commit_patch_records(
                             context,
                             commit,
                             project_id=current_project_id,
@@ -15912,14 +15912,14 @@ def build_github_raw_source_records_from_context(
             compare_commit_sha = str(evidence.get("head_sha") or latest_sha or "").strip()
             for change in evidence.get("compare_file_changes") or []:
                 if isinstance(change, dict):
-                    record = phase2_file_change_raw_source(
+                    record = github_evidence_file_change_raw_source(
                         context,
                         change,
                         project_id=current_project_id,
                         repo=repo,
                         commit_sha=compare_commit_sha,
                         metadata={
-                            **phase2_common_raw_source_metadata(context, "commit_patch"),
+                            **github_evidence_common_raw_source_metadata(context, "commit_patch"),
                             **evidence_metadata,
                             "commit_message": "Compare previous to latest",
                             "commit_date": "",
@@ -15930,8 +15930,8 @@ def build_github_raw_source_records_from_context(
                         records.append(record)
 
         if len(records) == before_count:
-            raw_text = phase2_context_raw_json(context)
-            fallback = phase2_raw_source_from_context(
+            raw_text = github_evidence_context_raw_json(context)
+            fallback = github_evidence_raw_source_from_context(
                 context,
                 project_id=current_project_id,
                 repo=repo,
@@ -15940,7 +15940,7 @@ def build_github_raw_source_records_from_context(
                 commit_sha=latest_sha,
                 raw_text=raw_text,
                 metadata={
-                    **phase2_common_raw_source_metadata(context, "repo_context"),
+                    **github_evidence_common_raw_source_metadata(context, "repo_context"),
                     "summary": f"Serialized GitHub context for {repo or current_project_id}",
                     "raw_content_kind": "serialized_repo_context",
                     "error": str(context.get("error") or ""),
@@ -15952,7 +15952,7 @@ def build_github_raw_source_records_from_context(
     return records
 
 
-def phase2_commit_patch_records(
+def github_evidence_commit_patch_records(
     context: dict[str, Any],
     commit: dict[str, Any],
     *,
@@ -15962,7 +15962,7 @@ def phase2_commit_patch_records(
 ) -> list[dict[str, Any]]:
     commit_sha = str(commit.get("sha") or "").strip()
     metadata = {
-        **phase2_common_raw_source_metadata(context, "commit_patch"),
+        **github_evidence_common_raw_source_metadata(context, "commit_patch"),
         **evidence_metadata,
         "commit_message": str(commit.get("message") or ""),
         "commit_date": str(commit.get("date") or ""),
@@ -15974,7 +15974,7 @@ def phase2_commit_patch_records(
     for change in commit.get("file_changes") or []:
         if not isinstance(change, dict):
             continue
-        record = phase2_file_change_raw_source(
+        record = github_evidence_file_change_raw_source(
             context,
             change,
             project_id=project_id,
@@ -15987,7 +15987,7 @@ def phase2_commit_patch_records(
     return records
 
 
-def phase2_file_change_raw_source(
+def github_evidence_file_change_raw_source(
     context: dict[str, Any],
     change: dict[str, Any],
     *,
@@ -16000,7 +16000,7 @@ def phase2_file_change_raw_source(
     if not patch.strip():
         return None
     path = str(change.get("filename") or "").strip()
-    return phase2_raw_source_from_context(
+    return github_evidence_raw_source_from_context(
         context,
         project_id=project_id,
         repo=repo,
@@ -16023,13 +16023,13 @@ def phase2_file_change_raw_source(
     )
 
 
-def persist_github_context_phase2_raw_sources(
+def persist_github_evidence_raw_sources(
     repo_contexts: dict[str, Any] | list[dict[str, Any]],
     *,
     project_id: str = "",
     project_name: str = "",
 ) -> dict[str, Any]:
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
             "written_count": 0,
@@ -16052,15 +16052,15 @@ def persist_github_context_phase2_raw_sources(
             source_ids.append(str(saved.get("source_id") or ""))
         except Exception as error:  # pragma: no cover - defensive sync side effect
             errors.append(str(error))
-            logger.warning("Phase 2 raw source persistence failed: %s", error)
+            logger.warning("GitHub evidence raw source persistence failed: %s", error)
 
     try:
-        counts = evidence_memory.get_phase2_memory_counts()
+        counts = evidence_memory.get_github_evidence_memory_counts()
         raw_summary = evidence_memory.github_raw_source_stats()
     except Exception as error:  # pragma: no cover - defensive sync side effect
         errors.append(str(error))
-        counts = github_context_phase2_zero_counts()
-        raw_summary = github_context_phase2_zero_raw_summary()
+        counts = github_evidence_zero_counts()
+        raw_summary = github_evidence_zero_raw_summary()
 
     return {
         "enabled": True,
@@ -16073,23 +16073,23 @@ def persist_github_context_phase2_raw_sources(
     }
 
 
-def safe_phase2_preview_limit(limit: int | str | None) -> int:
+def safe_github_evidence_preview_limit(limit: int | str | None) -> int:
     try:
-        parsed = int(limit if limit is not None else GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)
+        parsed = int(limit if limit is not None else GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)
     except (TypeError, ValueError):
-        parsed = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT
+        parsed = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT
     if parsed < 1:
-        return GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT
-    return max(1, min(parsed, GITHUB_CONTEXT_PHASE2_PREVIEW_MAX_LIMIT))
+        return GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT
+    return max(1, min(parsed, GITHUB_EVIDENCE_PREVIEW_MAX_LIMIT))
 
 
-def phase2_raw_source_preview_summary(record: dict[str, Any]) -> str:
+def github_evidence_raw_source_preview_summary(record: dict[str, Any]) -> str:
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     source_type = str(record.get("source_type") or "")
     repo = str(record.get("repo") or "")
     path = str(record.get("path") or "")
     if metadata.get("summary"):
-        return preview_truncate(metadata["summary"], GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+        return preview_truncate(metadata["summary"], GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
     if source_type == "commit_patch":
         parts = [
             str(metadata.get("commit_message") or "").strip(),
@@ -16100,13 +16100,13 @@ def phase2_raw_source_preview_summary(record: dict[str, Any]) -> str:
         ]
         summary = " | ".join(part for part in parts if part)
         if summary:
-            return preview_truncate(summary, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            return preview_truncate(summary, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
     if source_type == "readme":
-        return preview_truncate(f"README for {repo or record.get('project_id') or 'repository'}", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
-    return preview_truncate(record.get("raw_text") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+        return preview_truncate(f"README for {repo or record.get('project_id') or 'repository'}", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
+    return preview_truncate(record.get("raw_text") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
 
 
-def phase2_raw_source_preview_item(record: dict[str, Any]) -> dict[str, Any]:
+def github_evidence_raw_source_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     raw_text = str(record.get("raw_text") or "")
     return {
         "source_id": str(record.get("source_id") or ""),
@@ -16118,41 +16118,41 @@ def phase2_raw_source_preview_item(record: dict[str, Any]) -> dict[str, Any]:
         "raw_hash": str(record.get("raw_hash") or ""),
         "raw_chars": len(raw_text),
         "created_at": str(record.get("created_at") or ""),
-        "summary": phase2_raw_source_preview_summary(record),
+        "summary": github_evidence_raw_source_preview_summary(record),
         "raw_available": bool(raw_text),
     }
 
 
-def get_github_context_phase2_preview(
+def get_github_evidence_preview(
     project_id: str | None = None,
-    limit: int | str = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT,
+    limit: int | str = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    safe_limit_value = safe_phase2_preview_limit(limit)
+    safe_limit_value = safe_github_evidence_preview_limit(limit)
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
 
     try:
         records = evidence_memory.read_github_raw_sources(project_id=requested_project_id or None)
     except Exception as error:  # pragma: no cover - defensive preview safety
-        logger.warning("GitHub context Phase 2 preview read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence preview read failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": "GitHub context Phase 2 preview could not be read.",
+            "message": "GitHub context GitHub evidence preview could not be read.",
             "errors": [str(error)],
         }
 
@@ -16161,10 +16161,10 @@ def get_github_context_phase2_preview(
         key=lambda record: (str(record.get("created_at") or ""), str(record.get("source_id") or "")),
         reverse=True,
     )
-    items = [phase2_raw_source_preview_item(record) for record in records[:safe_limit_value]]
+    items = [github_evidence_raw_source_preview_item(record) for record in records[:safe_limit_value]]
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "limit": safe_limit_value,
         "count": len(items),
@@ -16173,22 +16173,22 @@ def get_github_context_phase2_preview(
     }
 
 
-def chunk_phase2_raw_sources(
+def chunk_github_evidence_raw_sources(
     project_id: str | None = None,
     limit: int | str | None = None,
 ) -> dict[str, Any]:
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_raw_sources": 0,
             "created_chunks": 0,
             "updated_chunks": 0,
             "created_or_updated_chunks": 0,
             "chunks_count": 0,
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16196,27 +16196,27 @@ def chunk_phase2_raw_sources(
     except (TypeError, ValueError):
         safe_limit = None
     try:
-        return evidence_chunker.chunk_phase2_raw_sources(
+        return evidence_chunker.chunk_github_evidence_raw_sources(
             project_id=requested_project_id or None,
             limit=safe_limit,
         )
     except Exception as error:  # pragma: no cover - defensive route safety
-        logger.warning("GitHub context Phase 2 chunking failed: %s", error)
+        logger.warning("GitHub context GitHub evidence chunking failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_raw_sources": 0,
             "created_chunks": 0,
             "updated_chunks": 0,
             "created_or_updated_chunks": 0,
             "chunks_count": 0,
-            "message": "Phase 2 evidence chunking failed.",
+            "message": "GitHub evidence evidence chunking failed.",
             "errors": [str(error)],
         }
 
 
-def phase2_chunk_preview_item(record: dict[str, Any]) -> dict[str, Any]:
+def github_evidence_chunk_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     text = str(record.get("text") or "")
     return {
         "chunk_id": str(record.get("chunk_id") or ""),
@@ -16226,7 +16226,7 @@ def phase2_chunk_preview_item(record: dict[str, Any]) -> dict[str, Any]:
         "path": str(record.get("path") or ""),
         "symbol": str(record.get("symbol") or ""),
         "chunk_type": str(record.get("chunk_type") or "unknown"),
-        "summary": preview_truncate(record.get("summary") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS),
+        "summary": preview_truncate(record.get("summary") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS),
         "keywords": record.get("keywords") if isinstance(record.get("keywords"), list) else [],
         "technical_tags": record.get("technical_tags") if isinstance(record.get("technical_tags"), list) else [],
         "text_chars": len(text),
@@ -16234,21 +16234,21 @@ def phase2_chunk_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_github_context_phase2_chunks_preview(
+def get_github_evidence_chunks_preview(
     project_id: str | None = None,
-    limit: int | str = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT,
+    limit: int | str = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    safe_limit_value = safe_phase2_preview_limit(limit)
+    safe_limit_value = safe_github_evidence_preview_limit(limit)
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16258,25 +16258,25 @@ def get_github_context_phase2_chunks_preview(
             else evidence_memory.read_records(evidence_memory.EVIDENCE_CHUNKS)
         )
     except Exception as error:  # pragma: no cover - defensive preview safety
-        logger.warning("GitHub context Phase 2 chunk preview read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence chunk preview read failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": "GitHub context Phase 2 chunk preview could not be read.",
+            "message": "GitHub context GitHub evidence chunk preview could not be read.",
             "errors": [str(error)],
         }
     records = sorted(
         records,
         key=lambda record: (str(record.get("project_id") or ""), str(record.get("chunk_id") or "")),
     )
-    items = [phase2_chunk_preview_item(record) for record in records[:safe_limit_value]]
+    items = [github_evidence_chunk_preview_item(record) for record in records[:safe_limit_value]]
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "limit": safe_limit_value,
         "count": len(items),
@@ -16285,20 +16285,20 @@ def get_github_context_phase2_chunks_preview(
     }
 
 
-def build_phase2_raw_change_summaries(
+def build_github_evidence_raw_change_summaries(
     project_id: str | None = None,
     limit: int | str | None = None,
 ) -> dict[str, Any]:
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_chunks": 0,
             "created_or_updated_summaries": 0,
             "raw_change_summaries_count": 0,
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16306,25 +16306,25 @@ def build_phase2_raw_change_summaries(
     except (TypeError, ValueError):
         safe_limit = None
     try:
-        return evidence_change_summary.build_phase2_raw_change_summaries(
+        return evidence_change_summary.build_github_evidence_raw_change_summaries(
             project_id=requested_project_id or None,
             limit=safe_limit,
         )
     except Exception as error:  # pragma: no cover - defensive route safety
-        logger.warning("GitHub context Phase 2 raw change summary extraction failed: %s", error)
+        logger.warning("GitHub context GitHub evidence raw change summary extraction failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_chunks": 0,
             "created_or_updated_summaries": 0,
             "raw_change_summaries_count": 0,
-            "message": "Phase 2 raw change summary extraction failed.",
+            "message": "GitHub evidence raw change summary extraction failed.",
             "errors": [str(error)],
         }
 
 
-def phase2_change_summary_preview_item(record: dict[str, Any]) -> dict[str, Any]:
+def github_evidence_change_summary_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "change_id": str(record.get("change_id") or ""),
         "project_id": str(record.get("project_id") or ""),
@@ -16332,9 +16332,9 @@ def phase2_change_summary_preview_item(record: dict[str, Any]) -> dict[str, Any]
         "files_changed": record.get("files_changed") if isinstance(record.get("files_changed"), list) else [],
         "symbols_changed": record.get("symbols_changed") if isinstance(record.get("symbols_changed"), list) else [],
         "raw_change_type": record.get("raw_change_type") if isinstance(record.get("raw_change_type"), list) else [],
-        "what_changed": preview_truncate(record.get("what_changed") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS),
+        "what_changed": preview_truncate(record.get("what_changed") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS),
         "direct_code_evidence": [
-            preview_truncate(item, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            preview_truncate(item, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
             for item in (record.get("direct_code_evidence") if isinstance(record.get("direct_code_evidence"), list) else [])
         ],
         "uncertain_intent": record.get("uncertain_intent") if isinstance(record.get("uncertain_intent"), list) else [],
@@ -16342,21 +16342,21 @@ def phase2_change_summary_preview_item(record: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def get_github_context_phase2_change_summaries_preview(
+def get_github_evidence_change_summaries_preview(
     project_id: str | None = None,
-    limit: int | str = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT,
+    limit: int | str = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    safe_limit_value = safe_phase2_preview_limit(limit)
+    safe_limit_value = safe_github_evidence_preview_limit(limit)
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16366,25 +16366,25 @@ def get_github_context_phase2_change_summaries_preview(
             else evidence_memory.read_records(evidence_memory.RAW_CHANGE_SUMMARIES)
         )
     except Exception as error:  # pragma: no cover - defensive preview safety
-        logger.warning("GitHub context Phase 2 raw change summary preview read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence raw change summary preview read failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": "GitHub context Phase 2 raw change summary preview could not be read.",
+            "message": "GitHub context GitHub evidence raw change summary preview could not be read.",
             "errors": [str(error)],
         }
     records = sorted(
         records,
         key=lambda record: (str(record.get("project_id") or ""), str(record.get("change_id") or "")),
     )
-    items = [phase2_change_summary_preview_item(record) for record in records[:safe_limit_value]]
+    items = [github_evidence_change_summary_preview_item(record) for record in records[:safe_limit_value]]
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "limit": safe_limit_value,
         "count": len(items),
@@ -16393,21 +16393,21 @@ def get_github_context_phase2_change_summaries_preview(
     }
 
 
-def build_phase2_evidence_cards(
+def build_github_evidence_cards(
     project_id: str | None = None,
     limit: int | str | None = None,
 ) -> dict[str, Any]:
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_summaries": 0,
             "created_or_updated_evidence_cards": 0,
             "skipped_summaries": 0,
             "evidence_cards_count": 0,
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16415,42 +16415,42 @@ def build_phase2_evidence_cards(
     except (TypeError, ValueError):
         safe_limit = None
     try:
-        return evidence_card_extractor.build_phase2_evidence_cards(
+        return evidence_card_extractor.build_github_evidence_cards(
             project_id=requested_project_id or None,
             limit=safe_limit,
         )
     except Exception as error:  # pragma: no cover - defensive route safety
-        logger.warning("GitHub context Phase 2 evidence card extraction failed: %s", error)
+        logger.warning("GitHub context GitHub evidence evidence card extraction failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_summaries": 0,
             "created_or_updated_evidence_cards": 0,
             "skipped_summaries": 0,
             "evidence_cards_count": 0,
-            "message": "Phase 2 evidence card extraction failed.",
+            "message": "GitHub evidence evidence card extraction failed.",
             "errors": [str(error)],
         }
 
 
-def phase2_evidence_card_preview_item(record: dict[str, Any]) -> dict[str, Any]:
+def github_evidence_card_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "evidence_id": str(record.get("evidence_id") or ""),
         "project_id": str(record.get("project_id") or ""),
         "source_chunk_ids": record.get("source_chunk_ids") if isinstance(record.get("source_chunk_ids"), list) else [],
-        "problem": preview_truncate(record.get("problem") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS),
-        "mechanism": preview_truncate(record.get("mechanism") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS),
+        "problem": preview_truncate(record.get("problem") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS),
+        "mechanism": preview_truncate(record.get("mechanism") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS),
         "implementation_details": [
-            preview_truncate(item, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            preview_truncate(item, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
             for item in (record.get("implementation_details") if isinstance(record.get("implementation_details"), list) else [])
         ],
-        "safe_impact": preview_truncate(record.get("safe_impact") or "", GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS),
+        "safe_impact": preview_truncate(record.get("safe_impact") or "", GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS),
         "resume_angle": str(record.get("resume_angle") or "unknown"),
         "confidence": str(record.get("confidence") or "low"),
         "metric_support": str(record.get("metric_support") or "none"),
         "allowed_claims": [
-            preview_truncate(item, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            preview_truncate(item, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
             for item in (record.get("allowed_claims") if isinstance(record.get("allowed_claims"), list) else [])
         ],
         "forbidden_claims": record.get("forbidden_claims") if isinstance(record.get("forbidden_claims"), list) else [],
@@ -16458,21 +16458,21 @@ def phase2_evidence_card_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_github_context_phase2_evidence_cards_preview(
+def get_github_evidence_cards_preview(
     project_id: str | None = None,
-    limit: int | str = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT,
+    limit: int | str = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    safe_limit_value = safe_phase2_preview_limit(limit)
+    safe_limit_value = safe_github_evidence_preview_limit(limit)
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16482,25 +16482,25 @@ def get_github_context_phase2_evidence_cards_preview(
             else evidence_memory.read_records(evidence_memory.EVIDENCE_CARDS)
         )
     except Exception as error:  # pragma: no cover - defensive preview safety
-        logger.warning("GitHub context Phase 2 evidence card preview read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence evidence card preview read failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": "GitHub context Phase 2 evidence card preview could not be read.",
+            "message": "GitHub context GitHub evidence evidence card preview could not be read.",
             "errors": [str(error)],
         }
     records = sorted(
         records,
         key=lambda record: (str(record.get("project_id") or ""), str(record.get("evidence_id") or "")),
     )
-    items = [phase2_evidence_card_preview_item(record) for record in records[:safe_limit_value]]
+    items = [github_evidence_card_preview_item(record) for record in records[:safe_limit_value]]
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "limit": safe_limit_value,
         "count": len(items),
@@ -16509,21 +16509,21 @@ def get_github_context_phase2_evidence_cards_preview(
     }
 
 
-def build_phase2_capability_facts(
+def build_github_evidence_capability_facts(
     project_id: str | None = None,
     limit: int | str | None = None,
 ) -> dict[str, Any]:
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_evidence_cards": 0,
             "created_or_updated_capability_facts": 0,
             "skipped_groups": 0,
             "capability_facts_count": 0,
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16531,26 +16531,26 @@ def build_phase2_capability_facts(
     except (TypeError, ValueError):
         safe_limit = None
     try:
-        return capability_extractor.build_phase2_capability_facts(
+        return capability_extractor.build_github_evidence_capability_facts(
             project_id=requested_project_id or None,
             limit=safe_limit,
         )
     except Exception as error:  # pragma: no cover - defensive route safety
-        logger.warning("GitHub context Phase 2 capability fact extraction failed: %s", error)
+        logger.warning("GitHub context GitHub evidence capability fact extraction failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "processed_evidence_cards": 0,
             "created_or_updated_capability_facts": 0,
             "skipped_groups": 0,
             "capability_facts_count": 0,
-            "message": "Phase 2 capability fact extraction failed.",
+            "message": "GitHub evidence capability fact extraction failed.",
             "errors": [str(error)],
         }
 
 
-def phase2_capability_fact_preview_item(record: dict[str, Any]) -> dict[str, Any]:
+def github_evidence_capability_fact_preview_item(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "capability_id": str(record.get("capability_id") or ""),
         "project_id": str(record.get("project_id") or ""),
@@ -16558,12 +16558,12 @@ def phase2_capability_fact_preview_item(record: dict[str, Any]) -> dict[str, Any
         "present": bool(record.get("present")),
         "confidence": str(record.get("confidence") or "low"),
         "mechanisms": [
-            preview_truncate(item, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            preview_truncate(item, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
             for item in (record.get("mechanisms") if isinstance(record.get("mechanisms"), list) else [])
         ],
         "source_evidence_ids": record.get("source_evidence_ids") if isinstance(record.get("source_evidence_ids"), list) else [],
         "allowed_resume_claims": [
-            preview_truncate(item, GITHUB_CONTEXT_PHASE2_PREVIEW_SUMMARY_CHARS)
+            preview_truncate(item, GITHUB_EVIDENCE_PREVIEW_SUMMARY_CHARS)
             for item in (record.get("allowed_resume_claims") if isinstance(record.get("allowed_resume_claims"), list) else [])
         ],
         "forbidden_claims": record.get("forbidden_claims") if isinstance(record.get("forbidden_claims"), list) else [],
@@ -16571,21 +16571,21 @@ def phase2_capability_fact_preview_item(record: dict[str, Any]) -> dict[str, Any
     }
 
 
-def get_github_context_phase2_capability_facts_preview(
+def get_github_evidence_capability_facts_preview(
     project_id: str | None = None,
-    limit: int | str = GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT,
+    limit: int | str = GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    safe_limit_value = safe_phase2_preview_limit(limit)
+    safe_limit_value = safe_github_evidence_preview_limit(limit)
     requested_project_id = str(project_id or "").strip()
-    if not is_github_context_phase2_enabled():
+    if not is_github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": GITHUB_CONTEXT_PHASE2_DISABLED_MESSAGE,
+            "message": GITHUB_EVIDENCE_DISABLED_MESSAGE,
             "errors": [],
         }
     try:
@@ -16595,25 +16595,25 @@ def get_github_context_phase2_capability_facts_preview(
             else evidence_memory.read_records(evidence_memory.CAPABILITY_FACTS)
         )
     except Exception as error:  # pragma: no cover - defensive preview safety
-        logger.warning("GitHub context Phase 2 capability fact preview read failed: %s", error)
+        logger.warning("GitHub context GitHub evidence capability fact preview read failed: %s", error)
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit_value,
             "count": 0,
             "items": [],
-            "message": "GitHub context Phase 2 capability fact preview could not be read.",
+            "message": "GitHub context GitHub evidence capability fact preview could not be read.",
             "errors": [str(error)],
         }
     records = sorted(
         records,
         key=lambda record: (str(record.get("project_id") or ""), str(record.get("capability_type") or "")),
     )
-    items = [phase2_capability_fact_preview_item(record) for record in records[:safe_limit_value]]
+    items = [github_evidence_capability_fact_preview_item(record) for record in records[:safe_limit_value]]
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "limit": safe_limit_value,
         "count": len(items),
@@ -16857,7 +16857,7 @@ def latest_status_timestamp(
 
 def get_github_context_status_v2() -> dict[str, Any]:
     """
-    Phase 1 status aggregation.
+    GitHub context status aggregation.
     Must not trigger GitHub sync or resume generation.
     """
     errors: list[str] = []
@@ -17173,7 +17173,7 @@ def chroma_github_preview_items(project_id: str, limit: int, errors: list[str]) 
 
 def get_github_context_preview_v2(project_id: str | None = None, limit: int = GITHUB_CONTEXT_PREVIEW_DEFAULT_LIMIT) -> dict[str, Any]:
     """
-    Phase 1 bounded preview aggregation.
+    GitHub context bounded preview aggregation.
     Must not trigger GitHub sync, resume generation, or raw inspect.
     """
     errors: list[str] = []
@@ -17337,7 +17337,7 @@ def chroma_github_raw_by_source_id(source_id: str, max_chars: int, errors: list[
 
 def get_github_context_raw_v2(source_id: str, max_chars: int = GITHUB_CONTEXT_RAW_DEFAULT_CHARS) -> dict[str, Any]:
     """
-    Phase 1 bounded raw inspect.
+    GitHub context bounded raw inspect.
     Must not trigger GitHub sync, Chroma migration, resume generation, or unbounded reads.
     """
     safe_chars = safe_raw_max_chars(max_chars)
@@ -17634,17 +17634,17 @@ def fetch_github_context_api(
     if fetched_contexts:
         path = agent.save_github_context_output(fetched_contexts)
 
-    phase2_raw_persistence_result = None
-    if is_github_context_phase2_enabled():
+    github_evidence_raw_persistence_result = None
+    if is_github_evidence_enabled():
         try:
-            phase2_raw_persistence_result = persist_github_context_phase2_raw_sources(
+            github_evidence_raw_persistence_result = persist_github_evidence_raw_sources(
                 repo_contexts,
                 project_id=project_id,
                 project_name=project_name,
             )
         except Exception as error:  # pragma: no cover - defensive sync compatibility
-            logger.warning("GitHub context Phase 2 raw persistence failed: %s", error)
-            phase2_raw_persistence_result = {
+            logger.warning("GitHub context GitHub evidence raw persistence failed: %s", error)
+            github_evidence_raw_persistence_result = {
                 "enabled": True,
                 "written_count": 0,
                 "raw_sources_count": 0,
@@ -17702,8 +17702,8 @@ def fetch_github_context_api(
         "scan_state_path": str(agent.GITHUB_REPO_SCAN_STATE_PATH),
         "context": repo_contexts,
     }
-    if phase2_raw_persistence_result is not None:
-        response["phase2_raw_persistence"] = phase2_raw_persistence_result
+    if github_evidence_raw_persistence_result is not None:
+        response["github_evidence_raw_persistence"] = github_evidence_raw_persistence_result
     return response
 
 
@@ -18550,25 +18550,25 @@ def github_context_status():
     return status
 
 
-@app.get("/api/github/context/phase2/status")
-def github_context_phase2_status():
-    status = get_github_context_phase2_status()
+@app.get("/api/github/evidence/status")
+def github_evidence_status():
+    status = get_github_evidence_status()
     logger.info(
-        "GitHub context Phase 2 status requested: enabled=%s available=%s",
+        "GitHub context GitHub evidence status requested: enabled=%s available=%s",
         status["enabled"],
         status["available"],
     )
     return status
 
 
-@app.get("/api/github/context/phase2/preview")
-def github_context_phase2_preview(
+@app.get("/api/github/evidence/preview")
+def github_evidence_preview(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
 ):
-    preview = get_github_context_phase2_preview(project_id=project_id, limit=limit)
+    preview = get_github_evidence_preview(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
+        "GitHub context GitHub evidence preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
         preview.get("enabled"),
         project_id,
         preview.get("limit"),
@@ -18578,7 +18578,7 @@ def github_context_phase2_preview(
     return preview
 
 
-def phase2_pipeline_body_fields(body: Optional[Phase2PipelineBuildBody]) -> set[str]:
+def github_evidence_pipeline_body_fields(body: Optional[GitHubEvidencePipelineBuildBody]) -> set[str]:
     if body is None:
         return set()
     fields = getattr(body, "model_fields_set", None)
@@ -18587,15 +18587,15 @@ def phase2_pipeline_body_fields(body: Optional[Phase2PipelineBuildBody]) -> set[
     return set(fields)
 
 
-@app.post("/api/github/context/phase2/build")
-def github_context_phase2_build(
-    body: Optional[Phase2PipelineBuildBody] = None,
+@app.post("/api/github/evidence/build")
+def github_evidence_build(
+    body: Optional[GitHubEvidencePipelineBuildBody] = None,
     project_id: str = "",
     limit: str = Query(default=""),
     stages: str = Query(default=""),
     continue_on_error: bool = Query(default=True),
 ):
-    body_fields = phase2_pipeline_body_fields(body)
+    body_fields = github_evidence_pipeline_body_fields(body)
     requested_project_id = project_id
     requested_limit: int | str | None = limit if limit != "" else None
     requested_stages: list[str] | str | None = stages if stages.strip() else None
@@ -18610,7 +18610,7 @@ def github_context_phase2_build(
         if "continue_on_error" in body_fields:
             requested_continue_on_error = body.continue_on_error
 
-    result = evidence_pipeline.run_phase2_evidence_pipeline(
+    result = evidence_pipeline.run_github_evidence_pipeline(
         project_id=requested_project_id,
         limit=requested_limit,
         stages=requested_stages,
@@ -18619,7 +18619,7 @@ def github_context_phase2_build(
     if any(isinstance(error, dict) and error.get("type") == "invalid_stage" for error in result.get("errors", [])):
         raise HTTPException(status_code=400, detail=result)
     logger.info(
-        "GitHub context Phase 2 build requested: enabled=%s project_id=%s stages=%s ran=%s errors=%s",
+        "GitHub context GitHub evidence build requested: enabled=%s project_id=%s stages=%s ran=%s errors=%s",
         result.get("enabled"),
         requested_project_id,
         result.get("requested_stages"),
@@ -18629,19 +18629,19 @@ def github_context_phase2_build(
     return result
 
 
-@app.get("/api/github/context/phase2/inspect")
-def github_context_phase2_inspect(
+@app.get("/api/github/evidence/inspect")
+def github_evidence_inspect(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
     include_samples: bool = True,
 ):
-    result = evidence_pipeline.get_phase2_project_inspect(
+    result = evidence_pipeline.inspect_github_evidence_memory(
         project_id=project_id,
         limit=evidence_pipeline.safe_sample_limit(limit),
         include_samples=include_samples,
     )
     logger.info(
-        "GitHub context Phase 2 inspect requested: enabled=%s project_id=%s limit=%s include_samples=%s errors=%s",
+        "GitHub context GitHub evidence inspect requested: enabled=%s project_id=%s limit=%s include_samples=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("limit"),
@@ -18651,11 +18651,11 @@ def github_context_phase2_inspect(
     return result
 
 
-@app.get("/api/github/context/phase2/health")
-def github_context_phase2_health(project_id: str = ""):
-    result = evidence_pipeline.get_phase2_pipeline_health(project_id=project_id)
+@app.get("/api/github/evidence/health")
+def github_evidence_health(project_id: str = ""):
+    result = evidence_pipeline.get_github_evidence_health(project_id=project_id)
     logger.info(
-        "GitHub context Phase 2 health requested: enabled=%s project_id=%s next=%s errors=%s",
+        "GitHub context GitHub evidence health requested: enabled=%s project_id=%s next=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("next_recommended_action"),
@@ -18664,14 +18664,14 @@ def github_context_phase2_health(project_id: str = ""):
     return result
 
 
-@app.post("/api/github/context/phase2/chunk")
-def github_context_phase2_chunk(
+@app.post("/api/github/evidence/chunk")
+def github_evidence_chunk(
     project_id: str = "",
     limit: str = Query(default=""),
 ):
-    result = chunk_phase2_raw_sources(project_id=project_id, limit=limit)
+    result = chunk_github_evidence_raw_sources(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 chunk requested: enabled=%s project_id=%s processed_raw_sources=%s chunks=%s errors=%s",
+        "GitHub context GitHub evidence chunk requested: enabled=%s project_id=%s processed_raw_sources=%s chunks=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("processed_raw_sources"),
@@ -18681,14 +18681,14 @@ def github_context_phase2_chunk(
     return result
 
 
-@app.get("/api/github/context/phase2/chunks/preview")
-def github_context_phase2_chunks_preview(
+@app.get("/api/github/evidence/chunks/preview")
+def github_evidence_chunks_preview(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
 ):
-    preview = get_github_context_phase2_chunks_preview(project_id=project_id, limit=limit)
+    preview = get_github_evidence_chunks_preview(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 chunks preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
+        "GitHub context GitHub evidence chunks preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
         preview.get("enabled"),
         project_id,
         preview.get("limit"),
@@ -18698,14 +18698,14 @@ def github_context_phase2_chunks_preview(
     return preview
 
 
-@app.post("/api/github/context/phase2/summarize-changes")
-def github_context_phase2_summarize_changes(
+@app.post("/api/github/evidence/summarize-changes")
+def github_evidence_summarize_changes(
     project_id: str = "",
     limit: str = Query(default=""),
 ):
-    result = build_phase2_raw_change_summaries(project_id=project_id, limit=limit)
+    result = build_github_evidence_raw_change_summaries(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 summarize changes requested: enabled=%s project_id=%s processed_chunks=%s summaries=%s errors=%s",
+        "GitHub context GitHub evidence summarize changes requested: enabled=%s project_id=%s processed_chunks=%s summaries=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("processed_chunks"),
@@ -18715,14 +18715,14 @@ def github_context_phase2_summarize_changes(
     return result
 
 
-@app.get("/api/github/context/phase2/change-summaries/preview")
-def github_context_phase2_change_summaries_preview(
+@app.get("/api/github/evidence/change-summaries/preview")
+def github_evidence_change_summaries_preview(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
 ):
-    preview = get_github_context_phase2_change_summaries_preview(project_id=project_id, limit=limit)
+    preview = get_github_evidence_change_summaries_preview(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 change summaries preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
+        "GitHub context GitHub evidence change summaries preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
         preview.get("enabled"),
         project_id,
         preview.get("limit"),
@@ -18732,14 +18732,14 @@ def github_context_phase2_change_summaries_preview(
     return preview
 
 
-@app.post("/api/github/context/phase2/build-evidence-cards")
-def github_context_phase2_build_evidence_cards(
+@app.post("/api/github/evidence/build-evidence-cards")
+def github_evidence_build_evidence_cards(
     project_id: str = "",
     limit: str = Query(default=""),
 ):
-    result = build_phase2_evidence_cards(project_id=project_id, limit=limit)
+    result = build_github_evidence_cards(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 evidence card build requested: enabled=%s project_id=%s processed_summaries=%s cards=%s skipped=%s errors=%s",
+        "GitHub context GitHub evidence evidence card build requested: enabled=%s project_id=%s processed_summaries=%s cards=%s skipped=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("processed_summaries"),
@@ -18750,14 +18750,14 @@ def github_context_phase2_build_evidence_cards(
     return result
 
 
-@app.get("/api/github/context/phase2/evidence-cards/preview")
-def github_context_phase2_evidence_cards_preview(
+@app.get("/api/github/evidence/evidence-cards/preview")
+def github_evidence_cards_preview(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
 ):
-    preview = get_github_context_phase2_evidence_cards_preview(project_id=project_id, limit=limit)
+    preview = get_github_evidence_cards_preview(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 evidence cards preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
+        "GitHub context GitHub evidence evidence cards preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
         preview.get("enabled"),
         project_id,
         preview.get("limit"),
@@ -18767,14 +18767,14 @@ def github_context_phase2_evidence_cards_preview(
     return preview
 
 
-@app.post("/api/github/context/phase2/build-capability-facts")
-def github_context_phase2_build_capability_facts(
+@app.post("/api/github/evidence/build-capability-facts")
+def github_evidence_build_capability_facts(
     project_id: str = "",
     limit: str = Query(default=""),
 ):
-    result = build_phase2_capability_facts(project_id=project_id, limit=limit)
+    result = build_github_evidence_capability_facts(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 capability fact build requested: enabled=%s project_id=%s processed_cards=%s facts=%s skipped=%s errors=%s",
+        "GitHub context GitHub evidence capability fact build requested: enabled=%s project_id=%s processed_cards=%s facts=%s skipped=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("processed_evidence_cards"),
@@ -18785,14 +18785,14 @@ def github_context_phase2_build_capability_facts(
     return result
 
 
-@app.get("/api/github/context/phase2/capability-facts/preview")
-def github_context_phase2_capability_facts_preview(
+@app.get("/api/github/evidence/capability-facts/preview")
+def github_evidence_capability_facts_preview(
     project_id: str = "",
-    limit: str = Query(default=str(GITHUB_CONTEXT_PHASE2_PREVIEW_DEFAULT_LIMIT)),
+    limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
 ):
-    preview = get_github_context_phase2_capability_facts_preview(project_id=project_id, limit=limit)
+    preview = get_github_evidence_capability_facts_preview(project_id=project_id, limit=limit)
     logger.info(
-        "GitHub context Phase 2 capability facts preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
+        "GitHub context GitHub evidence capability facts preview requested: enabled=%s project_id=%s limit=%s returned=%s errors=%s",
         preview.get("enabled"),
         project_id,
         preview.get("limit"),
@@ -18802,16 +18802,16 @@ def github_context_phase2_capability_facts_preview(
     return preview
 
 
-@app.post("/api/github/context/phase3/build")
-def github_context_phase3_build():
-    result = phase3_pipeline.run_phase3_diff_memory_pipeline()
-    payload = phase3_pipeline.pipeline_result_to_dict(result)
+@app.post("/api/github/change-memory/build")
+def github_context_project_change_build():
+    result = project_change_pipeline.run_project_change_memory_pipeline()
+    payload = project_change_pipeline.pipeline_result_to_dict(result)
     ok = bool(payload.get("enabled")) and payload.get("status") not in {"disabled", "failed"}
-    message = "Phase 3 diff memory build completed." if ok else "Phase 3 diff memory build did not complete."
+    message = "project change memory build completed." if ok else "project change memory build did not complete."
     if payload.get("status") == "disabled":
-        message = phase3_pipeline.PHASE3_DISABLED_MESSAGE
+        message = project_change_pipeline.PROJECT_CHANGE_DISABLED_MESSAGE
     logger.info(
-        "GitHub context Phase 3 build requested: enabled=%s status=%s raw_inputs=%s "
+        "GitHub context project change memory build requested: enabled=%s status=%s raw_inputs=%s "
         "diff_units=%s summaries=%s qualified_cards=%s capabilities=%s skipped=%s errors=%s",
         payload.get("enabled"),
         payload.get("status"),
@@ -18826,17 +18826,17 @@ def github_context_phase3_build():
     return {"ok": ok, "message": message, **payload}
 
 
-@app.get("/api/github/context/phase3/inspect")
-def github_context_phase3_inspect(
+@app.get("/api/github/change-memory/inspect")
+def github_context_project_change_inspect(
     project_id: str = "",
-    sample_limit: str = Query(default=str(phase3_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
+    sample_limit: str = Query(default=str(project_change_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
 ):
-    result = phase3_pipeline.get_phase3_project_inspect(
+    result = project_change_pipeline.inspect_project_change_memory(
         project_id=project_id or None,
         sample_limit=sample_limit,
     )
     logger.info(
-        "GitHub context Phase 3 inspect requested: enabled=%s project_id=%s sample_limit=%s errors=%s",
+        "GitHub context project change memory inspect requested: enabled=%s project_id=%s sample_limit=%s errors=%s",
         result.get("enabled"),
         project_id,
         result.get("sample_limit", sample_limit),
@@ -18845,11 +18845,11 @@ def github_context_phase3_inspect(
     return result
 
 
-@app.get("/api/github/context/phase3/health")
-def github_context_phase3_health():
-    result = phase3_pipeline.get_phase3_pipeline_health()
+@app.get("/api/github/change-memory/health")
+def github_context_project_change_health():
+    result = project_change_pipeline.get_project_change_health()
     logger.info(
-        "GitHub context Phase 3 health requested: enabled=%s status=%s memory_exists=%s issues=%s",
+        "GitHub context project change memory health requested: enabled=%s status=%s memory_exists=%s issues=%s",
         result.get("enabled"),
         result.get("status"),
         result.get("memory_exists"),
@@ -18910,7 +18910,7 @@ def github_context_raw(
             "source_id": requested_source_id or None,
             "max_chars": safe_chars,
             "raw_text": "",
-            "message": "GitHub context raw inspect is disabled. Set USE_GITHUB_CONTEXT_PHASE2=1 to enable.",
+            "message": "GitHub context raw inspect is disabled. Set USE_GITHUB_EVIDENCE_MEMORY=1 to enable.",
             "errors": [],
         }
 

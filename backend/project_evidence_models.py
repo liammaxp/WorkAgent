@@ -1,4 +1,4 @@
-"""Strict, deterministic Phase 4 evidence and capability memory schemas.
+"""Strict, deterministic project evidence and capability memory schemas.
 
 This module contains data shapes and pure normalization/serialization helpers
 only.  It performs no extraction, persistence, retrieval, or generation.
@@ -18,7 +18,7 @@ import types
 from typing import Any, Mapping, TypeVar, Union, get_args, get_origin, get_type_hints
 
 
-PHASE4_SCHEMA_VERSION = "phase4.v1"
+PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION = "project_evidence_memory.v1"
 MAX_TITLE_LENGTH = 300
 MAX_SUMMARY_LENGTH = 2_000
 MAX_SIGNAL_LENGTH = 1_000
@@ -37,7 +37,7 @@ FORBIDDEN_CONTENT_KEYS = frozenset({
     "full_file_content", "access_token", "api_key", "secret", "password",
     "authorization_header",
 })
-ALLOWED_ID_PREFIXES = frozenset({"p4src_", "p4in_", "p4ef_", "p4cap_", "p4claim_", "p4pm_"})
+ALLOWED_ID_PREFIXES = frozenset({"esr_", "pei_", "pef_", "pcf_", "pcb_", "pem_"})
 ORDER_INSENSITIVE_FIELDS = frozenset({
     "technical_tags",
     "source_evidence_fact_ids",
@@ -48,7 +48,7 @@ ORDER_INSENSITIVE_FIELDS = frozenset({
 })
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_T = TypeVar("_T", bound="Phase4Model")
+_T = TypeVar("_T", bound="ProjectEvidenceModel")
 
 
 class Confidence(str, Enum):
@@ -167,7 +167,7 @@ def _json_safe(value: Any, *, path: str = "value", depth: int = 0) -> Any:
                 raise TypeError(f"{path} keys must be strings")
             normalized_key = key.strip()
             if normalized_key.casefold() in FORBIDDEN_CONTENT_KEYS:
-                raise ValueError(f"forbidden Phase 4 field: {normalized_key}")
+                raise ValueError(f"forbidden project evidence field: {normalized_key}")
             output[normalized_key] = _json_safe(item, path=f"{path}.{normalized_key}", depth=depth + 1)
         return {key: output[key] for key in sorted(output)}
     if isinstance(value, (list, tuple)):
@@ -180,7 +180,7 @@ def _json_safe(value: Any, *, path: str = "value", depth: int = 0) -> Any:
 def _canonical(value: Any, *, field_name: str | None = None) -> Any:
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, Phase4Model):
+    if isinstance(value, ProjectEvidenceModel):
         return _canonical(value.to_dict())
     if isinstance(value, Mapping):
         return {
@@ -202,9 +202,9 @@ def _canonical(value: Any, *, field_name: str | None = None) -> Any:
     raise TypeError(f"unsupported stable-ID value: {type(value).__name__}")
 
 
-def build_phase4_stable_id(prefix: str, project_id: str, normalized_payload: object) -> str:
+def build_project_evidence_stable_id(prefix: str, project_id: str, normalized_payload: object) -> str:
     if prefix not in ALLOWED_ID_PREFIXES:
-        raise ValueError(f"unsupported Phase 4 ID prefix: {prefix!r}")
+        raise ValueError(f"unsupported project evidence ID prefix: {prefix!r}")
     project = _bounded(project_id, "project_id", 300, required=True)
     canonical = _canonical({"project_id": project, "payload": normalized_payload})
     encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -229,14 +229,14 @@ def _decode(annotation: Any, value: Any) -> Any:
         return _decode(choices[0], value)
     if isinstance(annotation, type) and issubclass(annotation, Enum):
         return annotation(value)
-    if isinstance(annotation, type) and issubclass(annotation, Phase4Model):
+    if isinstance(annotation, type) and issubclass(annotation, ProjectEvidenceModel):
         if not isinstance(value, dict):
             raise TypeError("expected an object")
         return annotation.from_dict(value)
     return value
 
 
-class Phase4Model:
+class ProjectEvidenceModel:
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for item in fields(self):
@@ -261,7 +261,7 @@ class Phase4Model:
 def _serialize(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, Phase4Model):
+    if isinstance(value, ProjectEvidenceModel):
         return value.to_dict()
     if isinstance(value, list):
         return [_serialize(item) for item in value]
@@ -271,7 +271,7 @@ def _serialize(value: Any) -> Any:
 
 
 @dataclass(frozen=True)
-class Phase4SourceRef(Phase4Model):
+class EvidenceSourceRef(ProjectEvidenceModel):
     source_type: str
     source_id: str
     project_id: str
@@ -307,12 +307,12 @@ class Phase4SourceRef(Phase4Model):
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceInput(Phase4Model):
+class ProjectEvidenceInput(ProjectEvidenceModel):
     project_id: str
     input_type: str
     title: str
     summary: str
-    source_refs: list[Phase4SourceRef]
+    source_refs: list[EvidenceSourceRef]
     content_hash: str
     input_id: str = ""
     problem_signal: str | None = None
@@ -341,7 +341,7 @@ class Phase4EvidenceInput(Phase4Model):
         for name in ("mechanism_signals", "implementation_signals", "impact_signals"):
             object.__setattr__(self, name, _strings(getattr(self, name), name, MAX_SIGNAL_LENGTH))
         object.__setattr__(self, "technical_tags", _strings(self.technical_tags, "technical_tags", MAX_TAG_LENGTH, sort=True))
-        generated = build_phase4_stable_id("p4in_", project, {
+        generated = build_project_evidence_stable_id("pei_", project, {
             "input_type": self.input_type, "title": self.title, "summary": self.summary,
             "problem_signal": self.problem_signal, "mechanism_signals": self.mechanism_signals,
             "implementation_signals": self.implementation_signals, "impact_signals": self.impact_signals,
@@ -351,10 +351,10 @@ class Phase4EvidenceInput(Phase4Model):
 
 
 @dataclass(frozen=True)
-class Phase4EvidenceFact(Phase4Model):
+class ProjectEvidenceFact(ProjectEvidenceModel):
     project_id: str
     mechanism: str
-    source_refs: list[Phase4SourceRef]
+    source_refs: list[EvidenceSourceRef]
     implementation: list[str] = field(default_factory=list)
     problem: str = ""
     safe_impact: list[str] = field(default_factory=list)
@@ -393,7 +393,7 @@ class Phase4EvidenceFact(Phase4Model):
         if self.quality_score is not None and (isinstance(self.quality_score, bool) or not 0 <= self.quality_score <= 100):
             raise ValueError("quality_score must be between 0 and 100")
         object.__setattr__(self, "quality_breakdown", _json_safe(self.quality_breakdown, path="quality_breakdown"))
-        generated = build_phase4_stable_id("p4ef_", project, {
+        generated = build_project_evidence_stable_id("pef_", project, {
             "problem": self.problem, "mechanism": self.mechanism, "implementation": self.implementation,
             "safe_impact": self.safe_impact, "evidence_type": self.evidence_type,
             "source_refs": self.source_refs, "allowed_claims": self.allowed_claims,
@@ -403,7 +403,7 @@ class Phase4EvidenceFact(Phase4Model):
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityFact(Phase4Model):
+class ProjectCapabilityFact(ProjectEvidenceModel):
     project_id: str
     capability_type: str
     present: bool
@@ -430,12 +430,12 @@ class Phase4CapabilityFact(Phase4Model):
         object.__setattr__(self, "allowed_resume_claims", _strings(self.allowed_resume_claims, "allowed_resume_claims", MAX_CLAIM_LENGTH, sort=True))
         object.__setattr__(self, "forbidden_claims", _strings(self.forbidden_claims, "forbidden_claims", MAX_CLAIM_LENGTH, sort=True))
         object.__setattr__(self, "technical_tags", _strings(self.technical_tags, "technical_tags", MAX_TAG_LENGTH, sort=True))
-        generated = build_phase4_stable_id("p4cap_", project, {"capability_type": self.capability_type, "present": self.present, "source_evidence_fact_ids": ids})
+        generated = build_project_evidence_stable_id("pcf_", project, {"capability_type": self.capability_type, "present": self.present, "source_evidence_fact_ids": ids})
         object.__setattr__(self, "capability_id", self.capability_id or generated)
 
 
 @dataclass(frozen=True)
-class Phase4ClaimBoundary(Phase4Model):
+class ProjectClaimBoundary(ProjectEvidenceModel):
     project_id: str
     subject_type: ClaimSubjectType
     subject_id: str
@@ -459,12 +459,12 @@ class Phase4ClaimBoundary(Phase4Model):
         object.__setattr__(self, "allowed_claims", allowed)
         object.__setattr__(self, "forbidden_claims", forbidden)
         object.__setattr__(self, "notes", _strings(self.notes, "notes", MAX_NOTES_LENGTH))
-        generated = build_phase4_stable_id("p4claim_", project, {"subject_type": self.subject_type, "subject_id": self.subject_id, "allowed_claims": allowed, "forbidden_claims": forbidden})
+        generated = build_project_evidence_stable_id("pcb_", project, {"subject_type": self.subject_type, "subject_id": self.subject_id, "allowed_claims": allowed, "forbidden_claims": forbidden})
         object.__setattr__(self, "boundary_id", self.boundary_id or generated)
 
 
 @dataclass(frozen=True)
-class Phase4PipelineWarning(Phase4Model):
+class ProjectEvidencePipelineWarning(ProjectEvidenceModel):
     code: str
     message: str
     project_id: str | None = None
@@ -482,21 +482,21 @@ class Phase4PipelineWarning(Phase4Model):
 
 
 @dataclass(frozen=True)
-class Phase4ProjectMemory(Phase4Model):
+class ProjectEvidenceMemory(ProjectEvidenceModel):
     project_id: str
     project_name: str
     source_hashes: dict[str, Any] = field(default_factory=dict)
-    evidence_facts: list[Phase4EvidenceFact] = field(default_factory=list)
-    capability_facts: list[Phase4CapabilityFact] = field(default_factory=list)
-    claim_boundaries: list[Phase4ClaimBoundary] = field(default_factory=list)
+    evidence_facts: list[ProjectEvidenceFact] = field(default_factory=list)
+    capability_facts: list[ProjectCapabilityFact] = field(default_factory=list)
+    claim_boundaries: list[ProjectClaimBoundary] = field(default_factory=list)
     quality_summary: dict[str, Any] = field(default_factory=lambda: {"accepted_count": 0, "supporting_count": 0, "weak_count": 0, "rejected_count": 0})
-    warnings: list[Phase4PipelineWarning] = field(default_factory=list)
-    schema_version: str = PHASE4_SCHEMA_VERSION
+    warnings: list[ProjectEvidencePipelineWarning] = field(default_factory=list)
+    schema_version: str = PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION
     project_memory_id: str = ""
 
     def __post_init__(self) -> None:
-        if self.schema_version != PHASE4_SCHEMA_VERSION:
-            raise ValueError(f"schema_version must be {PHASE4_SCHEMA_VERSION!r}")
+        if self.schema_version != PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION:
+            raise ValueError(f"schema_version must be {PROJECT_EVIDENCE_MEMORY_SCHEMA_VERSION!r}")
         project = _bounded(self.project_id, "project_id", 300, required=True)
         object.__setattr__(self, "project_id", project)
         object.__setattr__(self, "project_name", _bounded(self.project_name, "project_name", 300, required=True))
@@ -523,7 +523,7 @@ class Phase4ProjectMemory(Phase4Model):
         if set(summary) != required or any(isinstance(summary[key], bool) or not isinstance(summary[key], int) or summary[key] < 0 for key in required):
             raise ValueError("quality_summary must contain exactly four non-negative integer counts")
         object.__setattr__(self, "quality_summary", summary)
-        generated = build_phase4_stable_id("p4pm_", project, {
+        generated = build_project_evidence_stable_id("pem_", project, {
             "schema_version": self.schema_version,
             "project_id": project,
             "project_name": self.project_name,
@@ -537,7 +537,7 @@ class Phase4ProjectMemory(Phase4Model):
 
 
 @dataclass(frozen=True)
-class Phase4PipelineResult(Phase4Model):
+class ProjectEvidenceBuildResult(ProjectEvidenceModel):
     status: PipelineStatus
     enabled: bool
     projects_processed: int = 0
@@ -547,8 +547,8 @@ class Phase4PipelineResult(Phase4Model):
     items_skipped: int = 0
     memory_written: bool = False
     project_ids: list[str] = field(default_factory=list)
-    warnings: list[Phase4PipelineWarning] = field(default_factory=list)
-    errors: list[Phase4PipelineWarning] = field(default_factory=list)
+    warnings: list[ProjectEvidencePipelineWarning] = field(default_factory=list)
+    errors: list[ProjectEvidencePipelineWarning] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _enum_value(self.status, PipelineStatus, "status"))

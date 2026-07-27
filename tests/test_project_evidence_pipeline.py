@@ -12,25 +12,25 @@ from types import SimpleNamespace
 
 import pytest
 
-import backend.phase4_pipeline as pipeline
-from backend.phase4_capability_taxonomy import Phase4CapabilityTaxonomyValidationReport
-from backend.phase4_input_adapter import Phase4InputSourcePaths
-from backend.phase4_models import Phase4EvidenceInput, Phase4PipelineWarning, Phase4SourceRef
-from backend.phase4_project_memory import load_phase4_project_memory
+import backend.project_evidence_pipeline as pipeline
+from backend.project_capability_taxonomy import ProjectCapabilityTaxonomyValidationReport
+from backend.project_evidence_input import ProjectEvidenceInputSourcePaths
+from backend.project_evidence_models import ProjectEvidenceInput, ProjectEvidencePipelineWarning, EvidenceSourceRef
+from backend.project_evidence_memory import load_project_evidence_memory
 
 
-ENABLED = {pipeline.PHASE4_PROJECT_MEMORY_FLAG: "true"}
-DISABLED_PATHS = Phase4InputSourcePaths(
-    phase2_memory_dir=None,
-    phase3_memory_path=None,
+ENABLED = {pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: "true"}
+DISABLED_PATHS = ProjectEvidenceInputSourcePaths(
+    github_evidence_memory_dir=None,
+    project_change_memory_path=None,
     project_memory_path=None,
     compact_facts_path=None,
 )
 
 
-def evidence_input(project_id: str = "alpha", **changes) -> Phase4EvidenceInput:
-    reference = Phase4SourceRef(
-        source_type="phase3_evidence_card",
+def evidence_input(project_id: str = "alpha", **changes) -> ProjectEvidenceInput:
+    reference = EvidenceSourceRef(
+        source_type="project_change_evidence_card",
         source_id=f"source-{project_id}",
         project_id=project_id,
         content_hash="a" * 64,
@@ -39,7 +39,7 @@ def evidence_input(project_id: str = "alpha", **changes) -> Phase4EvidenceInput:
     )
     values = {
         "project_id": project_id,
-        "input_type": "phase3_evidence_card",
+        "input_type": "project_change_evidence_card",
         "title": "Deterministic project memory persistence",
         "summary": "Structured evidence for a bounded persistence workflow.",
         "problem_signal": "Project memory needed validated replacement.",
@@ -54,7 +54,7 @@ def evidence_input(project_id: str = "alpha", **changes) -> Phase4EvidenceInput:
         "content_hash": "b" * 64,
     }
     values.update(changes)
-    return Phase4EvidenceInput(**values)
+    return ProjectEvidenceInput(**values)
 
 
 def install_loader(monkeypatch, items=None, warnings=()):
@@ -64,13 +64,13 @@ def install_loader(monkeypatch, items=None, warnings=()):
     def load(*_args, **_kwargs):
         return list(records), list(warning_records)
 
-    monkeypatch.setattr(pipeline.input_adapter, "load_phase4_inputs", load)
+    monkeypatch.setattr(pipeline.input_adapter, "load_project_evidence_inputs", load)
     return DISABLED_PATHS
 
 
-def run_fixture(monkeypatch, tmp_path, *, output_name="phase4.json", persist=True):
+def run_fixture(monkeypatch, tmp_path, *, output_name="project_evidence.json", persist=True):
     paths = install_loader(monkeypatch)
-    return pipeline.run_phase4_project_memory_pipeline(
+    return pipeline.run_project_evidence_pipeline(
         source_paths=paths,
         output_path=tmp_path / output_name,
         persist=persist,
@@ -80,18 +80,18 @@ def run_fixture(monkeypatch, tmp_path, *, output_name="phase4.json", persist=Tru
 
 @pytest.mark.parametrize("value", [None, "", "0", "false", "FALSE", "no", "off", " Off "])
 def test_disabled_feature_flag_values(value):
-    environ = {} if value is None else {pipeline.PHASE4_PROJECT_MEMORY_FLAG: value}
-    assert not pipeline.is_phase4_project_memory_enabled(environ)
+    environ = {} if value is None else {pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: value}
+    assert not pipeline.is_project_evidence_memory_enabled(environ)
 
 
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", " On "])
 def test_enabled_feature_flag_values(value):
-    assert pipeline.is_phase4_project_memory_enabled({pipeline.PHASE4_PROJECT_MEMORY_FLAG: value})
+    assert pipeline.is_project_evidence_memory_enabled({pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: value})
 
 
 def test_invalid_flag_is_safely_disabled_with_stable_warning():
-    result = pipeline.run_phase4_project_memory_pipeline(
-        environ={pipeline.PHASE4_PROJECT_MEMORY_FLAG: "sometimes"}
+    result = pipeline.run_project_evidence_pipeline(
+        environ={pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: "sometimes"}
     )
     assert result.status == "disabled"
     assert [warning.code for warning in result.warnings] == ["invalid_feature_flag"]
@@ -102,15 +102,15 @@ def test_disabled_pipeline_performs_no_reads_or_writes_and_preserves_file(tmp_pa
     path.write_bytes(b"existing")
     before = path.read_bytes()
     monkeypatch.setattr(
-        pipeline.input_adapter, "load_phase4_inputs",
+        pipeline.input_adapter, "load_project_evidence_inputs",
         lambda *_a, **_k: pytest.fail("source read attempted"),
     )
     monkeypatch.setattr(
-        pipeline.project_memory, "load_phase4_project_memory",
+        pipeline.project_memory, "load_project_evidence_memory",
         lambda *_a, **_k: pytest.fail("artifact read attempted"),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
-        output_path=path, environ={pipeline.PHASE4_PROJECT_MEMORY_FLAG: "0"}
+    result = pipeline.run_project_evidence_pipeline(
+        output_path=path, environ={pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: "0"}
     )
     assert result.status == "disabled"
     assert all(stage.status == "skipped" for stage in result.stages)
@@ -119,21 +119,21 @@ def test_disabled_pipeline_performs_no_reads_or_writes_and_preserves_file(tmp_pa
 
 def test_stage_order_is_complete_and_deterministic(tmp_path, monkeypatch):
     result = run_fixture(monkeypatch, tmp_path, persist=False)
-    assert tuple(stage.stage for stage in result.stages) == pipeline.PHASE4_PIPELINE_STAGE_ORDER
+    assert tuple(stage.stage for stage in result.stages) == pipeline.PROJECT_EVIDENCE_PIPELINE_STAGE_ORDER
     assert len(result.stages) == len(set(stage.stage for stage in result.stages))
 
 
 def test_stage_outputs_feed_the_next_accepted_interfaces(tmp_path, monkeypatch):
-    original_dedupe = pipeline.evidence_normalizer.dedupe_phase4_inputs
-    original_synthesize = pipeline.evidence_synthesizer.synthesize_phase4_evidence_facts
-    original_score = pipeline.evidence_scoring.score_phase4_evidence_facts
-    original_signals = pipeline.capability_extractor.extract_phase4_fact_signals_many
-    original_capabilities = pipeline.capability_extractor.extract_phase4_capabilities_by_project
+    original_dedupe = pipeline.evidence_normalizer.dedupe_project_evidence_inputs
+    original_synthesize = pipeline.evidence_synthesizer.synthesize_project_evidence_facts
+    original_score = pipeline.evidence_scoring.score_project_evidence_facts
+    original_signals = pipeline.capability_extractor.extract_project_evidence_fact_signals_many
+    original_capabilities = pipeline.capability_extractor.extract_project_evidence_capabilities_by_project
     seen = {}
     supplied = [evidence_input()]
 
     monkeypatch.setattr(
-        pipeline.input_adapter, "load_phase4_inputs", lambda **_kwargs: (supplied, [])
+        pipeline.input_adapter, "load_project_evidence_inputs", lambda **_kwargs: (supplied, [])
     )
 
     def dedupe(items):
@@ -163,12 +163,12 @@ def test_stage_outputs_feed_the_next_accepted_interfaces(tmp_path, monkeypatch):
         assert items is seen["scored"]
         return original_capabilities(items)
 
-    monkeypatch.setattr(pipeline.evidence_normalizer, "dedupe_phase4_inputs", dedupe)
-    monkeypatch.setattr(pipeline.evidence_synthesizer, "synthesize_phase4_evidence_facts", synthesize)
-    monkeypatch.setattr(pipeline.evidence_scoring, "score_phase4_evidence_facts", score)
-    monkeypatch.setattr(pipeline.capability_extractor, "extract_phase4_fact_signals_many", signals)
-    monkeypatch.setattr(pipeline.capability_extractor, "extract_phase4_capabilities_by_project", capabilities)
-    result = pipeline.run_phase4_project_memory_pipeline(
+    monkeypatch.setattr(pipeline.evidence_normalizer, "dedupe_project_evidence_inputs", dedupe)
+    monkeypatch.setattr(pipeline.evidence_synthesizer, "synthesize_project_evidence_facts", synthesize)
+    monkeypatch.setattr(pipeline.evidence_scoring, "score_project_evidence_facts", score)
+    monkeypatch.setattr(pipeline.capability_extractor, "extract_project_evidence_fact_signals_many", signals)
+    monkeypatch.setattr(pipeline.capability_extractor, "extract_project_evidence_capabilities_by_project", capabilities)
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS,
         output_path=tmp_path / "memory.json",
         persist=False,
@@ -195,7 +195,7 @@ def test_stage_counts_propagate_without_content(tmp_path, monkeypatch):
 def test_enabled_empty_returns_empty_without_creating_artifact(tmp_path, monkeypatch):
     install_loader(monkeypatch, items=[])
     path = tmp_path / "memory.json"
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
     )
     assert result.status == "empty"
@@ -206,10 +206,10 @@ def test_enabled_empty_returns_empty_without_creating_artifact(tmp_path, monkeyp
 
 def test_empty_run_preserves_previous_valid_artifact(tmp_path, monkeypatch):
     first = run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     before = path.read_bytes()
     install_loader(monkeypatch, items=[])
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
     )
     assert first.persisted
@@ -218,26 +218,26 @@ def test_empty_run_preserves_previous_valid_artifact(tmp_path, monkeypatch):
     assert path.read_bytes() == before
 
 
-def test_missing_optional_phase3_source_warns_without_error(tmp_path):
-    paths = Phase4InputSourcePaths(
-        phase2_memory_dir=None,
-        phase3_memory_path=tmp_path / "missing-phase3.json",
+def test_missing_optional_project_change_source_warns_without_error(tmp_path):
+    paths = ProjectEvidenceInputSourcePaths(
+        github_evidence_memory_dir=None,
+        project_change_memory_path=tmp_path / "missing-project_change.json",
         project_memory_path=None,
         compact_facts_path=None,
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths,
         output_path=tmp_path / "out.json",
         environ=ENABLED,
     )
     assert result.status == "empty"
-    assert "optional_phase3_artifact_missing" in {warning.code for warning in result.warnings}
+    assert "optional_project_change_artifact_missing" in {warning.code for warning in result.warnings}
     assert not result.errors
 
 
 def test_valid_pipeline_creates_then_returns_unchanged(tmp_path, monkeypatch):
     first = run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     first_bytes = path.read_bytes()
     second = run_fixture(monkeypatch, tmp_path)
     assert first.status in {"ready", "degraded"}
@@ -246,7 +246,7 @@ def test_valid_pipeline_creates_then_returns_unchanged(tmp_path, monkeypatch):
     assert second.persistence_status == "unchanged"
     assert first.content_hash == second.content_hash
     assert path.read_bytes() == first_bytes
-    assert load_phase4_project_memory(path).status == "ready"
+    assert load_project_evidence_memory(path).status == "ready"
 
 
 def test_zero_capabilities_and_metric_evidence_are_nonfatal(tmp_path, monkeypatch):
@@ -261,11 +261,11 @@ def test_zero_capabilities_and_metric_evidence_are_nonfatal(tmp_path, monkeypatc
 @pytest.mark.parametrize(
     ("stage", "module", "attribute"),
     [
-        ("load_inputs", "input_adapter", "load_phase4_inputs"),
-        ("normalize_dedupe", "evidence_normalizer", "dedupe_phase4_inputs"),
-        ("synthesize_evidence", "evidence_synthesizer", "synthesize_phase4_evidence_facts"),
-        ("score_evidence", "evidence_scoring", "score_phase4_evidence_facts"),
-        ("extract_capabilities", "capability_extractor", "extract_phase4_capabilities_by_project"),
+        ("load_inputs", "input_adapter", "load_project_evidence_inputs"),
+        ("normalize_dedupe", "evidence_normalizer", "dedupe_project_evidence_inputs"),
+        ("synthesize_evidence", "evidence_synthesizer", "synthesize_project_evidence_facts"),
+        ("score_evidence", "evidence_scoring", "score_project_evidence_facts"),
+        ("extract_capabilities", "capability_extractor", "extract_project_evidence_capabilities_by_project"),
     ],
 )
 def test_unexpected_stage_failure_stops_later_stages_with_safe_error(
@@ -277,7 +277,7 @@ def test_unexpected_stage_failure_stops_later_stages_with_safe_error(
         target, attribute,
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("SECRET traceback C:/private")),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "memory.json", environ=ENABLED
     )
     assert result.status == "error"
@@ -296,17 +296,17 @@ def test_normalization_integrity_conflict_has_specific_safe_code(tmp_path, monke
     paths = install_loader(monkeypatch)
     monkeypatch.setattr(
         pipeline.evidence_normalizer,
-        "dedupe_phase4_inputs",
+        "dedupe_project_evidence_inputs",
         lambda *_a, **_k: (_ for _ in ()).throw(
-            pipeline.evidence_normalizer.Phase4IntegrityError(
+            pipeline.evidence_normalizer.ProjectEvidenceIntegrityError(
                 "same_id_different_payload",
                 project_id="alpha",
-                input_type="phase3_evidence_card",
-                input_id="p4in_safe",
+                input_type="project_change_evidence_card",
+                input_id="pei_safe",
             )
         ),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "memory.json", environ=ENABLED
     )
     assert result.errors == ("normalization_integrity_conflict",)
@@ -316,18 +316,18 @@ def test_taxonomy_failure_stops_extraction_and_persistence(tmp_path, monkeypatch
     paths = install_loader(monkeypatch)
     monkeypatch.setattr(
         pipeline.capability_taxonomy,
-        "validate_phase4_capability_taxonomy",
-        lambda: Phase4CapabilityTaxonomyValidationReport(
+        "validate_project_capability_taxonomy",
+        lambda: ProjectCapabilityTaxonomyValidationReport(
             valid=False, capability_count=0, signal_count=0, alias_count=0,
             errors=("invalid_taxonomy",), warnings=(),
         ),
     )
     monkeypatch.setattr(
         pipeline.capability_extractor,
-        "extract_phase4_fact_signals_many",
+        "extract_project_evidence_fact_signals_many",
         lambda *_a, **_k: pytest.fail("extraction must not run"),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "memory.json", environ=ENABLED
     )
     assert result.status == "error"
@@ -338,7 +338,7 @@ def test_taxonomy_failure_stops_extraction_and_persistence(tmp_path, monkeypatch
 
 def test_boundary_validation_failure_stops_persistence(tmp_path, monkeypatch):
     paths = install_loader(monkeypatch)
-    original = pipeline.claim_boundary.validate_phase4_claim_boundary
+    original = pipeline.claim_boundary.validate_project_claim_boundary
     calls = {"count": 0}
 
     def invalid_once(*args, **kwargs):
@@ -346,8 +346,8 @@ def test_boundary_validation_failure_stops_persistence(tmp_path, monkeypatch):
         result = original(*args, **kwargs)
         return SimpleNamespace(valid=False, errors=("invalid",)) if calls["count"] == 1 else result
 
-    monkeypatch.setattr(pipeline.claim_boundary, "validate_phase4_claim_boundary", invalid_once)
-    result = pipeline.run_phase4_project_memory_pipeline(
+    monkeypatch.setattr(pipeline.claim_boundary, "validate_project_claim_boundary", invalid_once)
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "memory.json", environ=ENABLED
     )
     assert result.errors == ("boundary_validation_failed",)
@@ -358,23 +358,23 @@ def test_persistence_failure_and_round_trip_failure_are_errors(tmp_path, monkeyp
     paths = install_loader(monkeypatch)
     monkeypatch.setattr(
         pipeline.project_memory,
-        "persist_phase4_project_memory",
+        "persist_project_evidence_memory",
         lambda *_a, **_k: SimpleNamespace(status="failed"),
     )
-    failed = pipeline.run_phase4_project_memory_pipeline(
+    failed = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "failed.json", environ=ENABLED
     )
     assert failed.errors == ("persistence_failed",)
 
     monkeypatch.setattr(
         pipeline.project_memory,
-        "persist_phase4_project_memory",
+        "persist_project_evidence_memory",
         lambda *_a, **_k: SimpleNamespace(
             status="created", bytes_written=10, previous_artifact_preserved=False,
             round_trip_validated=False,
         ),
     )
-    round_trip = pipeline.run_phase4_project_memory_pipeline(
+    round_trip = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "round-trip.json", environ=ENABLED
     )
     assert round_trip.errors == ("round_trip_validation_failed",)
@@ -383,32 +383,32 @@ def test_persistence_failure_and_round_trip_failure_are_errors(tmp_path, monkeyp
 
 def test_snapshot_validation_failure_stops_persistence(tmp_path, monkeypatch):
     paths = install_loader(monkeypatch)
-    original_builder = pipeline.project_memory.build_phase4_project_memory_snapshot
+    original_builder = pipeline.project_memory.build_project_evidence_memory_snapshot
     captured = {}
 
     def capture(*args, **kwargs):
         captured["snapshot"] = original_builder(*args, **kwargs)
         return captured["snapshot"]
 
-    monkeypatch.setattr(pipeline.project_memory, "build_phase4_project_memory_snapshot", capture)
-    baseline = pipeline.run_phase4_project_memory_pipeline(
+    monkeypatch.setattr(pipeline.project_memory, "build_project_evidence_memory_snapshot", capture)
+    baseline = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "baseline.json",
         persist=False, environ=ENABLED,
     )
     assert baseline.content_hash
     monkeypatch.setattr(
-        pipeline.project_memory, "build_phase4_project_memory_snapshot",
+        pipeline.project_memory, "build_project_evidence_memory_snapshot",
         lambda *_a, **_k: captured["snapshot"],
     )
     monkeypatch.setattr(
-        pipeline.project_memory, "validate_phase4_project_memory_snapshot",
+        pipeline.project_memory, "validate_project_evidence_memory_snapshot",
         lambda *_a, **_k: SimpleNamespace(valid=False, errors=("invalid",)),
     )
     monkeypatch.setattr(
-        pipeline.project_memory, "persist_phase4_project_memory",
+        pipeline.project_memory, "persist_project_evidence_memory",
         lambda *_a, **_k: pytest.fail("invalid snapshot must not persist"),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=tmp_path / "invalid.json", environ=ENABLED
     )
     assert result.errors == ("snapshot_validation_failed",)
@@ -417,15 +417,15 @@ def test_snapshot_validation_failure_stops_persistence(tmp_path, monkeypatch):
 
 def test_previous_valid_artifact_survives_pipeline_failure(tmp_path, monkeypatch):
     run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     before = path.read_bytes()
     paths = install_loader(monkeypatch)
     monkeypatch.setattr(
         pipeline.evidence_synthesizer,
-        "synthesize_phase4_evidence_facts",
+        "synthesize_project_evidence_facts",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("failure")),
     )
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=paths, output_path=path, environ=ENABLED
     )
     assert result.status == "error"
@@ -436,14 +436,14 @@ def test_previous_valid_artifact_survives_pipeline_failure(tmp_path, monkeypatch
 
 def test_previous_valid_artifact_survives_load_and_persistence_failures(tmp_path, monkeypatch):
     run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     before = path.read_bytes()
     monkeypatch.setattr(
         pipeline.input_adapter,
-        "load_phase4_inputs",
+        "load_project_evidence_inputs",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("source failure")),
     )
-    load_failed = pipeline.run_phase4_project_memory_pipeline(
+    load_failed = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
     )
     assert load_failed.status == "error" and load_failed.previous_artifact_preserved
@@ -452,10 +452,10 @@ def test_previous_valid_artifact_survives_load_and_persistence_failures(tmp_path
     install_loader(monkeypatch)
     monkeypatch.setattr(
         pipeline.project_memory,
-        "persist_phase4_project_memory",
+        "persist_project_evidence_memory",
         lambda *_a, **_k: SimpleNamespace(status="failed"),
     )
-    persistence_failed = pipeline.run_phase4_project_memory_pipeline(
+    persistence_failed = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
     )
     assert persistence_failed.errors == ("persistence_failed",)
@@ -465,11 +465,11 @@ def test_previous_valid_artifact_survives_load_and_persistence_failures(tmp_path
 
 def test_warning_codes_are_sorted_bounded_and_messages_are_safe(tmp_path, monkeypatch):
     warnings = [
-        Phase4PipelineWarning(code=f"warning_{index:03d}", message="DO_NOT_PERSIST_BODY")
+        ProjectEvidencePipelineWarning(code=f"warning_{index:03d}", message="DO_NOT_PERSIST_BODY")
         for index in range(150)
     ]
     install_loader(monkeypatch, items=[], warnings=warnings)
-    result = pipeline.run_phase4_project_memory_pipeline(
+    result = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=tmp_path / "memory.json", environ=ENABLED
     )
     codes = [warning.code for warning in result.warnings]
@@ -493,14 +493,14 @@ def test_result_exposes_only_safe_bounded_metadata(tmp_path, monkeypatch):
 def test_input_order_and_destination_do_not_change_semantic_hash(tmp_path, monkeypatch):
     items = [evidence_input("beta"), evidence_input("alpha")]
     install_loader(monkeypatch, items=items)
-    first = pipeline.run_phase4_project_memory_pipeline(
+    first = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=tmp_path / "one.json",
         persist=False, environ=ENABLED,
     )
     install_loader(monkeypatch, items=reversed(items))
-    second = pipeline.run_phase4_project_memory_pipeline(
+    second = pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=tmp_path / "two.json",
-        persist=False, environ={pipeline.PHASE4_PROJECT_MEMORY_FLAG: "TRUE"},
+        persist=False, environ={pipeline.PROJECT_EVIDENCE_MEMORY_FLAG: "TRUE"},
     )
     assert first.content_hash == second.content_hash
     assert first.project_count == second.project_count == 2
@@ -509,13 +509,13 @@ def test_input_order_and_destination_do_not_change_semantic_hash(tmp_path, monke
 
 def test_health_disabled_and_missing_do_not_run_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        pipeline, "run_phase4_project_memory_pipeline",
+        pipeline, "run_project_evidence_pipeline",
         lambda **_kwargs: pytest.fail("pipeline must not run"),
     )
-    disabled = pipeline.get_phase4_pipeline_health(
+    disabled = pipeline.get_project_evidence_health(
         output_path=tmp_path / "missing.json", environ={}
     )
-    missing = pipeline.get_phase4_pipeline_health(
+    missing = pipeline.get_project_evidence_health(
         output_path=tmp_path / "missing.json", environ=ENABLED
     )
     assert disabled.status == "disabled"
@@ -524,9 +524,9 @@ def test_health_disabled_and_missing_do_not_run_pipeline(tmp_path, monkeypatch):
 
 def test_health_ready_or_degraded_is_read_only_and_contains_counts(tmp_path, monkeypatch):
     run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     before = path.read_bytes()
-    health = pipeline.get_phase4_pipeline_health(output_path=path, environ=ENABLED)
+    health = pipeline.get_project_evidence_health(output_path=path, environ=ENABLED)
     assert health.status in {"ready", "degraded"}
     assert health.hash_valid
     assert health.project_count == health.evidence_fact_count == 1
@@ -538,24 +538,24 @@ def test_health_ready_or_degraded_is_read_only_and_contains_counts(tmp_path, mon
 
 def test_health_rejects_hash_mismatch_and_unsupported_schema(tmp_path, monkeypatch):
     run_fixture(monkeypatch, tmp_path)
-    path = tmp_path / "phase4.json"
+    path = tmp_path / "project_evidence.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["content_hash"] = "0" * 64
     path.write_text(json.dumps(payload), encoding="utf-8")
-    assert pipeline.get_phase4_pipeline_health(output_path=path, environ=ENABLED).status == "invalid"
-    payload["schema_version"] = "phase4.v2"
+    assert pipeline.get_project_evidence_health(output_path=path, environ=ENABLED).status == "invalid"
+    payload["schema_version"] = "project_evidence_memory.v2"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    assert pipeline.get_phase4_pipeline_health(output_path=path, environ=ENABLED).status == "invalid"
+    assert pipeline.get_project_evidence_health(output_path=path, environ=ENABLED).status == "invalid"
 
 
 def test_health_and_inspect_convert_unexpected_load_failure_to_safe_error(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline.project_memory,
-        "load_phase4_project_memory",
+        "load_project_evidence_memory",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("SECRET C:/private")),
     )
-    health = pipeline.get_phase4_pipeline_health(output_path=tmp_path / "x.json", environ=ENABLED)
-    inspect = pipeline.get_phase4_project_inspect(output_path=tmp_path / "x.json", environ=ENABLED)
+    health = pipeline.get_project_evidence_health(output_path=tmp_path / "x.json", environ=ENABLED)
+    inspect = pipeline.inspect_project_evidence_memory(output_path=tmp_path / "x.json", environ=ENABLED)
     assert health.status == inspect.status == "error"
     serialized = json.dumps({"health": health.to_dict(), "inspect": inspect.to_dict()})
     assert "SECRET" not in serialized and "C:/private" not in serialized
@@ -564,22 +564,22 @@ def test_health_and_inspect_convert_unexpected_load_failure_to_safe_error(tmp_pa
 def test_inspect_is_bounded_sorted_exact_and_content_free(tmp_path, monkeypatch):
     install_loader(monkeypatch, items=[evidence_input("beta"), evidence_input("alpha")])
     path = tmp_path / "memory.json"
-    pipeline.run_phase4_project_memory_pipeline(
+    pipeline.run_project_evidence_pipeline(
         source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
     )
     before = path.read_bytes()
-    inspected = pipeline.get_phase4_project_inspect(
+    inspected = pipeline.inspect_project_evidence_memory(
         output_path=path, sample_limit=999, environ=ENABLED
     )
     assert inspected.sample_limit == pipeline.MAX_INSPECT_SAMPLE_LIMIT
     assert [item.project_id for item in inspected.projects] == ["alpha", "beta"]
-    exact = pipeline.get_phase4_project_inspect(
+    exact = pipeline.inspect_project_evidence_memory(
         output_path=path, project_id="beta", sample_limit=1, environ=ENABLED
     )
-    unknown = pipeline.get_phase4_project_inspect(
+    unknown = pipeline.inspect_project_evidence_memory(
         output_path=path, project_id="Beta", sample_limit=-5, environ=ENABLED
     )
-    oversized = pipeline.get_phase4_project_inspect(
+    oversized = pipeline.inspect_project_evidence_memory(
         output_path=path, project_id="x" * 1_000, sample_limit=1, environ=ENABLED
     )
     assert [item.project_id for item in exact.projects] == ["beta"]
@@ -594,16 +594,16 @@ def test_inspect_is_bounded_sorted_exact_and_content_free(tmp_path, monkeypatch)
 
 def test_inspect_disabled_missing_and_invalid_are_safe(tmp_path):
     path = tmp_path / "memory.json"
-    disabled = pipeline.get_phase4_project_inspect(output_path=path, environ={})
-    missing = pipeline.get_phase4_project_inspect(output_path=path, environ=ENABLED)
+    disabled = pipeline.inspect_project_evidence_memory(output_path=path, environ={})
+    missing = pipeline.inspect_project_evidence_memory(output_path=path, environ=ENABLED)
     path.write_text("invalid", encoding="utf-8")
-    invalid = pipeline.get_phase4_project_inspect(output_path=path, environ=ENABLED)
+    invalid = pipeline.inspect_project_evidence_memory(output_path=path, environ=ENABLED)
     assert (disabled.status, missing.status, invalid.status) == ("disabled", "missing", "invalid")
     assert invalid.projects == ()
 
 
 def test_concurrent_builds_serialize_in_process_writes(tmp_path, monkeypatch):
-    original_loader = pipeline.input_adapter.load_phase4_inputs
+    original_loader = pipeline.input_adapter.load_project_evidence_inputs
     active = 0
     maximum = 0
     guard = threading.Lock()
@@ -619,20 +619,20 @@ def test_concurrent_builds_serialize_in_process_writes(tmp_path, monkeypatch):
             active -= 1
         return records, []
 
-    monkeypatch.setattr(pipeline.input_adapter, "load_phase4_inputs", slow_loader)
+    monkeypatch.setattr(pipeline.input_adapter, "load_project_evidence_inputs", slow_loader)
     path = tmp_path / "memory.json"
 
     def run():
-        return pipeline.run_phase4_project_memory_pipeline(
+        return pipeline.run_project_evidence_pipeline(
             source_paths=DISABLED_PATHS, output_path=path, environ=ENABLED
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _value: run(), range(2)))
-    monkeypatch.setattr(pipeline.input_adapter, "load_phase4_inputs", original_loader)
+    monkeypatch.setattr(pipeline.input_adapter, "load_project_evidence_inputs", original_loader)
     assert maximum == 1
     assert {result.persistence_status for result in results} == {"created", "unchanged"}
-    assert load_phase4_project_memory(path).status == "ready"
+    assert load_project_evidence_memory(path).status == "ready"
     artifact_text = path.read_text(encoding="utf-8")
     assert "_BUILD_LOCK" not in artifact_text and "build_lock" not in artifact_text
 
@@ -642,7 +642,7 @@ def test_import_has_no_file_or_external_service_side_effects():
         "from pathlib import Path; import sys; "
         "Path.read_bytes=lambda *_a,**_k: (_ for _ in ()).throw(RuntimeError('read')); "
         "Path.write_bytes=lambda *_a,**_k: (_ for _ in ()).throw(RuntimeError('write')); "
-        "import backend.phase4_pipeline; "
+        "import backend.project_evidence_pipeline; "
         "assert 'backend.api_server' not in sys.modules; "
         "assert not any(n.startswith(('chromadb','openai','requests','sqlite3')) for n in sys.modules)"
     )
@@ -656,29 +656,29 @@ def test_import_has_no_file_or_external_service_side_effects():
     assert completed.returncode == 0, completed.stderr
 
 
-def test_decision_a_adds_no_phase4_api_or_frontend_contract():
+def test_decision_a_adds_no_project_evidence_api_or_frontend_contract():
     root = Path(__file__).resolve().parents[1]
     api_source = (root / "backend" / "api_server.py").read_text(encoding="utf-8")
-    assert "/api/github/context/phase4/" not in api_source
+    assert "/api/project-evidence/" not in api_source
     assert "frontend" not in Path(pipeline.__file__).read_text(encoding="utf-8").casefold()
 
 
 def test_real_enabled_unchanged_disabled_health_and_inspect_smoke(tmp_path):
-    accepted = load_phase4_project_memory()
+    accepted = load_project_evidence_memory()
     assert accepted.status == "ready" and accepted.snapshot is not None
-    path = tmp_path / "real-phase4.json"
-    first = pipeline.run_phase4_project_memory_pipeline(
+    path = tmp_path / "real-project_evidence.json"
+    first = pipeline.run_project_evidence_pipeline(
         output_path=path, environ=ENABLED
     )
     first_bytes = path.read_bytes()
-    second = pipeline.run_phase4_project_memory_pipeline(
+    second = pipeline.run_project_evidence_pipeline(
         output_path=path, environ=ENABLED
     )
-    disabled = pipeline.run_phase4_project_memory_pipeline(
+    disabled = pipeline.run_project_evidence_pipeline(
         output_path=path, environ={}
     )
-    health = pipeline.get_phase4_pipeline_health(output_path=path, environ=ENABLED)
-    inspected = pipeline.get_phase4_project_inspect(
+    health = pipeline.get_project_evidence_health(output_path=path, environ=ENABLED)
+    inspected = pipeline.inspect_project_evidence_memory(
         output_path=path, sample_limit=5, environ=ENABLED
     )
     assert first.status in {"ready", "degraded", "unchanged"}

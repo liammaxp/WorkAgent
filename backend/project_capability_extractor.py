@@ -1,7 +1,7 @@
-"""Deterministic Phase 4 signal and capability extraction.
+"""Deterministic project evidence signal and capability extraction.
 
-This module maps already-scored :class:`Phase4EvidenceFact` objects to the
-strict signal vocabulary defined by the Phase 4 capability taxonomy and then
+This module maps already-scored :class:`ProjectEvidenceFact` objects to the
+strict signal vocabulary defined by the project evidence capability taxonomy and then
 evaluates each project independently.  It is deliberately pure: it performs
 no persistence, retrieval, network access, model calls, or claim generation.
 
@@ -18,23 +18,23 @@ import json
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.phase4_capability_taxonomy import (
+from backend.project_capability_taxonomy import (
     CAPABILITY_ALIASES,
     CAPABILITY_TAXONOMY,
-    Phase4CapabilityDefinition,
-    list_phase4_capability_definitions,
-    list_phase4_capability_overlap_rules,
-    list_phase4_signal_identifiers,
+    ProjectCapabilityDefinition,
+    list_project_capability_definitions,
+    list_project_capability_overlap_rules,
+    list_project_evidence_signal_identifiers,
 )
-from backend.phase4_models import (
+from backend.project_evidence_models import (
     Confidence,
     EvidenceStatus,
     EvidenceType,
     MetricSupport,
-    Phase4CapabilityFact,
-    Phase4EvidenceFact,
-    Phase4SourceRef,
-    build_phase4_stable_id,
+    ProjectCapabilityFact,
+    ProjectEvidenceFact,
+    EvidenceSourceRef,
+    build_project_evidence_stable_id,
 )
 
 
@@ -48,11 +48,11 @@ SOURCE_CATEGORY_CAPABILITY = "capability_context"
 SOURCE_CATEGORY_OTHER = "other"
 
 DIRECT_SOURCE_TYPES = frozenset({
-    "phase2_evidence_chunk",
-    "phase2_evidence_card",
-    "phase2_raw_change_summary",
-    "phase3_evidence_card",
-    "phase3_raw_change_summary",
+    "github_evidence_chunk",
+    "github_evidence_card",
+    "github_evidence_raw_change_summary",
+    "project_change_evidence_card",
+    "project_change_raw_change_summary",
 })
 PROJECT_CONTEXT_SOURCE_TYPES = frozenset({
     "project_memory",
@@ -60,8 +60,8 @@ PROJECT_CONTEXT_SOURCE_TYPES = frozenset({
     "compact_facts",
 })
 CAPABILITY_CONTEXT_SOURCE_TYPES = frozenset({
-    "phase2_capability_fact",
-    "phase3_capability_fact",
+    "github_evidence_capability_fact",
+    "project_change_capability_fact",
 })
 
 _ALLOWED_RULE_FIELDS = frozenset({
@@ -102,7 +102,7 @@ _SIGNAL_METADATA_KEYS = frozenset({
 
 
 @dataclass(frozen=True)
-class Phase4SignalExtractionRule:
+class ProjectSignalExtractionRule:
     rule_id: str
     signal: str
     allowed_fields: tuple[str, ...]
@@ -116,7 +116,7 @@ class Phase4SignalExtractionRule:
 
 
 @dataclass(frozen=True)
-class Phase4SignalEvidenceBinding:
+class ProjectSignalEvidenceBinding:
     signal: str
     evidence_fact_id: str
     project_id: str
@@ -130,16 +130,16 @@ class Phase4SignalEvidenceBinding:
 
 
 @dataclass(frozen=True)
-class Phase4FactSignalExtraction:
+class ProjectFactSignalExtraction:
     evidence_fact_id: str
     project_id: str
     signals: tuple[str, ...]
-    bindings: tuple[Phase4SignalEvidenceBinding, ...]
+    bindings: tuple[ProjectSignalEvidenceBinding, ...]
     rejected_candidates: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class Phase4SignalExtractionDecision:
+class ProjectSignalExtractionDecision:
     evidence_fact_id: str
     project_id: str
     decision_code: str
@@ -147,7 +147,7 @@ class Phase4SignalExtractionDecision:
 
 
 @dataclass(frozen=True)
-class Phase4SignalExtractionReport:
+class ProjectSignalExtractionReport:
     fact_count: int
     facts_with_signals: int
     facts_without_signals: int
@@ -157,14 +157,14 @@ class Phase4SignalExtractionReport:
     unsupported_signal_candidate_count: int
     contextual_signal_count: int
     direct_signal_count: int
-    decisions: tuple[Phase4SignalExtractionDecision, ...] = ()
+    decisions: tuple[ProjectSignalExtractionDecision, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityExtractionDecision:
+class ProjectCapabilityExtractionDecision:
     project_id: str
     capability_type: str
     decision_code: str
@@ -173,7 +173,7 @@ class Phase4CapabilityExtractionDecision:
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityExtractionConflict:
+class ProjectCapabilityExtractionConflict:
     project_id: str
     conflict_code: str
     evidence_fact_ids: tuple[str, ...]
@@ -182,7 +182,7 @@ class Phase4CapabilityExtractionConflict:
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityOverlapDecision:
+class ProjectCapabilityOverlapDecision:
     project_id: str
     left_capability: str
     right_capability: str
@@ -190,14 +190,14 @@ class Phase4CapabilityOverlapDecision:
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityDecisionGroupCount:
+class ProjectCapabilityDecisionGroupCount:
     capability_type: str
     decision_code: str
     count: int
 
 
 @dataclass(frozen=True)
-class Phase4CapabilityExtractionReport:
+class ProjectCapabilityExtractionReport:
     project_count: int
     fact_count: int
     signal_binding_count: int
@@ -214,10 +214,10 @@ class Phase4CapabilityExtractionReport:
     duplicate_fact_binding_count: int
     conflict_count: int
     overlap_count: int = 0
-    decisions: tuple[Phase4CapabilityExtractionDecision, ...] = ()
-    conflicts: tuple[Phase4CapabilityExtractionConflict, ...] = ()
-    overlaps: tuple[Phase4CapabilityOverlapDecision, ...] = ()
-    grouped_decision_counts: tuple[Phase4CapabilityDecisionGroupCount, ...] = ()
+    decisions: tuple[ProjectCapabilityExtractionDecision, ...] = ()
+    conflicts: tuple[ProjectCapabilityExtractionConflict, ...] = ()
+    overlaps: tuple[ProjectCapabilityOverlapDecision, ...] = ()
+    grouped_decision_counts: tuple[ProjectCapabilityDecisionGroupCount, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -285,29 +285,29 @@ _TEXT_PATTERN_OVERRIDES: Mapping[str, tuple[str, ...]] = {
 }
 
 
-def _build_default_rules() -> tuple[Phase4SignalExtractionRule, ...]:
-    rules: list[Phase4SignalExtractionRule] = []
-    for signal in list_phase4_signal_identifiers():
+def _build_default_rules() -> tuple[ProjectSignalExtractionRule, ...]:
+    rules: list[ProjectSignalExtractionRule] = []
+    for signal in list_project_evidence_signal_identifiers():
         patterns = (_phrase_pattern(signal), *_TEXT_PATTERN_OVERRIDES.get(signal, ()))
-        rules.append(Phase4SignalExtractionRule(
+        rules.append(ProjectSignalExtractionRule(
             rule_id=f"text_{signal}",
             signal=signal,
             allowed_fields=("mechanism", "implementation", "safe_impact"),
             required_any_patterns=tuple(dict.fromkeys(patterns)),
         ))
-        rules.append(Phase4SignalExtractionRule(
+        rules.append(ProjectSignalExtractionRule(
             rule_id=f"tag_{signal}",
             signal=signal,
             allowed_fields=("technical_tags", "source_metadata"),
             exact_values=(signal,),
         ))
-    rules.append(Phase4SignalExtractionRule(
+    rules.append(ProjectSignalExtractionRule(
         rule_id="metadata_schema_version",
         signal="schema_versioning",
         allowed_fields=("source_metadata",),
         exact_values=("schema version",),
     ))
-    rules.append(Phase4SignalExtractionRule(
+    rules.append(ProjectSignalExtractionRule(
         rule_id="structured_retrieval_evidence_type",
         signal="retrieval",
         allowed_fields=("evidence_type",),
@@ -320,11 +320,11 @@ def _build_default_rules() -> tuple[Phase4SignalExtractionRule, ...]:
 SIGNAL_EXTRACTION_RULES = _build_default_rules()
 
 
-def validate_phase4_signal_extraction_rules(
-    rules: Iterable[Phase4SignalExtractionRule] | None = None,
+def validate_project_evidence_signal_extraction_rules(
+    rules: Iterable[ProjectSignalExtractionRule] | None = None,
 ) -> tuple[str, ...]:
     items = tuple(SIGNAL_EXTRACTION_RULES if rules is None else rules)
-    registry = set(list_phase4_signal_identifiers())
+    registry = set(list_project_evidence_signal_identifiers())
     errors: list[str] = []
     ids = [item.rule_id for item in items]
     if len(ids) != len(set(ids)):
@@ -333,7 +333,7 @@ def validate_phase4_signal_extraction_rules(
         errors.append("rules:unstable_order")
     for index, item in enumerate(items):
         prefix = f"rule[{index}]"
-        if not isinstance(item, Phase4SignalExtractionRule):
+        if not isinstance(item, ProjectSignalExtractionRule):
             errors.append(f"{prefix}:invalid_type")
             continue
         if not _RULE_IDENTIFIER_RE.fullmatch(item.rule_id):
@@ -361,18 +361,18 @@ def validate_phase4_signal_extraction_rules(
     return tuple(sorted(set(errors)))
 
 
-_DEFAULT_RULE_ERRORS = validate_phase4_signal_extraction_rules(SIGNAL_EXTRACTION_RULES)
+_DEFAULT_RULE_ERRORS = validate_project_evidence_signal_extraction_rules(SIGNAL_EXTRACTION_RULES)
 if _DEFAULT_RULE_ERRORS:  # pragma: no cover - import-time invariant
-    raise RuntimeError(f"Invalid Phase 4 signal rules: {_DEFAULT_RULE_ERRORS!r}")
+    raise RuntimeError(f"Invalid project evidence signal rules: {_DEFAULT_RULE_ERRORS!r}")
 
 
-def list_phase4_signal_extraction_rules() -> tuple[Phase4SignalExtractionRule, ...]:
+def list_project_evidence_signal_extraction_rules() -> tuple[ProjectSignalExtractionRule, ...]:
     return SIGNAL_EXTRACTION_RULES
 
 
-def classify_phase4_source_category(fact: Phase4EvidenceFact) -> str:
-    if not isinstance(fact, Phase4EvidenceFact):
-        raise TypeError("classify_phase4_source_category expects Phase4EvidenceFact")
+def classify_project_evidence_source_category(fact: ProjectEvidenceFact) -> str:
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("classify_project_evidence_source_category expects ProjectEvidenceFact")
     source_types = {ref.source_type for ref in fact.source_refs}
     if source_types & DIRECT_SOURCE_TYPES:
         return SOURCE_CATEGORY_DIRECT
@@ -383,7 +383,7 @@ def classify_phase4_source_category(fact: Phase4EvidenceFact) -> str:
     return SOURCE_CATEGORY_OTHER
 
 
-def _safe_quality_score(fact: Phase4EvidenceFact) -> int:
+def _safe_quality_score(fact: ProjectEvidenceFact) -> int:
     value = fact.quality_score
     if value is None or isinstance(value, bool):
         return 0
@@ -402,7 +402,7 @@ def _flatten_metadata_values(value: Any) -> list[str]:
     return []
 
 
-def _field_values(fact: Phase4EvidenceFact, field: str) -> tuple[str, ...]:
+def _field_values(fact: ProjectEvidenceFact, field: str) -> tuple[str, ...]:
     if field == "evidence_type":
         return (fact.evidence_type.value,)
     if field == "technical_tags":
@@ -430,7 +430,7 @@ def _field_values(fact: Phase4EvidenceFact, field: str) -> tuple[str, ...]:
     return ()
 
 
-def _rule_matches_value(rule: Phase4SignalExtractionRule, value: str) -> bool:
+def _rule_matches_value(rule: ProjectSignalExtractionRule, value: str) -> bool:
     normalized = " ".join(value.split())
     if not normalized:
         return False
@@ -447,7 +447,7 @@ def _rule_matches_value(rule: Phase4SignalExtractionRule, value: str) -> bool:
 
 
 def _rejected_candidate_codes(
-    fact: Phase4EvidenceFact,
+    fact: ProjectEvidenceFact,
     emitted_signals: set[str],
 ) -> tuple[str, ...]:
     text = "\n".join((fact.mechanism, *fact.implementation, *fact.safe_impact))
@@ -475,27 +475,27 @@ def _rejected_candidate_codes(
     metadata_values = set(_field_values(fact, "source_metadata"))
     if any(
         _RULE_IDENTIFIER_RE.fullmatch(value.casefold())
-        and value.casefold() not in set(list_phase4_signal_identifiers())
+        and value.casefold() not in set(list_project_evidence_signal_identifiers())
         for value in metadata_values
     ):
         candidates.append("unsupported_signal_candidate")
     return tuple(sorted(set(candidates)))
 
 
-def extract_phase4_fact_signals(
-    fact: Phase4EvidenceFact,
+def extract_project_evidence_fact_signals(
+    fact: ProjectEvidenceFact,
     *,
-    rules: Iterable[Phase4SignalExtractionRule] | None = None,
-) -> Phase4FactSignalExtraction:
-    if not isinstance(fact, Phase4EvidenceFact):
-        raise TypeError("extract_phase4_fact_signals expects Phase4EvidenceFact")
+    rules: Iterable[ProjectSignalExtractionRule] | None = None,
+) -> ProjectFactSignalExtraction:
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("extract_project_evidence_fact_signals expects ProjectEvidenceFact")
     selected_rules = tuple(SIGNAL_EXTRACTION_RULES if rules is None else rules)
-    errors = () if selected_rules is SIGNAL_EXTRACTION_RULES else validate_phase4_signal_extraction_rules(selected_rules)
+    errors = () if selected_rules is SIGNAL_EXTRACTION_RULES else validate_project_evidence_signal_extraction_rules(selected_rules)
     if errors:
-        raise ValueError(f"invalid Phase 4 signal extraction rules: {errors[0]}")
-    category = classify_phase4_source_category(fact)
+        raise ValueError(f"invalid project evidence signal extraction rules: {errors[0]}")
+    category = classify_project_evidence_source_category(fact)
     quality_score = _safe_quality_score(fact)
-    candidates: list[Phase4SignalEvidenceBinding] = []
+    candidates: list[ProjectSignalEvidenceBinding] = []
     for rule in selected_rules:
         if rule.accepted_evidence_types and fact.evidence_type.value not in rule.accepted_evidence_types:
             continue
@@ -510,7 +510,7 @@ def extract_phase4_fact_signals(
                 break
         if not matched_field:
             continue
-        candidates.append(Phase4SignalEvidenceBinding(
+        candidates.append(ProjectSignalEvidenceBinding(
             signal=rule.signal,
             evidence_fact_id=fact.evidence_fact_id,
             project_id=fact.project_id,
@@ -527,7 +527,7 @@ def extract_phase4_fact_signals(
         _FIELD_PRIORITY[item.matched_field],
         item.rule_id,
     ))
-    bindings: list[Phase4SignalEvidenceBinding] = []
+    bindings: list[ProjectSignalEvidenceBinding] = []
     seen_signals: set[str] = set()
     for binding in candidates:
         if binding.signal in seen_signals:
@@ -536,7 +536,7 @@ def extract_phase4_fact_signals(
         bindings.append(binding)
     signals = tuple(sorted(seen_signals))
     rejected = _rejected_candidate_codes(fact, seen_signals)
-    return Phase4FactSignalExtraction(
+    return ProjectFactSignalExtraction(
         evidence_fact_id=fact.evidence_fact_id,
         project_id=fact.project_id,
         signals=signals,
@@ -545,17 +545,17 @@ def extract_phase4_fact_signals(
     )
 
 
-def extract_phase4_fact_signals_many(
-    facts: Iterable[Phase4EvidenceFact],
-) -> tuple[list[Phase4FactSignalExtraction], Phase4SignalExtractionReport]:
+def extract_project_evidence_fact_signals_many(
+    facts: Iterable[ProjectEvidenceFact],
+) -> tuple[list[ProjectFactSignalExtraction], ProjectSignalExtractionReport]:
     records = list(facts)
-    if any(not isinstance(fact, Phase4EvidenceFact) for fact in records):
-        raise TypeError("extract_phase4_fact_signals_many expects Phase4EvidenceFact values")
-    extractions = [extract_phase4_fact_signals(fact) for fact in records]
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in records):
+        raise TypeError("extract_project_evidence_fact_signals_many expects ProjectEvidenceFact values")
+    extractions = [extract_project_evidence_fact_signals(fact) for fact in records]
     extractions.sort(key=lambda item: (item.project_id, item.evidence_fact_id, item.signals))
     bindings = [binding for item in extractions for binding in item.bindings]
     decisions = tuple(sorted((
-        Phase4SignalExtractionDecision(
+        ProjectSignalExtractionDecision(
             evidence_fact_id=item.evidence_fact_id,
             project_id=item.project_id,
             decision_code="signals_extracted" if item.signals else "no_explicit_signal",
@@ -563,7 +563,7 @@ def extract_phase4_fact_signals_many(
         )
         for item in extractions
     ), key=lambda item: (item.project_id, item.evidence_fact_id, item.decision_code))[:MAX_DECISION_SAMPLES])
-    report = Phase4SignalExtractionReport(
+    report = ProjectSignalExtractionReport(
         fact_count=len(records),
         facts_with_signals=sum(bool(item.signals) for item in extractions),
         facts_without_signals=sum(not item.signals for item in extractions),
@@ -598,7 +598,7 @@ def _normalized_path(value: str | None) -> str:
     return "" if path.startswith("/") or _WINDOWS_ABSOLUTE_PATH_RE.match(path) else path
 
 
-def _ref_identity(ref: Phase4SourceRef, *, include_hash: bool = True) -> tuple[Any, ...]:
+def _ref_identity(ref: EvidenceSourceRef, *, include_hash: bool = True) -> tuple[Any, ...]:
     return (
         ref.project_id,
         ref.source_type,
@@ -612,22 +612,22 @@ def _ref_identity(ref: Phase4SourceRef, *, include_hash: bool = True) -> tuple[A
     )
 
 
-def _independent_evidence_identity(fact: Phase4EvidenceFact) -> str:
+def _independent_evidence_identity(fact: ProjectEvidenceFact) -> str:
     payload = sorted({_ref_identity(ref) for ref in fact.source_refs})
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _base_lineage_identity(fact: Phase4EvidenceFact) -> str:
+def _base_lineage_identity(fact: ProjectEvidenceFact) -> str:
     payload = sorted({_ref_identity(ref, include_hash=False) for ref in fact.source_refs})
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _fact_payload_hash(fact: Phase4EvidenceFact) -> str:
+def _fact_payload_hash(fact: ProjectEvidenceFact) -> str:
     return hashlib.sha256(fact.to_json().encode("utf-8")).hexdigest()
 
 
 def _fact_priority(
-    fact: Phase4EvidenceFact,
+    fact: ProjectEvidenceFact,
     category: str,
 ) -> tuple[int, int, str]:
     return (
@@ -638,9 +638,9 @@ def _fact_priority(
 
 
 def _eligible_kind(
-    fact: Phase4EvidenceFact,
+    fact: ProjectEvidenceFact,
     category: str,
-    definition: Phase4CapabilityDefinition,
+    definition: ProjectCapabilityDefinition,
 ) -> str | None:
     evidence_type = fact.evidence_type.value
     if (
@@ -659,7 +659,7 @@ def _eligible_kind(
     return None
 
 
-def _metric_support_for_facts(facts: Sequence[Phase4EvidenceFact]) -> MetricSupport:
+def _metric_support_for_facts(facts: Sequence[ProjectEvidenceFact]) -> MetricSupport:
     metric_facts = [
         fact
         for fact in facts
@@ -675,7 +675,7 @@ def _metric_support_for_facts(facts: Sequence[Phase4EvidenceFact]) -> MetricSupp
     return MetricSupport.NONE
 
 
-def _selected_mechanisms(facts: Sequence[Phase4EvidenceFact]) -> list[str]:
+def _selected_mechanisms(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for fact in facts:
@@ -689,8 +689,8 @@ def _selected_mechanisms(facts: Sequence[Phase4EvidenceFact]) -> list[str]:
     return output
 
 
-def _selected_tags(facts: Sequence[Phase4EvidenceFact]) -> list[str]:
-    excluded = set(list_phase4_signal_identifiers()) | set(CAPABILITY_ALIASES) | set(CAPABILITY_TAXONOMY)
+def _selected_tags(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
+    excluded = set(list_project_evidence_signal_identifiers()) | set(CAPABILITY_ALIASES) | set(CAPABILITY_TAXONOMY)
     values = {
         " ".join(tag.split())
         for fact in facts
@@ -701,8 +701,8 @@ def _selected_tags(facts: Sequence[Phase4EvidenceFact]) -> list[str]:
 
 
 def _confidence_for_proof(
-    definition: Phase4CapabilityDefinition,
-    selected_facts: Sequence[Phase4EvidenceFact],
+    definition: ProjectCapabilityDefinition,
+    selected_facts: Sequence[ProjectEvidenceFact],
     selected_kinds: Mapping[str, str],
 ) -> Confidence:
     direct = [fact for fact in selected_facts if selected_kinds.get(fact.evidence_fact_id) == "direct"]
@@ -714,8 +714,8 @@ def _confidence_for_proof(
     return Confidence.MEDIUM
 
 
-def _empty_capability_report(*, project_count: int = 0, fact_count: int = 0) -> Phase4CapabilityExtractionReport:
-    return Phase4CapabilityExtractionReport(
+def _empty_capability_report(*, project_count: int = 0, fact_count: int = 0) -> ProjectCapabilityExtractionReport:
+    return ProjectCapabilityExtractionReport(
         project_count=project_count,
         fact_count=fact_count,
         signal_binding_count=0,
@@ -736,20 +736,20 @@ def _empty_capability_report(*, project_count: int = 0, fact_count: int = 0) -> 
 
 def _extract_one_project(
     project_id: str,
-    facts: Sequence[Phase4EvidenceFact],
+    facts: Sequence[ProjectEvidenceFact],
     *,
-    external_conflicts: Sequence[Phase4CapabilityExtractionConflict] = (),
-) -> tuple[list[Phase4CapabilityFact], Phase4CapabilityExtractionReport]:
+    external_conflicts: Sequence[ProjectCapabilityExtractionConflict] = (),
+) -> tuple[list[ProjectCapabilityFact], ProjectCapabilityExtractionReport]:
     matched = [fact for fact in facts if fact.project_id == project_id]
     project_mismatch_count = len(facts) - len(matched)
     ordered = sorted(matched, key=lambda fact: (fact.evidence_fact_id, _fact_payload_hash(fact)))
-    unique: list[Phase4EvidenceFact] = []
+    unique: list[ProjectEvidenceFact] = []
     duplicate_count = 0
-    conflicts: list[Phase4CapabilityExtractionConflict] = list(external_conflicts)
+    conflicts: list[ProjectCapabilityExtractionConflict] = list(external_conflicts)
     hard_conflict_ids: set[str] = {
         fact_id for conflict in external_conflicts for fact_id in conflict.evidence_fact_ids
     }
-    by_id: dict[str, tuple[str, Phase4EvidenceFact]] = {}
+    by_id: dict[str, tuple[str, ProjectEvidenceFact]] = {}
     for fact in ordered:
         payload_hash = _fact_payload_hash(fact)
         previous = by_id.get(fact.evidence_fact_id)
@@ -760,18 +760,18 @@ def _extract_one_project(
             duplicate_count += 1
         else:
             hard_conflict_ids.add(fact.evidence_fact_id)
-            conflicts.append(Phase4CapabilityExtractionConflict(
+            conflicts.append(ProjectCapabilityExtractionConflict(
                 project_id=project_id,
                 conflict_code="same_fact_id_different_payload",
                 evidence_fact_ids=(fact.evidence_fact_id,),
             ))
 
-    extractions, signal_report = extract_phase4_fact_signals_many(unique)
+    extractions, signal_report = extract_project_evidence_fact_signals_many(unique)
     fact_by_id = {fact.evidence_fact_id: fact for fact in unique}
     extraction_by_id = {item.evidence_fact_id: item for item in extractions}
-    categories = {fact.evidence_fact_id: classify_phase4_source_category(fact) for fact in unique}
+    categories = {fact.evidence_fact_id: classify_project_evidence_source_category(fact) for fact in unique}
 
-    by_lineage: dict[str, list[Phase4EvidenceFact]] = {}
+    by_lineage: dict[str, list[ProjectEvidenceFact]] = {}
     for fact in unique:
         if categories[fact.evidence_fact_id] == SOURCE_CATEGORY_DIRECT:
             by_lineage.setdefault(_base_lineage_identity(fact), []).append(fact)
@@ -781,7 +781,7 @@ def _extract_one_project(
         if len(hashes) > 1 and len(signal_sets) > 1:
             ids = tuple(sorted({fact.evidence_fact_id for fact in lineage_facts}))
             hard_conflict_ids.update(ids)
-            conflicts.append(Phase4CapabilityExtractionConflict(
+            conflicts.append(ProjectCapabilityExtractionConflict(
                 project_id=project_id,
                 conflict_code="same_lineage_conflicting_signals",
                 evidence_fact_ids=ids,
@@ -792,8 +792,8 @@ def _extract_one_project(
                 })),
             ))
 
-    emitted: list[Phase4CapabilityFact] = []
-    decisions: list[Phase4CapabilityExtractionDecision] = []
+    emitted: list[ProjectCapabilityFact] = []
+    decisions: list[ProjectCapabilityExtractionDecision] = []
     missing_required_group_count = 0
     insufficient_quality_count = 0
     insufficient_direct_fact_count = 0
@@ -802,7 +802,7 @@ def _extract_one_project(
     contextual_only_rejected_count = 0
     high_risk_blocked_count = 0
 
-    for definition in list_phase4_capability_definitions():
+    for definition in list_project_capability_definitions():
         required_signals = set().union(*map(set, definition.required_signal_groups))
         relevant_signals = required_signals | set(definition.supporting_signals)
         relevant_bindings = [
@@ -813,8 +813,8 @@ def _extract_one_project(
         ]
         candidate_ids = {binding.evidence_fact_id for binding in relevant_bindings}
         conflict_ids = candidate_ids & hard_conflict_ids
-        eligible: list[tuple[Phase4SignalEvidenceBinding, str]] = []
-        eligible_before_quality: list[tuple[Phase4SignalEvidenceBinding, str]] = []
+        eligible: list[tuple[ProjectSignalEvidenceBinding, str]] = []
+        eligible_before_quality: list[tuple[ProjectSignalEvidenceBinding, str]] = []
         for binding in relevant_bindings:
             fact = fact_by_id[binding.evidence_fact_id]
             kind = _eligible_kind(fact, categories[fact.evidence_fact_id], definition)
@@ -824,7 +824,7 @@ def _extract_one_project(
             if _safe_quality_score(fact) >= definition.minimum_quality_score:
                 eligible.append((binding, kind))
 
-        group_candidates: list[list[tuple[Phase4SignalEvidenceBinding, str]]] = []
+        group_candidates: list[list[tuple[ProjectSignalEvidenceBinding, str]]] = []
         missing_indexes: list[int] = []
         low_quality_group = False
         for index, group in enumerate(definition.required_signal_groups):
@@ -942,14 +942,14 @@ def _extract_one_project(
             metric_support = _metric_support_for_facts(selected_facts)
             mechanisms = _selected_mechanisms(selected_facts)
             confidence = _confidence_for_proof(definition, selected_facts, selected_kinds)
-            capability_id = build_phase4_stable_id("p4cap_", project_id, {
+            capability_id = build_project_evidence_stable_id("pcf_", project_id, {
                 "project_id": project_id,
                 "capability_type": definition.capability_type,
                 "source_evidence_fact_ids": sorted(selected_ids),
                 "mechanisms": mechanisms,
                 "metric_support": metric_support.value,
             })
-            emitted.append(Phase4CapabilityFact(
+            emitted.append(ProjectCapabilityFact(
                 capability_id=capability_id,
                 project_id=project_id,
                 capability_type=definition.capability_type,
@@ -979,7 +979,7 @@ def _extract_one_project(
             decision_code = "insufficient_direct_fact_count"
         else:
             decision_code = "insufficient_total_fact_count"
-        decisions.append(Phase4CapabilityExtractionDecision(
+        decisions.append(ProjectCapabilityExtractionDecision(
             project_id=project_id,
             capability_type=definition.capability_type,
             decision_code=decision_code,
@@ -988,16 +988,16 @@ def _extract_one_project(
         ))
 
     emitted.sort(key=lambda item: (item.project_id, item.capability_type, item.capability_id))
-    overlaps: list[Phase4CapabilityOverlapDecision] = []
+    overlaps: list[ProjectCapabilityOverlapDecision] = []
     emitted_by_type = {item.capability_type: item for item in emitted}
-    for rule in list_phase4_capability_overlap_rules():
+    for rule in list_project_capability_overlap_rules():
         left = emitted_by_type.get(rule.left_capability)
         right = emitted_by_type.get(rule.right_capability)
         if left is None or right is None:
             continue
         shared = tuple(sorted(set(left.source_evidence_fact_ids) & set(right.source_evidence_fact_ids)))
         if shared:
-            overlaps.append(Phase4CapabilityOverlapDecision(
+            overlaps.append(ProjectCapabilityOverlapDecision(
                 project_id=project_id,
                 left_capability=rule.left_capability,
                 right_capability=rule.right_capability,
@@ -1017,11 +1017,11 @@ def _extract_one_project(
         item.decision_code,
         item.supporting_evidence_fact_ids,
     ))
-    report = Phase4CapabilityExtractionReport(
+    report = ProjectCapabilityExtractionReport(
         project_count=1,
         fact_count=len(facts),
         signal_binding_count=signal_report.signal_binding_count,
-        capability_candidates_evaluated=len(list_phase4_capability_definitions()),
+        capability_candidates_evaluated=len(list_project_capability_definitions()),
         capabilities_emitted=len(emitted),
         missing_required_group_count=missing_required_group_count,
         insufficient_quality_count=insufficient_quality_count,
@@ -1038,7 +1038,7 @@ def _extract_one_project(
         conflicts=tuple(conflicts[:MAX_DECISION_SAMPLES]),
         overlaps=tuple(overlaps[:MAX_DECISION_SAMPLES]),
         grouped_decision_counts=tuple(
-            Phase4CapabilityDecisionGroupCount(
+            ProjectCapabilityDecisionGroupCount(
                 capability_type=capability_type,
                 decision_code=decision_code,
                 count=sum(
@@ -1054,26 +1054,26 @@ def _extract_one_project(
     return emitted, report
 
 
-def extract_phase4_project_capabilities(
+def extract_project_capabilities(
     project_id: str,
-    facts: Iterable[Phase4EvidenceFact],
-) -> tuple[list[Phase4CapabilityFact], Phase4CapabilityExtractionReport]:
+    facts: Iterable[ProjectEvidenceFact],
+) -> tuple[list[ProjectCapabilityFact], ProjectCapabilityExtractionReport]:
     if not isinstance(project_id, str):
         raise TypeError("project_id must be a string")
     normalized_project_id = " ".join(project_id.split())
     if not normalized_project_id:
         raise ValueError("project_id must not be blank")
     records = list(facts)
-    if any(not isinstance(fact, Phase4EvidenceFact) for fact in records):
-        raise TypeError("extract_phase4_project_capabilities expects Phase4EvidenceFact values")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in records):
+        raise TypeError("extract_project_capabilities expects ProjectEvidenceFact values")
     return _extract_one_project(normalized_project_id, records)
 
 
 def _aggregate_reports(
-    reports: Sequence[Phase4CapabilityExtractionReport],
+    reports: Sequence[ProjectCapabilityExtractionReport],
     *,
     fact_count: int,
-) -> Phase4CapabilityExtractionReport:
+) -> ProjectCapabilityExtractionReport:
     decisions = sorted(
         (item for report in reports for item in report.decisions),
         key=lambda item: (item.project_id, item.capability_type, item.decision_code),
@@ -1089,7 +1089,7 @@ def _aggregate_reports(
         for report in reports
         for item in report.grouped_decision_counts
     })
-    return Phase4CapabilityExtractionReport(
+    return ProjectCapabilityExtractionReport(
         project_count=sum(report.project_count for report in reports),
         fact_count=fact_count,
         signal_binding_count=sum(report.signal_binding_count for report in reports),
@@ -1110,7 +1110,7 @@ def _aggregate_reports(
         conflicts=tuple(conflicts[:MAX_DECISION_SAMPLES]),
         overlaps=tuple(overlaps[:MAX_DECISION_SAMPLES]),
         grouped_decision_counts=tuple(
-            Phase4CapabilityDecisionGroupCount(
+            ProjectCapabilityDecisionGroupCount(
                 capability_type=capability_type,
                 decision_code=decision_code,
                 count=sum(
@@ -1125,34 +1125,34 @@ def _aggregate_reports(
     )
 
 
-def extract_phase4_capabilities_by_project(
-    facts: Iterable[Phase4EvidenceFact],
-) -> tuple[dict[str, list[Phase4CapabilityFact]], Phase4CapabilityExtractionReport]:
+def extract_project_evidence_capabilities_by_project(
+    facts: Iterable[ProjectEvidenceFact],
+) -> tuple[dict[str, list[ProjectCapabilityFact]], ProjectCapabilityExtractionReport]:
     records = list(facts)
-    if any(not isinstance(fact, Phase4EvidenceFact) for fact in records):
-        raise TypeError("extract_phase4_capabilities_by_project expects Phase4EvidenceFact values")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in records):
+        raise TypeError("extract_project_evidence_capabilities_by_project expects ProjectEvidenceFact values")
     if not records:
         return {}, _empty_capability_report()
-    by_project: dict[str, list[Phase4EvidenceFact]] = {}
+    by_project: dict[str, list[ProjectEvidenceFact]] = {}
     for fact in records:
         by_project.setdefault(fact.project_id, []).append(fact)
 
     duplicate_projects: dict[str, set[str]] = {}
     for fact in records:
         duplicate_projects.setdefault(fact.evidence_fact_id, set()).add(fact.project_id)
-    global_conflicts: dict[str, list[Phase4CapabilityExtractionConflict]] = {}
+    global_conflicts: dict[str, list[ProjectCapabilityExtractionConflict]] = {}
     for fact_id, projects in sorted(duplicate_projects.items()):
         if len(projects) <= 1:
             continue
         for project_id in sorted(projects):
-            global_conflicts.setdefault(project_id, []).append(Phase4CapabilityExtractionConflict(
+            global_conflicts.setdefault(project_id, []).append(ProjectCapabilityExtractionConflict(
                 project_id=project_id,
                 conflict_code="duplicate_fact_id_across_projects",
                 evidence_fact_ids=(fact_id,),
             ))
 
-    output: dict[str, list[Phase4CapabilityFact]] = {}
-    reports: list[Phase4CapabilityExtractionReport] = []
+    output: dict[str, list[ProjectCapabilityFact]] = {}
+    reports: list[ProjectCapabilityExtractionReport] = []
     for project_id in sorted(by_project):
         capabilities, report = _extract_one_project(
             project_id,
@@ -1171,21 +1171,21 @@ __all__ = [
     "MAX_DECISION_SAMPLES",
     "PROJECT_CONTEXT_SOURCE_TYPES",
     "SIGNAL_EXTRACTION_RULES",
-    "Phase4CapabilityExtractionConflict",
-    "Phase4CapabilityExtractionDecision",
-    "Phase4CapabilityExtractionReport",
-    "Phase4CapabilityDecisionGroupCount",
-    "Phase4CapabilityOverlapDecision",
-    "Phase4FactSignalExtraction",
-    "Phase4SignalEvidenceBinding",
-    "Phase4SignalExtractionDecision",
-    "Phase4SignalExtractionReport",
-    "Phase4SignalExtractionRule",
-    "classify_phase4_source_category",
-    "extract_phase4_capabilities_by_project",
-    "extract_phase4_fact_signals",
-    "extract_phase4_fact_signals_many",
-    "extract_phase4_project_capabilities",
-    "list_phase4_signal_extraction_rules",
-    "validate_phase4_signal_extraction_rules",
+    "ProjectCapabilityExtractionConflict",
+    "ProjectCapabilityExtractionDecision",
+    "ProjectCapabilityExtractionReport",
+    "ProjectCapabilityDecisionGroupCount",
+    "ProjectCapabilityOverlapDecision",
+    "ProjectFactSignalExtraction",
+    "ProjectSignalEvidenceBinding",
+    "ProjectSignalExtractionDecision",
+    "ProjectSignalExtractionReport",
+    "ProjectSignalExtractionRule",
+    "classify_project_evidence_source_category",
+    "extract_project_evidence_capabilities_by_project",
+    "extract_project_evidence_fact_signals",
+    "extract_project_evidence_fact_signals_many",
+    "extract_project_capabilities",
+    "list_project_evidence_signal_extraction_rules",
+    "validate_project_evidence_signal_extraction_rules",
 ]
