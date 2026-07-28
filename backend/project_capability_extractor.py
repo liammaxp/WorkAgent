@@ -739,6 +739,16 @@ def _selected_tags(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
     return sorted(values, key=lambda value: (value.casefold(), value))
 
 
+def select_project_evidence_technical_tags(
+    facts: Sequence[ProjectEvidenceFact],
+) -> tuple[str, ...]:
+    """Return technical tags selected by the existing extractor rules."""
+
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("select_project_evidence_technical_tags expects ProjectEvidenceFact values")
+    return tuple(_selected_tags(facts))
+
+
 def _confidence_for_proof(
     definition: ProjectCapabilityDefinition,
     selected_facts: Sequence[ProjectEvidenceFact],
@@ -751,6 +761,24 @@ def _confidence_for_proof(
     if all_direct and len(independent) >= 2 and strong:
         return Confidence.HIGH
     return Confidence.MEDIUM
+
+
+def derive_project_capability_confidence(
+    definition: ProjectCapabilityDefinition,
+    facts: Sequence[ProjectEvidenceFact],
+) -> Confidence:
+    """Apply the extractor's existing confidence rule to deterministic proof inputs."""
+
+    if not isinstance(definition, ProjectCapabilityDefinition):
+        raise TypeError("definition must be a ProjectCapabilityDefinition")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("facts must contain ProjectEvidenceFact values")
+    selected_kinds = {
+        fact.evidence_fact_id: kind
+        for fact in facts
+        if (kind := classify_project_capability_evidence_kind(fact, definition)) is not None
+    }
+    return _confidence_for_proof(definition, facts, selected_kinds)
 
 
 def _empty_capability_report(*, project_count: int = 0, fact_count: int = 0) -> ProjectCapabilityExtractionReport:
@@ -1222,6 +1250,7 @@ __all__ = [
     "ProjectSignalExtractionRule",
     "classify_project_capability_evidence_kind",
     "classify_project_evidence_source_category",
+    "derive_project_capability_confidence",
     "extract_project_evidence_capabilities_by_project",
     "extract_project_evidence_fact_signals",
     "extract_project_evidence_fact_signals_many",
@@ -1230,5 +1259,6 @@ __all__ = [
     "get_project_evidence_quality_score",
     "list_project_evidence_signal_extraction_rules",
     "select_project_evidence_mechanisms",
+    "select_project_evidence_technical_tags",
     "validate_project_evidence_signal_extraction_rules",
 ]

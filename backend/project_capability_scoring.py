@@ -159,6 +159,14 @@ def _is_concrete_mechanism(value: str) -> bool:
     return bool(specific) and (len(tokens) >= 2 or "_" in value or "-" in value)
 
 
+def is_concrete_project_evidence_mechanism(value: str) -> bool:
+    """Expose the scoring layer's existing deterministic concreteness rule."""
+
+    if not isinstance(value, str):
+        raise TypeError("mechanism must be a string")
+    return _is_concrete_mechanism(value)
+
+
 def _resolved_evidence(
     candidate: CapabilityCandidate,
     evidence_index: Mapping[str, ProjectEvidenceFact],
@@ -415,4 +423,5 @@ __all__ = [
     "CapabilitySupportAssessment",
     "assess_capability_candidate_support",
     "assess_project_capability_candidates",
+    "is_concrete_project_evidence_mechanism",
 ]
