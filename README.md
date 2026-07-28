@@ -98,7 +98,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- windows/                 # Windows .bat and PowerShell entry points
 |-- linux/                   # Linux .sh entry points
 |-- macos/                   # macOS double-click .command entry points
-|-- tests/                   # Backend regression tests for resume quality gates and GitHub context pipelines
+|-- tests/                   # Backend regression tests for resume, GitHub evidence, project memory, and privacy
 `-- README.md
 ```
 
@@ -388,6 +388,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 
 Do not commit API keys, resumes, job descriptions, GitHub identities, generated documents, application records, or personal background notes.
 Safe templates such as `.env.example` and `background/prompt.example.txt` remain trackable. `.gitignore` prevents future accidental tracking; it does not remove sensitive data from existing Git history.
+The repository privacy policy also ignores credentials, uploads, generated exports, runtime databases, logs, local model caches, and frontend dependencies, while allowing documentation, safe templates, source code, and synthetic test fixtures. `tests/test_repository_privacy_policy.py` checks representative ignore rules and verifies that no tracked path is also ignored.
 
 ## Minimum Environment Requirements
 
@@ -594,6 +595,12 @@ Project-change and project-evidence tests:
 ```powershell
 $projectEvidenceTests = Get-ChildItem tests -File | Where-Object { $_.Name -match 'project_evidence|project_capability|project_claim|project_change' } | ForEach-Object { $_.FullName }
 python -m pytest $projectEvidenceTests -q
+```
+
+Repository privacy-policy regression test:
+
+```powershell
+python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
 Frontend production build:
@@ -969,6 +976,8 @@ GitHub evidence memory 由 `USE_GITHUB_EVIDENCE_MEMORY` 控制。启用后，Git
 
 Project change memory 由 `USE_PROJECT_CHANGE_MEMORY` 控制。启用后，project change memory pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_change_memory.json`。`POST /api/github/change-memory/build` 用于运行该 pipeline，`GET /api/github/change-memory/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/change-memory/health` 返回当前 project change memory 是否 ready、empty、degraded 或 disabled。
 
+Project evidence memory 由 `USE_PROJECT_EVIDENCE_MEMORY` 控制，并按 `project_evidence_memory.v1` schema 持久化到 `information/project_evidence_memory.json`。它从 GitHub evidence JSONL、可选的 project-change memory、`project_memory.json` 和 `project_compact_facts.json` 只读读取输入，然后执行规范化、合成、质量评分、能力抽取、claim boundary 构建和原子校验；当前没有 `/api/project-evidence/*` 接口或前端触发入口。无效或不完整的可选输入会变成排序后的 warning，不支持的指标和能力推断不会进入合成声明。
+
 ## 本地文件与隐私
 
 WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个人信息或密钥，不应提交到 git：
@@ -993,6 +1002,7 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 
 不要提交 API Key、简历、职位描述、GitHub 身份、生成文档、投递记录或个人背景资料。
 `.env.example` 和 `background/prompt.example.txt` 等安全模板仍可被 Git 跟踪。`.gitignore` 只能防止以后误提交，不能从已有 Git 历史中删除敏感数据。
+仓库级隐私规则还会忽略凭据、上传文件、生成导出物、运行时数据库、日志、本地模型缓存和前端依赖，同时保留文档、安全模板、源代码和合成测试 fixture 的可跟踪性。`tests/test_repository_privacy_policy.py` 会检查代表性忽略规则，并确认没有“已跟踪且同时被忽略”的路径。
 
 ## 最低环境配置要求
 
@@ -1180,6 +1190,18 @@ python main.py
 
 ```powershell
 python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
+```
+
+后端回归测试：
+
+```powershell
+python -m pytest tests -q
+```
+
+仓库隐私策略回归测试：
+
+```powershell
+python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
 前端生产构建：
