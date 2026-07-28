@@ -411,6 +411,7 @@ function collectProjectOptions(projectMemory) {
 }
 
 export default function GitHubContext() {
+  const showEvidenceDebug = import.meta.env.DEV;
   const { language } = useLanguage();
   const copy = text[language].github;
   const [scan, setScan] = useState(null);
@@ -792,7 +793,7 @@ export default function GitHubContext() {
         </div>
       </section>
 
-      <section className="card evidence-pipeline-panel">
+      {showEvidenceDebug && <section className="card evidence-pipeline-panel">
         <h2 className="card-title">{pipelineCopy.title}</h2>
         <p className="helper-text">{pipelineCopy.hint}</p>
         <div className="evidence-pipeline-controls">
@@ -852,7 +853,7 @@ export default function GitHubContext() {
           error={evidencePipelineError}
           ui={pipelineCopy}
         />
-      </section>
+      </section>}
 
       <section className="card">
         <h2 className="card-title">{repositoryEvidenceTitle}</h2>

@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import evidence_memory
+
 if __package__:
     from .project_change_memory import (
         CAPABILITY_TYPES,
@@ -121,6 +123,31 @@ def load_saved_github_contexts_for_project_change_memory(
     return normalize_saved_github_contexts(payload)
 
 
+def load_github_raw_sources_for_project_change_memory() -> tuple[list[RawDiffInput], list[dict[str, Any]]]:
+    """Adapt the canonical raw-source store into diff inputs without exposing raw text."""
+    inputs: list[RawDiffInput] = []
+    skipped: list[dict[str, Any]] = []
+    for source in evidence_memory.read_github_raw_sources():
+        project_id = str(source.get("project_id") or "").strip()
+        repo = str(source.get("repo") or "").strip()
+        patch_entry = {
+            "file_path": source.get("path"),
+            "commit_sha": source.get("commit_sha"),
+            "patch_text": source.get("raw_text"),
+            "commit_message": (source.get("metadata") or {}).get("commit_message", ""),
+            "source_type": source.get("source_type") or "commit_patch",
+        }
+        if str(source.get("source_type") or "") != "commit_patch":
+            skipped.append(skipped_source(project_id=project_id, repo=repo, reason="non_patch_source"))
+            continue
+        raw_input, reason = raw_diff_input_from_patch_entry(project_id, repo, patch_entry)
+        if raw_input is not None:
+            inputs.append(raw_input)
+        elif reason is not None:
+            skipped.append(reason)
+    return dedupe_raw_diff_inputs(inputs), sort_skipped_sources(skipped)
+
+
 def normalize_saved_github_contexts(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [context for context in payload if isinstance(context, dict)]
@@ -200,8 +227,18 @@ def run_project_change_memory_pipeline(
     if not is_project_change_memory_enabled():
         return empty_pipeline_result(enabled=False, status="disabled", memory_path=memory_path)
 
+    contexts = github_contexts if github_contexts is not None else None
     try:
-        contexts = github_contexts if github_contexts is not None else load_saved_github_contexts_for_project_change_memory()
+        if contexts is None:
+            raw_inputs, skipped_sources = load_github_raw_sources_for_project_change_memory()
+            # Safely support existing installations until their saved context has been
+            # persisted into github_raw_sources. Numbered/unknown artifacts are never read.
+            if not raw_inputs:
+                contexts = load_saved_github_contexts_for_project_change_memory()
+                raw_inputs, legacy_skips = collect_project_change_raw_diff_inputs(contexts)
+                skipped_sources.extend(legacy_skips)
+        else:
+            raw_inputs, skipped_sources = collect_project_change_raw_diff_inputs(contexts)
     except Exception as error:
         logger.warning("project change memory saved GitHub context load failed: %s", error)
         return empty_pipeline_result(
@@ -210,8 +247,6 @@ def run_project_change_memory_pipeline(
             memory_path=memory_path,
             errors=[safe_error_message(error)],
         )
-
-    raw_inputs, skipped_sources = collect_project_change_raw_diff_inputs(contexts)
     raw_inputs = dedupe_raw_diff_inputs(raw_inputs)
     if not raw_inputs:
         status = "no_source"
@@ -219,7 +254,7 @@ def run_project_change_memory_pipeline(
             enabled=True,
             status=status,
             memory_path=memory_path,
-            source_context_count=len(contexts),
+            source_context_count=len(contexts or []),
             skipped_sources=sort_skipped_sources(skipped_sources),
         )
 
@@ -267,7 +302,7 @@ def run_project_change_memory_pipeline(
         return ProjectChangePipelineResult(
             enabled=True,
             status="failed",
-            source_context_count=len(contexts),
+            source_context_count=len(contexts or []),
             raw_diff_input_count=len(raw_inputs),
             diff_unit_count=len(diff_units),
             raw_change_summary_count=len(summaries),
@@ -301,7 +336,7 @@ def run_project_change_memory_pipeline(
     return ProjectChangePipelineResult(
         enabled=True,
         status=status,
-        source_context_count=len(contexts),
+        source_context_count=len(contexts or []),
         raw_diff_input_count=len(raw_inputs),
         diff_unit_count=len(diff_units),
         raw_change_summary_count=len(summaries),

@@ -41,6 +41,7 @@ import evidence_memory
 import evidence_pipeline
 import main as agent
 import project_change_pipeline
+from backend import project_evidence_pipeline as semantic_evidence_pipeline
 from tech_ontology import (
     build_tech_ontology_index,
     enrich_jd_profile_with_tech_ontology,
@@ -18550,6 +18551,86 @@ def github_context_status():
     return status
 
 
+def _project_evidence_status_payload() -> dict[str, Any]:
+    """Return production evidence state without source text or artifact samples."""
+    raw_status = get_github_context_status_v2() if github_context_status_v2_enabled() else {
+        "enabled": False,
+        "saved": False,
+        "repo_count": 0,
+        "record_count": 0,
+        "raw_chars": 0,
+        "errors": [],
+    }
+    change_health = project_change_pipeline.get_project_change_health()
+    evidence_health = semantic_evidence_pipeline.get_project_evidence_health().to_dict()
+    return {
+        "enabled": bool(raw_status.get("enabled", True)),
+        "saved": bool(raw_status.get("saved")),
+        "github_raw_sources": {
+            "repo_count": int(raw_status.get("repo_count") or 0),
+            "record_count": int(raw_status.get("record_count") or 0),
+            "raw_chars": int(raw_status.get("raw_chars") or 0),
+        },
+        "project_change_memory": {
+            key: change_health.get(key)
+            for key in (
+                "enabled", "status", "schema_version", "memory_exists", "memory_readable",
+                "updated_at", "project_count", "raw_change_summary_count",
+                "evidence_card_count", "capability_fact_count", "issues",
+            )
+        },
+        "project_evidence_memory": evidence_health,
+        "errors": list(raw_status.get("errors") or []),
+    }
+
+
+@app.get("/api/project-evidence/status")
+def project_evidence_status():
+    return _project_evidence_status_payload()
+
+
+@app.post("/api/project-evidence/build")
+def project_evidence_build():
+    """Run the single semantic production chain over already-saved GitHub context."""
+    change_result = project_change_pipeline.run_project_change_memory_pipeline()
+    change_payload = project_change_pipeline.pipeline_result_to_dict(change_result)
+    evidence_result = semantic_evidence_pipeline.run_project_evidence_pipeline()
+    evidence_payload = evidence_result.to_dict()
+    return {
+        "ok": change_payload.get("status") not in {"failed"} and evidence_payload.get("status") != "error",
+        "project_change_memory": change_payload,
+        "project_evidence_memory": evidence_payload,
+    }
+
+
+@app.get("/api/project-evidence/inspect")
+def project_evidence_inspect(
+    project_id: str = "",
+    limit: str = Query(default=str(semantic_evidence_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
+):
+    return semantic_evidence_pipeline.inspect_project_evidence_memory(
+        project_id=project_id or None,
+        sample_limit=limit,
+    ).to_dict()
+
+
+@app.get("/api/project-evidence/health")
+def project_evidence_health():
+    return semantic_evidence_pipeline.get_project_evidence_health().to_dict()
+
+
+@app.get("/api/project-evidence/preview")
+def project_evidence_preview(
+    project_id: str = "",
+    limit: str = Query(default=str(semantic_evidence_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
+):
+    # Preview intentionally shares the bounded, metadata-only inspect contract.
+    return semantic_evidence_pipeline.inspect_project_evidence_memory(
+        project_id=project_id or None,
+        sample_limit=limit,
+    ).to_dict()
+
+
 @app.get("/api/github/evidence/status")
 def github_evidence_status():
     status = get_github_evidence_status()
@@ -18587,7 +18668,7 @@ def github_evidence_pipeline_body_fields(body: Optional[GitHubEvidencePipelineBu
     return set(fields)
 
 
-@app.post("/api/github/evidence/build")
+@app.post("/api/github/evidence/build", deprecated=True)
 def github_evidence_build(
     body: Optional[GitHubEvidencePipelineBuildBody] = None,
     project_id: str = "",
@@ -18629,7 +18710,7 @@ def github_evidence_build(
     return result
 
 
-@app.get("/api/github/evidence/inspect")
+@app.get("/api/github/evidence/inspect", deprecated=True)
 def github_evidence_inspect(
     project_id: str = "",
     limit: str = Query(default=str(GITHUB_EVIDENCE_PREVIEW_DEFAULT_LIMIT)),
@@ -18651,7 +18732,7 @@ def github_evidence_inspect(
     return result
 
 
-@app.get("/api/github/evidence/health")
+@app.get("/api/github/evidence/health", deprecated=True)
 def github_evidence_health(project_id: str = ""):
     result = evidence_pipeline.get_github_evidence_health(project_id=project_id)
     logger.info(
@@ -18802,7 +18883,7 @@ def github_evidence_capability_facts_preview(
     return preview
 
 
-@app.post("/api/github/change-memory/build")
+@app.post("/api/github/change-memory/build", deprecated=True)
 def github_context_project_change_build():
     result = project_change_pipeline.run_project_change_memory_pipeline()
     payload = project_change_pipeline.pipeline_result_to_dict(result)
@@ -18826,7 +18907,7 @@ def github_context_project_change_build():
     return {"ok": ok, "message": message, **payload}
 
 
-@app.get("/api/github/change-memory/inspect")
+@app.get("/api/github/change-memory/inspect", deprecated=True)
 def github_context_project_change_inspect(
     project_id: str = "",
     sample_limit: str = Query(default=str(project_change_pipeline.DEFAULT_INSPECT_SAMPLE_LIMIT)),
@@ -18845,7 +18926,7 @@ def github_context_project_change_inspect(
     return result
 
 
-@app.get("/api/github/change-memory/health")
+@app.get("/api/github/change-memory/health", deprecated=True)
 def github_context_project_change_health():
     result = project_change_pipeline.get_project_change_health()
     logger.info(
@@ -18949,6 +19030,15 @@ def github_context_raw(
             },
         )
     return result
+
+
+@app.get("/api/project-evidence/raw")
+def project_evidence_raw(
+    source_id: str = "",
+    max_chars: str = Query(default=str(GITHUB_CONTEXT_RAW_DEFAULT_CHARS)),
+):
+    """Explicit, bounded compatibility entrypoint for authorized raw inspection."""
+    return github_context_raw(source_id=source_id, max_chars=max_chars)
 
 
 @app.post("/api/github/context")

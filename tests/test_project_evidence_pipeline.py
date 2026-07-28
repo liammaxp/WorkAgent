@@ -656,10 +656,11 @@ def test_import_has_no_file_or_external_service_side_effects():
     assert completed.returncode == 0, completed.stderr
 
 
-def test_decision_a_adds_no_project_evidence_api_or_frontend_contract():
+def test_semantic_project_evidence_api_is_the_production_contract():
     root = Path(__file__).resolve().parents[1]
     api_source = (root / "backend" / "api_server.py").read_text(encoding="utf-8")
-    assert "/api/project-evidence/" not in api_source
+    for route in ("status", "build", "inspect", "health", "preview", "raw"):
+        assert f'/api/project-evidence/{route}' in api_source
     assert "frontend" not in Path(pipeline.__file__).read_text(encoding="utf-8").casefold()
 
 
