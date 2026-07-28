@@ -390,6 +390,14 @@ def _safe_quality_score(fact: ProjectEvidenceFact) -> int:
     return max(0, min(100, int(value)))
 
 
+def get_project_evidence_quality_score(fact: ProjectEvidenceFact) -> int:
+    """Return the extractor's authoritative bounded Evidence Fact quality."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("get_project_evidence_quality_score expects ProjectEvidenceFact")
+    return _safe_quality_score(fact)
+
+
 def _flatten_metadata_values(value: Any) -> list[str]:
     if isinstance(value, str):
         normalized = " ".join(value.split())
@@ -617,6 +625,14 @@ def _independent_evidence_identity(fact: ProjectEvidenceFact) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def get_independent_project_evidence_identity(fact: ProjectEvidenceFact) -> str:
+    """Return the privacy-safe identity used for independent direct evidence."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("get_independent_project_evidence_identity expects ProjectEvidenceFact")
+    return _independent_evidence_identity(fact)
+
+
 def _base_lineage_identity(fact: ProjectEvidenceFact) -> str:
     payload = sorted({_ref_identity(ref, include_hash=False) for ref in fact.source_refs})
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
@@ -659,6 +675,19 @@ def _eligible_kind(
     return None
 
 
+def classify_project_capability_evidence_kind(
+    fact: ProjectEvidenceFact,
+    definition: ProjectCapabilityDefinition,
+) -> str | None:
+    """Expose the extractor's existing direct/contextual proof classification."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("classify_project_capability_evidence_kind expects ProjectEvidenceFact")
+    if not isinstance(definition, ProjectCapabilityDefinition):
+        raise TypeError("definition must be a ProjectCapabilityDefinition")
+    return _eligible_kind(fact, classify_project_evidence_source_category(fact), definition)
+
+
 def _metric_support_for_facts(facts: Sequence[ProjectEvidenceFact]) -> MetricSupport:
     metric_facts = [
         fact
@@ -687,6 +716,16 @@ def _selected_mechanisms(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
         if len(output) >= MAX_MECHANISMS:
             break
     return output
+
+
+def select_project_evidence_mechanisms(
+    facts: Sequence[ProjectEvidenceFact],
+) -> tuple[str, ...]:
+    """Return the extractor's bounded, normalized, deduplicated mechanisms."""
+
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("select_project_evidence_mechanisms expects ProjectEvidenceFact values")
+    return tuple(_selected_mechanisms(facts))
 
 
 def _selected_tags(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
@@ -1181,11 +1220,15 @@ __all__ = [
     "ProjectSignalExtractionDecision",
     "ProjectSignalExtractionReport",
     "ProjectSignalExtractionRule",
+    "classify_project_capability_evidence_kind",
     "classify_project_evidence_source_category",
     "extract_project_evidence_capabilities_by_project",
     "extract_project_evidence_fact_signals",
     "extract_project_evidence_fact_signals_many",
     "extract_project_capabilities",
+    "get_independent_project_evidence_identity",
+    "get_project_evidence_quality_score",
     "list_project_evidence_signal_extraction_rules",
+    "select_project_evidence_mechanisms",
     "validate_project_evidence_signal_extraction_rules",
 ]
