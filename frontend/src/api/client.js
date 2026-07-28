@@ -401,7 +401,7 @@ export const api = {
     if (limit !== null && limit !== undefined && String(limit).trim() !== "") {
       payload.limit = Number(limit);
     }
-    return request("/github/context/phase2/build", {
+    return request("/github/evidence/build", {
       method: "POST",
       body: JSON.stringify(payload),
     });

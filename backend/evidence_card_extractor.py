@@ -1,4 +1,4 @@
-"""Deterministic Phase 2 evidence card extraction."""
+"""Deterministic GitHub evidence evidence card extraction."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 import evidence_memory
 
 
-PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 ENABLED_VALUES = {"1", "true", "yes", "on"}
 DETAIL_LIMIT = 6
 DETAIL_CHARS = 220
@@ -37,14 +37,14 @@ PROBLEM_BY_TYPE = {
     "validation_rule_update": "Invalid, polluted, or unsupported generated content could pass into downstream output without a deterministic guard.",
     "storage_update": "Raw GitHub context could be difficult to audit or reuse without structured persistence.",
     "schema_update": "Project evidence could be difficult to normalize, deduplicate, or inspect without a consistent schema.",
-    "api_route_update": "Phase 2 evidence state could be difficult to inspect without safe read-only or debug endpoints.",
+    "api_route_update": "GitHub evidence evidence state could be difficult to inspect without safe read-only or debug endpoints.",
     "chunking_update": "Repo-level GitHub context was too coarse for precise downstream evidence extraction.",
-    "test_update": "Phase 2 behavior could regress without targeted tests.",
-    "configuration_update": "New Phase 2 behavior needed a safe feature flag boundary to avoid affecting the old pipeline.",
+    "test_update": "GitHub evidence behavior could regress without targeted tests.",
+    "configuration_update": "New GitHub evidence behavior needed a safe feature flag boundary to avoid affecting the old pipeline.",
     "retrieval_logic_update": "Retrieved evidence could be difficult to trace without explicit source boundaries.",
     "ranking_logic_update": "Project or evidence ordering could be difficult to reason about without deterministic ranking logic.",
-    "documentation_update": "Phase 2 behavior could be difficult to inspect or operate without clear documentation.",
-    "error_handling_update": "Phase 2 processing needed guarded fallback behavior for unexpected local state.",
+    "documentation_update": "GitHub evidence behavior could be difficult to inspect or operate without clear documentation.",
+    "error_handling_update": "GitHub evidence processing needed guarded fallback behavior for unexpected local state.",
 }
 
 MECHANISM_BY_TYPE = {
@@ -52,29 +52,29 @@ MECHANISM_BY_TYPE = {
     "validation_rule_update": "Added deterministic validation or guard logic around generated output.",
     "storage_update": "Added JSONL-backed storage helpers with stable IDs, hashes, and upsert behavior.",
     "schema_update": "Added structured schema fields for normalizing and inspecting evidence records.",
-    "api_route_update": "Added explicit Phase 2 backend endpoint for safe status, preview, or manual build operations.",
+    "api_route_update": "Added explicit GitHub evidence backend endpoint for safe status, preview, or manual build operations.",
     "chunking_update": "Split raw GitHub context into bounded, source-traceable evidence chunks.",
-    "test_update": "Added targeted regression tests for Phase 2 behavior.",
-    "configuration_update": "Added feature-flag gating around Phase 2 behavior.",
+    "test_update": "Added targeted regression tests for GitHub evidence behavior.",
+    "configuration_update": "Added feature-flag gating around GitHub evidence behavior.",
     "retrieval_logic_update": "Updated evidence lookup logic while preserving source traceability.",
     "ranking_logic_update": "Updated deterministic ordering or scoring logic.",
-    "documentation_update": "Updated documentation or markdown content for Phase 2 behavior.",
+    "documentation_update": "Updated documentation or markdown content for GitHub evidence behavior.",
     "error_handling_update": "Added guarded error handling or fallback behavior.",
 }
 
 SAFE_IMPACT_BY_TYPE = {
     "merge_logic_update": "Improved technical specificity and ordering reliability of generated project evidence before final output.",
     "validation_rule_update": "Improved deterministic guarding of generated or stored evidence before downstream use.",
-    "storage_update": "Improved traceability and repeatability of Phase 2 evidence memory.",
+    "storage_update": "Improved traceability and repeatability of GitHub evidence evidence memory.",
     "schema_update": "Improved consistency of evidence records for later inspection and reuse.",
-    "api_route_update": "Improved debuggability and safe inspection of Phase 2 evidence state.",
+    "api_route_update": "Improved debuggability and safe inspection of GitHub evidence evidence state.",
     "chunking_update": "Improved source traceability by converting coarse raw GitHub context into bounded evidence chunks.",
-    "test_update": "Improved regression coverage for Phase 2 evidence memory behavior.",
-    "configuration_update": "Reduced risk of Phase 2 changes affecting the existing pipeline by keeping behavior behind a feature flag.",
+    "test_update": "Improved regression coverage for GitHub evidence evidence memory behavior.",
+    "configuration_update": "Reduced risk of GitHub evidence changes affecting the existing pipeline by keeping behavior behind a feature flag.",
     "retrieval_logic_update": "Improved traceability of evidence lookup behavior.",
     "ranking_logic_update": "Improved determinism of evidence or project ordering.",
-    "documentation_update": "Improved inspectability of Phase 2 behavior for local debugging.",
-    "error_handling_update": "Improved resilience of local Phase 2 processing around unexpected state.",
+    "documentation_update": "Improved inspectability of GitHub evidence behavior for local debugging.",
+    "error_handling_update": "Improved resilience of local GitHub evidence processing around unexpected state.",
 }
 
 RESUME_ANGLE_BY_TYPE = {
@@ -95,16 +95,16 @@ RESUME_ANGLE_BY_TYPE = {
 ALLOWED_CLAIM_BY_TYPE = {
     "merge_logic_update": "preserved mechanism-rich project evidence during deterministic merge ordering",
     "validation_rule_update": "added deterministic guards for template pollution or unsupported generated content",
-    "storage_update": "implemented JSONL-backed Phase 2 evidence memory with stable IDs and upsert behavior",
-    "schema_update": "defined structured Phase 2 evidence records for inspection and reuse",
-    "api_route_update": "added safe Phase 2 status and preview endpoints without exposing full raw content",
+    "storage_update": "implemented JSONL-backed GitHub evidence evidence memory with stable IDs and upsert behavior",
+    "schema_update": "defined structured GitHub evidence evidence records for inspection and reuse",
+    "api_route_update": "added safe GitHub evidence status and preview endpoints without exposing full raw content",
     "chunking_update": "converted raw GitHub context into source-traceable evidence chunks",
-    "test_update": "added regression tests for Phase 2 evidence memory behavior",
-    "configuration_update": "kept Phase 2 behavior behind a feature flag boundary",
+    "test_update": "added regression tests for GitHub evidence evidence memory behavior",
+    "configuration_update": "kept GitHub evidence behavior behind a feature flag boundary",
     "retrieval_logic_update": "preserved source traceability in evidence lookup logic",
     "ranking_logic_update": "added deterministic ordering logic for evidence handling",
-    "documentation_update": "documented Phase 2 evidence memory behavior for local inspection",
-    "error_handling_update": "added guarded fallback behavior for Phase 2 evidence processing",
+    "documentation_update": "documented GitHub evidence evidence memory behavior for local inspection",
+    "error_handling_update": "added guarded fallback behavior for GitHub evidence evidence processing",
 }
 
 GENERIC_FORBIDDEN_CLAIMS = [
@@ -116,8 +116,8 @@ GENERIC_FORBIDDEN_CLAIMS = [
 ]
 
 
-def phase2_enabled() -> bool:
-    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
+def github_evidence_enabled() -> bool:
+    return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def build_evidence_cards_from_change_summaries(
@@ -151,7 +151,7 @@ def build_evidence_card_from_change_summary(
     problem = sanitize_fact(PROBLEM_BY_TYPE.get(primary_type) or "The change addressed a code/documentation area that needed more structured handling.")
     mechanism = sanitize_fact(mechanism_for_summary(summary, primary_type))
     implementation_details = implementation_details_for_summary(summary, related_chunks)
-    safe_impact = sanitize_fact(SAFE_IMPACT_BY_TYPE.get(primary_type) or "Improved structural handling of Phase 2 evidence memory.")
+    safe_impact = sanitize_fact(SAFE_IMPACT_BY_TYPE.get(primary_type) or "Improved structural handling of GitHub evidence evidence memory.")
     resume_angle = RESUME_ANGLE_BY_TYPE.get(primary_type, "unknown")
     metric_support = metric_support_for_summary(summary)
     allowed_claims = allowed_claims_for_summary(summary, primary_type)
@@ -171,7 +171,7 @@ def build_evidence_card_from_change_summary(
         return None
 
     metadata = {
-        "source": "phase2_evidence_card_extractor",
+        "source": "github_evidence_card_extractor",
         "raw_change_type": raw_change_types,
         "source_change_id": str(summary.get("change_id") or ""),
         "files_changed": safe_list(summary.get("files_changed")),
@@ -209,14 +209,14 @@ def build_evidence_card_from_change_summary(
     )
 
 
-def build_phase2_evidence_cards(
+def build_github_evidence_cards(
     project_id: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": project_id or None,
             "processed_summaries": 0,
             "created_or_updated_evidence_cards": 0,
@@ -274,10 +274,10 @@ def build_phase2_evidence_cards(
             }
         )
 
-    counts = evidence_memory.get_phase2_memory_counts(project_id=project_id)
+    counts = evidence_memory.get_github_evidence_memory_counts(project_id=project_id)
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": project_id or None,
         "processed_summaries": len(summaries),
         "created_evidence_cards": created_cards,
@@ -285,7 +285,7 @@ def build_phase2_evidence_cards(
         "created_or_updated_evidence_cards": created_or_updated,
         "skipped_summaries": len(skipped),
         "evidence_cards_count": counts["evidence_cards_count"],
-        "message": "Phase 2 evidence cards built successfully.",
+        "message": "GitHub evidence evidence cards built successfully.",
         "cards": cards_preview,
         "skips": skipped,
         "errors": [],
@@ -348,7 +348,7 @@ def allowed_claims_for_summary(summary: dict[str, Any], primary_type: str) -> li
     if not claims and primary_type in ALLOWED_CLAIM_BY_TYPE:
         claims.append(ALLOWED_CLAIM_BY_TYPE[primary_type])
     if not claims:
-        claims.append("maintained source-traceable Phase 2 evidence records")
+        claims.append("maintained source-traceable GitHub evidence evidence records")
     sanitized = []
     for claim in claims:
         clean = sanitize_fact(claim, terminal_period=False)
@@ -488,7 +488,7 @@ def is_generic_mechanism(mechanism: str) -> bool:
 
 
 def is_generic_impact(safe_impact: str) -> bool:
-    return safe_impact.lower() in {"improved structural handling of phase 2 evidence memory.", ""}
+    return safe_impact.lower() in {"improved structural handling of GitHub evidence evidence memory.", ""}
 
 
 def safe_list(value: Any) -> list[str]:

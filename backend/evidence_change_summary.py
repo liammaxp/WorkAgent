@@ -1,4 +1,4 @@
-"""Conservative Phase 2 raw change summary extraction."""
+"""Conservative GitHub evidence raw change summary extraction."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 import evidence_memory
 
 
-PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 ENABLED_VALUES = {"1", "true", "yes", "on"}
 SUPPORTED_CHUNK_TYPES = {
     "diff_hunk",
@@ -66,8 +66,8 @@ GENERIC_BOILERPLATE_PATTERNS = [
 ]
 
 
-def phase2_enabled() -> bool:
-    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
+def github_evidence_enabled() -> bool:
+    return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def extract_raw_change_summaries_from_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -115,7 +115,7 @@ def extract_raw_change_summary_from_chunk(chunk: dict[str, Any]) -> dict[str, An
     symbols_changed = [symbol] if symbol else []
     uncertain_intent = uncertain_intent_for_change_types(change_types)
     metadata = {
-        "source": "phase2_raw_change_summary",
+        "source": "github_evidence_raw_change_summary",
         "chunk_type": str(chunk.get("chunk_type") or ""),
         "source_id": str(chunk.get("source_id") or ""),
         "repo": str(chunk.get("repo") or ""),
@@ -149,14 +149,14 @@ def extract_raw_change_summary_from_chunk(chunk: dict[str, Any]) -> dict[str, An
     )
 
 
-def build_phase2_raw_change_summaries(
+def build_github_evidence_raw_change_summaries(
     project_id: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": project_id or None,
             "processed_chunks": 0,
             "created_summaries": 0,
@@ -205,17 +205,17 @@ def build_phase2_raw_change_summaries(
             }
         )
 
-    counts = evidence_memory.get_phase2_memory_counts(project_id=project_id)
+    counts = evidence_memory.get_github_evidence_memory_counts(project_id=project_id)
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": project_id or None,
         "processed_chunks": len(chunks),
         "created_summaries": created_summaries,
         "updated_summaries": updated_summaries,
         "created_or_updated_summaries": created_or_updated,
         "raw_change_summaries_count": counts["raw_change_summaries_count"],
-        "message": "Phase 2 raw change summaries built successfully.",
+        "message": "GitHub evidence raw change summaries built successfully.",
         "summaries": summaries_preview,
     }
 
@@ -344,7 +344,7 @@ def uncertain_intent_for_change_types(change_types: list[str]) -> list[str]:
     if "storage_update" in change_types or "schema_update" in change_types:
         intents.append("May support more traceable evidence memory.")
     if "api_route_update" in change_types:
-        intents.append("May support safer Phase 2 debugging.")
+        intents.append("May support safer GitHub evidence debugging.")
     if "chunking_update" in change_types:
         intents.append("May support raw GitHub context inspection.")
     return intents[:3]

@@ -53,6 +53,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Start from an example system prompt and customize the agent prompt from the Web UI.
 - Scan GitHub repository links from the resume and vector memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
+- Process saved GitHub evidence through an internal project evidence pipeline that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, and extracts capability signals without inferring unsupported claims. Project evidence remains a Python-internal backend layer and is not exposed through the Web UI or HTTP API.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
 - Switch the Web UI between Chinese and English.
@@ -64,11 +65,16 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- backend/
 |   |-- main.py              # Core CLI agent, model adapters, tools, GitHub logic
 |   |-- api_server.py        # FastAPI HTTP layer for the frontend
-|   |-- evidence_memory.py   # Phase 2 GitHub evidence JSONL storage
-|   |-- evidence_pipeline.py # Phase 2 evidence build orchestration and inspection
-|   |-- evidence_*.py        # Phase 2 chunk, change-summary, evidence-card helpers
-|   |-- phase3_diff_memory.py # Phase 3 diff-memory schema, extraction, and persistence
-|   |-- phase3_pipeline.py    # Phase 3 diff-memory pipeline, inspect, and health helpers
+|   |-- evidence_memory.py            # GitHub evidence JSONL storage
+|   |-- evidence_pipeline.py          # GitHub evidence build orchestration and inspection
+|   |-- evidence_*.py                 # Evidence chunk, change-summary, and evidence-card helpers
+|   |-- project_change_memory.py      # Project change schema, extraction, and persistence
+|   |-- project_change_pipeline.py    # Project change build, inspect, and health helpers
+|   |-- project_evidence_models.py    # Bounded project-evidence models and semantic stable IDs
+|   |-- project_evidence_input.py     # Read-only evidence, change-memory, and project-fact adapters
+|   |-- project_evidence_*.py         # Evidence normalization, synthesis, scoring, and persistence
+|   |-- project_capability_*.py       # Capability taxonomy and deterministic extraction
+|   |-- project_claim_boundaries.py   # Conservative allowed/forbidden claim boundaries
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
@@ -92,18 +98,19 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |-- windows/                 # Windows .bat and PowerShell entry points
 |-- linux/                   # Linux .sh entry points
 |-- macos/                   # macOS double-click .command entry points
-|-- tests/                   # Backend regression tests for resume quality gates and GitHub context pipelines
+|-- tests/                   # Backend regression tests for resume, GitHub evidence, project memory, and privacy
 `-- README.md
 ```
 
-The system has six main layers:
+The system has seven main layers:
 
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
 2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
-4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: Phase 2 raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
-5. `backend/phase3_diff_memory.py` and `backend/phase3_pipeline.py`: Phase 3 diff-memory extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
-6. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: GitHub evidence raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
+5. `backend/project_change_memory.py` and `backend/project_change_pipeline.py`: project-change extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
+6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, capability extraction, claim boundaries, and atomic project-evidence-memory persistence. This layer consumes GitHub evidence, optional project-change memory, and project facts without adding an HTTP route.
+7. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
 
@@ -247,7 +254,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
-- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, review saved repository evidence status, and run the unified Evidence Processing Pipeline for Phase 2 chunks, change summaries, evidence cards, and capability facts when `USE_GITHUB_CONTEXT_PHASE2=1`. The backend also exposes bounded context preview/raw inspect APIs and Phase 3 diff-memory APIs, but the current page keeps the UI focused on summary views instead of rendering full raw content.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, review saved repository evidence status, and run the unified Evidence Processing Pipeline for GitHub evidence chunks, change summaries, evidence cards, and capability facts when `USE_GITHUB_EVIDENCE_MEMORY=1`. The backend also exposes bounded context preview/raw inspect APIs and project change memory diff-memory APIs, but the current page keeps the UI focused on summary views instead of rendering full raw content.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
 - Language Switch: change the Web UI between Chinese and English. This affects interface text only; generated content follows the saved job description's predominant language.
@@ -294,22 +301,22 @@ Main FastAPI endpoints:
 - `POST /api/github/config`
 - `POST /api/github/context`
 - `GET /api/github/context/status`
-- `GET /api/github/context/phase2/status`
-- `GET /api/github/context/phase2/preview`
-- `POST /api/github/context/phase2/build`
-- `GET /api/github/context/phase2/inspect`
-- `GET /api/github/context/phase2/health`
-- `POST /api/github/context/phase2/chunk`
-- `GET /api/github/context/phase2/chunks/preview`
-- `POST /api/github/context/phase2/summarize-changes`
-- `GET /api/github/context/phase2/change-summaries/preview`
-- `POST /api/github/context/phase2/build-evidence-cards`
-- `GET /api/github/context/phase2/evidence-cards/preview`
-- `POST /api/github/context/phase2/build-capability-facts`
-- `GET /api/github/context/phase2/capability-facts/preview`
-- `POST /api/github/context/phase3/build`
-- `GET /api/github/context/phase3/inspect`
-- `GET /api/github/context/phase3/health`
+- `GET /api/github/evidence/status`
+- `GET /api/github/evidence/preview`
+- `POST /api/github/evidence/build`
+- `GET /api/github/evidence/inspect`
+- `GET /api/github/evidence/health`
+- `POST /api/github/evidence/chunk`
+- `GET /api/github/evidence/chunks/preview`
+- `POST /api/github/evidence/summarize-changes`
+- `GET /api/github/evidence/change-summaries/preview`
+- `POST /api/github/evidence/build-evidence-cards`
+- `GET /api/github/evidence/evidence-cards/preview`
+- `POST /api/github/evidence/build-capability-facts`
+- `GET /api/github/evidence/capability-facts/preview`
+- `POST /api/github/change-memory/build`
+- `GET /api/github/change-memory/inspect`
+- `GET /api/github/change-memory/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/applications`
@@ -349,11 +356,13 @@ Agent Chat image requests use data URLs:
 
 `POST /api/cover-letter/generate` also accepts `include_application_hint` and can return the same extracted application fields.
 
-`GET /api/github/context/status` reports the structured GitHub context workspace state and source counts for the current Phase 1 implementation. `GET /api/github/context/preview` returns bounded raw-source and derived-record previews, and `GET /api/github/context/raw` returns a bounded raw-source payload by `source_id`.
+`GET /api/github/context/status` reports the structured GitHub context workspace state and source counts for the current GitHub context implementation. `GET /api/github/context/preview` returns bounded raw-source and derived-record previews, and `GET /api/github/context/raw` returns a bounded raw-source payload by `source_id`.
 
-GitHub context Phase 2 is controlled by `USE_GITHUB_CONTEXT_PHASE2`. When enabled, GitHub context sync persists raw sources into JSONL storage under `information/phase2_evidence_memory/`, and the Phase 2 pipeline can turn those sources into chunks, raw change summaries, evidence cards, and capability facts. `GET /api/github/context/phase2/status`, `health`, and `inspect` report counts, project summaries, missing stages, safe samples, and the next recommended action. `POST /api/github/context/phase2/build` runs the full ordered pipeline, while the stage-specific endpoints run or preview individual stages.
+GitHub evidence memory is controlled by `USE_GITHUB_EVIDENCE_MEMORY`. When enabled, GitHub context sync persists raw sources into JSONL storage under `information/github_evidence_memory/`, and the GitHub evidence pipeline can turn those sources into chunks, raw change summaries, evidence cards, and capability facts. `GET /api/github/evidence/status`, `health`, and `inspect` report counts, project summaries, missing stages, safe samples, and the next recommended action. `POST /api/github/evidence/build` runs the full ordered pipeline, while the stage-specific endpoints run or preview individual stages.
 
-GitHub context Phase 3 is controlled by `USE_PHASE3_DIFF_MEMORY`. When enabled, the Phase 3 pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_memory_phase3.json`. `POST /api/github/context/phase3/build` runs the pipeline, `GET /api/github/context/phase3/inspect` returns bounded per-project samples and capability types, and `GET /api/github/context/phase3/health` reports whether the saved Phase 3 memory is ready, empty, degraded, or disabled.
+Project change memory is controlled by `USE_PROJECT_CHANGE_MEMORY`. When enabled, its pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_change_memory.json`. `POST /api/github/change-memory/build` runs the pipeline, `GET /api/github/change-memory/inspect` returns bounded per-project samples and capability types, and `GET /api/github/change-memory/health` reports whether the saved memory is ready, empty, degraded, or disabled.
+
+Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persists to `information/project_evidence_memory.json` with schema `project_evidence_memory.v1`. Its Python pipeline reads GitHub evidence JSONL, optional project-change memory, `project_memory.json`, and `project_compact_facts.json`; then it normalizes, synthesizes, scores, extracts capabilities, builds claim boundaries, and atomically validates the resulting memory. It has no `/api/project-evidence/*` route or frontend trigger. Invalid or incomplete optional inputs become sorted warnings; unsupported metrics and capability inferences remain outside synthesized claims.
 
 ## Local Files And Privacy
 
@@ -368,16 +377,18 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/memory.json`
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
-- `information/phase2_evidence_memory/`
-- `information/project_memory_phase3.json`
+- `information/github_evidence_memory/`
+- `information/project_change_memory.json`
+- `information/project_evidence_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
-- `background/prompt.example.txt`
 - `outputs/`
 
 Do not commit API keys, resumes, job descriptions, GitHub identities, generated documents, application records, or personal background notes.
+Safe templates such as `.env.example` and `background/prompt.example.txt` remain trackable. `.gitignore` prevents future accidental tracking; it does not remove sensitive data from existing Git history.
+The repository privacy policy also ignores credentials, uploads, generated exports, runtime databases, logs, local model caches, and frontend dependencies, while allowing documentation, safe templates, source code, and synthetic test fixtures. `tests/test_repository_privacy_policy.py` checks representative ignore rules and verifies that no tracked path is also ignored.
 
 ## Minimum Environment Requirements
 
@@ -573,10 +584,23 @@ Resume quality-gate regression tests:
 python -m unittest tests\test_resume_quality_gates.py
 ```
 
-GitHub context pipeline regression tests:
+Backend regression tests:
 
 ```powershell
-python -m unittest tests\test_github_context_phase1_status.py tests\test_github_context_phase1_preview.py tests\test_github_context_phase1_raw.py tests\test_github_context_phase1_boundary.py tests\test_github_context_phase1_end_to_end.py tests\test_github_context_phase2_flag.py tests\test_github_context_phase2_status.py tests\test_phase2_evidence_pipeline.py tests\test_phase3_api.py tests\test_phase3_pipeline.py
+python -m pytest tests -q
+```
+
+Project-change and project-evidence tests:
+
+```powershell
+$projectEvidenceTests = Get-ChildItem tests -File | Where-Object { $_.Name -match 'project_evidence|project_capability|project_claim|project_change' } | ForEach-Object { $_.FullName }
+python -m pytest $projectEvidenceTests -q
+```
+
+Repository privacy-policy regression test:
+
+```powershell
+python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
 Frontend production build:
@@ -591,7 +615,8 @@ Production frontend output is written to `outputs/frontend/`.
 ## Current Limitations
 
 - Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
-- GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all Phase 2 and Phase 3 records.
+- GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all GitHub evidence and project change memory records.
+- Project evidence memory is persisted and inspectable through Python backend interfaces, but it is not exposed through FastAPI or rendered in the GitHub Evidence page.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
@@ -600,6 +625,7 @@ Production frontend output is written to `outputs/frontend/`.
 - Expand the Agent Chat application-material flow to include job analysis and interview prep.
 - Add persistent task queues and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
+- Define an explicit production contract before connecting project evidence claim boundaries to generation or UI flows.
 - Add application dashboards, statistics, batch actions, and richer search.
 - Add document preview and DOCX export.
 - Improve mobile layout and add dark mode.
@@ -665,11 +691,11 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |-- backend/
 |   |-- main.py              # 核心 CLI agent、模型适配、工具、GitHub 逻辑
 |   |-- api_server.py        # 面向前端的 FastAPI HTTP 层
-|   |-- evidence_memory.py   # Phase 2 GitHub 证据 JSONL 存储
-|   |-- evidence_pipeline.py # Phase 2 证据构建编排和检查
-|   |-- evidence_*.py        # Phase 2 分块、变更摘要、证据卡辅助模块
-|   |-- phase3_diff_memory.py # Phase 3 diff memory schema、提取和持久化
-|   |-- phase3_pipeline.py    # Phase 3 diff memory pipeline、inspect 和 health 辅助逻辑
+|   |-- evidence_memory.py   # GitHub 证据 JSONL 存储
+|   |-- evidence_pipeline.py # GitHub evidence 证据构建编排和检查
+|   |-- evidence_*.py        # GitHub evidence 分块、变更摘要、证据卡辅助模块
+|   |-- project_change_memory.py # project change memory schema、提取和持久化
+|   |-- project_change_pipeline.py    # project change memory pipeline、inspect 和 health 辅助逻辑
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # 紧凑技术 taxonomy 和安全声明辅助逻辑
 |   |-- data/
@@ -701,8 +727,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 1. `backend/main.py`：本地 agent 逻辑、模型适配器、文件工具、GitHub 上下文提取和 SQLite 投递记录。
 2. `backend/memory_store.py`：Chroma collections、确定性的本地向量化、写入前相似度对比、语义检索和旧 JSON 自动迁移。
 3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
-4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 Phase 2 raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
-5. `backend/phase3_diff_memory.py` 和 `backend/phase3_pipeline.py`：从已保存的 GitHub compare/file patch 提取 Phase 3 diff memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
+4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 GitHub evidence raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
+5. `backend/project_change_memory.py` 和 `backend/project_change_pipeline.py`：从已保存的 GitHub compare/file patch 提取 project change memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
 6. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。
 
 ## 模型配置
@@ -844,7 +870,7 @@ background/prompt.example.txt
 - Cover Letter：选择写作风格，可选择使用 GitHub 证据，生成求职信，并编辑保存草稿。
 - Applications：新增、筛选、更新和删除投递记录。
 - Interview Prep：生成并编辑面试准备笔记，并在本地记住是否使用 GitHub 证据。
-- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，把已确认的上下文写入 Chroma，查看已保存仓库证据状态，并在 `USE_GITHUB_CONTEXT_PHASE2=1` 时通过统一 Evidence Processing Pipeline 手动构建 Phase 2 的 chunks、change summaries、evidence cards 和 capability facts。后端同时保留受限的 context preview/raw inspect API 和 Phase 3 diff memory API，但当前页面以摘要结果为主，不直接渲染完整 raw 内容。
+- GitHub Evidence：配置 GitHub 身份/Token，默认从定制简历、基础简历和向量记忆扫描仓库，把已确认的上下文写入 Chroma，查看已保存仓库证据状态，并在 `USE_GITHUB_EVIDENCE_MEMORY=1` 时通过统一 Evidence Processing Pipeline 手动构建 GitHub evidence 的 chunks、change summaries、evidence cards 和 capability facts。后端同时保留受限的 context preview/raw inspect API 和 project change memory API，但当前页面以摘要结果为主，不直接渲染完整 raw 内容。
 - Prompt Settings：编辑系统 Prompt，并载入可复用示例 Prompt。
 - Agent Chat：与核心 agent 自由对话，可以上传图片，也可以删除指定的画像记忆。
 - 语言切换：在中文和英文界面之间切换。该设置只影响界面文字；生成内容使用已保存职位描述的主要语言。
@@ -891,22 +917,22 @@ background/prompt.example.txt
 - `POST /api/github/config`
 - `POST /api/github/context`
 - `GET /api/github/context/status`
-- `GET /api/github/context/phase2/status`
-- `GET /api/github/context/phase2/preview`
-- `POST /api/github/context/phase2/build`
-- `GET /api/github/context/phase2/inspect`
-- `GET /api/github/context/phase2/health`
-- `POST /api/github/context/phase2/chunk`
-- `GET /api/github/context/phase2/chunks/preview`
-- `POST /api/github/context/phase2/summarize-changes`
-- `GET /api/github/context/phase2/change-summaries/preview`
-- `POST /api/github/context/phase2/build-evidence-cards`
-- `GET /api/github/context/phase2/evidence-cards/preview`
-- `POST /api/github/context/phase2/build-capability-facts`
-- `GET /api/github/context/phase2/capability-facts/preview`
-- `POST /api/github/context/phase3/build`
-- `GET /api/github/context/phase3/inspect`
-- `GET /api/github/context/phase3/health`
+- `GET /api/github/evidence/status`
+- `GET /api/github/evidence/preview`
+- `POST /api/github/evidence/build`
+- `GET /api/github/evidence/inspect`
+- `GET /api/github/evidence/health`
+- `POST /api/github/evidence/chunk`
+- `GET /api/github/evidence/chunks/preview`
+- `POST /api/github/evidence/summarize-changes`
+- `GET /api/github/evidence/change-summaries/preview`
+- `POST /api/github/evidence/build-evidence-cards`
+- `GET /api/github/evidence/evidence-cards/preview`
+- `POST /api/github/evidence/build-capability-facts`
+- `GET /api/github/evidence/capability-facts/preview`
+- `POST /api/github/change-memory/build`
+- `GET /api/github/change-memory/inspect`
+- `GET /api/github/change-memory/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/applications`
@@ -944,11 +970,13 @@ Agent Chat 图片请求使用 data URL：
 
 `POST /api/cover-letter/generate` 也接受 `include_application_hint`，并可以返回同样的投递记录字段。
 
-`GET /api/github/context/status` 会返回当前 Phase 1 结构化 GitHub context 工作区状态和来源计数。`GET /api/github/context/preview` 会返回受限数量的 raw sources 和派生记录预览，`GET /api/github/context/raw` 会按 `source_id` 返回受限长度的 raw source 内容。
+`GET /api/github/context/status` 会返回当前 GitHub context 结构化 GitHub context 工作区状态和来源计数。`GET /api/github/context/preview` 会返回受限数量的 raw sources 和派生记录预览，`GET /api/github/context/raw` 会按 `source_id` 返回受限长度的 raw source 内容。
 
-GitHub context Phase 2 由 `USE_GITHUB_CONTEXT_PHASE2` 控制。启用后，GitHub context 同步会把 raw sources 持久化到 `information/phase2_evidence_memory/` 下的 JSONL 存储，Phase 2 pipeline 可以继续把这些来源构建为 chunks、raw change summaries、evidence cards 和 capability facts。`GET /api/github/context/phase2/status`、`health` 和 `inspect` 会返回计数、项目摘要、缺失阶段、安全样本和下一步建议；`POST /api/github/context/phase2/build` 运行完整有序 pipeline，阶段专用接口则用于单独运行或预览某个阶段。
+GitHub evidence memory 由 `USE_GITHUB_EVIDENCE_MEMORY` 控制。启用后，GitHub context 同步会把 raw sources 持久化到 `information/github_evidence_memory/` 下的 JSONL 存储，GitHub evidence pipeline 可以继续把这些来源构建为 chunks、raw change summaries、evidence cards 和 capability facts。`GET /api/github/evidence/status`、`health` 和 `inspect` 会返回计数、项目摘要、缺失阶段、安全样本和下一步建议；`POST /api/github/evidence/build` 运行完整有序 pipeline，阶段专用接口则用于单独运行或预览某个阶段。
 
-GitHub context Phase 3 由 `USE_PHASE3_DIFF_MEMORY` 控制。启用后，Phase 3 pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_memory_phase3.json`。`POST /api/github/context/phase3/build` 用于运行该 pipeline，`GET /api/github/context/phase3/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/context/phase3/health` 返回当前 Phase 3 memory 是否 ready、empty、degraded 或 disabled。
+Project change memory 由 `USE_PROJECT_CHANGE_MEMORY` 控制。启用后，project change memory pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_change_memory.json`。`POST /api/github/change-memory/build` 用于运行该 pipeline，`GET /api/github/change-memory/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/change-memory/health` 返回当前 project change memory 是否 ready、empty、degraded 或 disabled。
+
+Project evidence memory 由 `USE_PROJECT_EVIDENCE_MEMORY` 控制，并按 `project_evidence_memory.v1` schema 持久化到 `information/project_evidence_memory.json`。它从 GitHub evidence JSONL、可选的 project-change memory、`project_memory.json` 和 `project_compact_facts.json` 只读读取输入，然后执行规范化、合成、质量评分、能力抽取、claim boundary 构建和原子校验；当前没有 `/api/project-evidence/*` 接口或前端触发入口。无效或不完整的可选输入会变成排序后的 warning，不支持的指标和能力推断不会进入合成声明。
 
 ## 本地文件与隐私
 
@@ -963,16 +991,18 @@ WorkAgent 会使用本地文件作为工作状态。以下文件可能包含个�
 - `information/memory.json`
 - `information/project_memory.json`
 - `information/project_compact_facts.json`
-- `information/phase2_evidence_memory/`
-- `information/project_memory_phase3.json`
+- `information/github_evidence_memory/`
+- `information/project_change_memory.json`
+- `information/project_evidence_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
 - `background/prompt.txt`
-- `background/prompt.example.txt`
 - `outputs/`
 
 不要提交 API Key、简历、职位描述、GitHub 身份、生成文档、投递记录或个人背景资料。
+`.env.example` 和 `background/prompt.example.txt` 等安全模板仍可被 Git 跟踪。`.gitignore` 只能防止以后误提交，不能从已有 Git 历史中删除敏感数据。
+仓库级隐私规则还会忽略凭据、上传文件、生成导出物、运行时数据库、日志、本地模型缓存和前端依赖，同时保留文档、安全模板、源代码和合成测试 fixture 的可跟踪性。`tests/test_repository_privacy_policy.py` 会检查代表性忽略规则，并确认没有“已跟踪且同时被忽略”的路径。
 
 ## 最低环境配置要求
 
@@ -1160,6 +1190,18 @@ python main.py
 
 ```powershell
 python -m py_compile backend\memory_store.py backend\api_server.py backend\main.py
+```
+
+后端回归测试：
+
+```powershell
+python -m pytest tests -q
+```
+
+仓库隐私策略回归测试：
+
+```powershell
+python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
 前端生产构建：

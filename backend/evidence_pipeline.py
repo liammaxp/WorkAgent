@@ -1,4 +1,4 @@
-"""Safe Phase 2 evidence pipeline orchestration and inspection helpers."""
+"""Safe GitHub evidence evidence pipeline orchestration and inspection helpers."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import evidence_chunker
 import evidence_memory
 
 
-PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 ENABLED_VALUES = {"1", "true", "yes", "on"}
 DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
 DEFAULT_LIMIT = 10
@@ -27,10 +27,10 @@ STAGE_ORDER = [
     "build_capability_facts",
 ]
 STAGE_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
-    "chunk": evidence_chunker.chunk_phase2_raw_sources,
-    "summarize_changes": evidence_change_summary.build_phase2_raw_change_summaries,
-    "build_evidence_cards": evidence_card_extractor.build_phase2_evidence_cards,
-    "build_capability_facts": capability_extractor.build_phase2_capability_facts,
+    "chunk": evidence_chunker.chunk_github_evidence_raw_sources,
+    "summarize_changes": evidence_change_summary.build_github_evidence_raw_change_summaries,
+    "build_evidence_cards": evidence_card_extractor.build_github_evidence_cards,
+    "build_capability_facts": capability_extractor.build_github_evidence_capability_facts,
 }
 COUNT_KEYS = [
     "raw_sources_count",
@@ -41,17 +41,17 @@ COUNT_KEYS = [
 ]
 
 
-def run_phase2_evidence_pipeline(
+def run_github_evidence_pipeline(
     project_id: str | None = None,
     limit: int | None = None,
     stages: list[str] | str | None = None,
     continue_on_error: bool = True,
 ) -> dict[str, Any]:
     requested_project_id = normalize_project_id(project_id)
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": None,
             "ran_stages": [],
             "message": DISABLED_MESSAGE,
@@ -66,14 +66,14 @@ def run_phase2_evidence_pipeline(
     if invalid_stages:
         error = {
             "type": "invalid_stage",
-            "message": f"Unsupported Phase 2 pipeline stage(s): {', '.join(invalid_stages)}",
+            "message": f"Unsupported GitHub evidence pipeline stage(s): {', '.join(invalid_stages)}",
             "invalid_stages": invalid_stages,
             "supported_stages": STAGE_ORDER,
         }
         return {
             "enabled": True,
             "ok": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "requested_stages": requested_stages,
             "ran_stages": [],
@@ -84,7 +84,7 @@ def run_phase2_evidence_pipeline(
             "project_summaries": safe_project_summaries(requested_project_id),
             "errors": [error],
             "warnings": [],
-            "message": "Phase 2 evidence pipeline did not run because one or more stages are invalid.",
+            "message": "GitHub evidence evidence pipeline did not run because one or more stages are invalid.",
         }
 
     safe_limit = normalize_optional_limit(limit)
@@ -94,7 +94,7 @@ def run_phase2_evidence_pipeline(
     warnings: list[str] = []
 
     if counts_before.get("raw_sources_count", 0) == 0:
-        warnings.append("No Phase 2 raw sources found; run GitHub context sync separately before building.")
+        warnings.append("No GitHub evidence raw sources found; run GitHub context sync separately before building.")
 
     for stage in requested_stages:
         try:
@@ -107,7 +107,7 @@ def run_phase2_evidence_pipeline(
                 "processed": 0,
                 "created_or_updated": 0,
                 "skipped": 0,
-                "message": f"Phase 2 pipeline stage failed: {stage}",
+                "message": f"GitHub evidence pipeline stage failed: {stage}",
                 "errors": [str(error)],
             }
         ran_stages.append(stage)
@@ -127,7 +127,7 @@ def run_phase2_evidence_pipeline(
     return {
         "enabled": True,
         "ok": not errors,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "requested_stages": requested_stages,
         "ran_stages": ran_stages,
@@ -138,11 +138,11 @@ def run_phase2_evidence_pipeline(
         "project_summaries": safe_project_summaries(requested_project_id),
         "errors": errors,
         "warnings": warnings,
-        "message": "Phase 2 evidence pipeline completed." if not errors else "Phase 2 evidence pipeline completed with errors.",
+        "message": "GitHub evidence evidence pipeline completed." if not errors else "GitHub evidence evidence pipeline completed with errors.",
     }
 
 
-def get_phase2_project_inspect(
+def inspect_github_evidence_memory(
     project_id: str | None = None,
     limit: int = DEFAULT_LIMIT,
     include_samples: bool = True,
@@ -150,10 +150,10 @@ def get_phase2_project_inspect(
     requested_project_id = normalize_project_id(project_id)
     safe_limit = safe_sample_limit(limit)
     empty_samples = empty_sample_sets()
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit,
             "counts": {},
@@ -164,12 +164,12 @@ def get_phase2_project_inspect(
         }
 
     try:
-        counts = evidence_memory.get_phase2_memory_counts(project_id=requested_project_id or None)
+        counts = evidence_memory.get_github_evidence_memory_counts(project_id=requested_project_id or None)
         stats = evidence_memory.github_raw_source_stats(project_id=requested_project_id or None)
         samples = build_safe_samples(requested_project_id, safe_limit) if include_samples else {}
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit,
             "counts": counts,
@@ -180,23 +180,23 @@ def get_phase2_project_inspect(
     except Exception as error:  # pragma: no cover - defensive inspect safety
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "limit": safe_limit,
             "counts": {},
             "projects": [],
             "samples": empty_samples if include_samples else {},
-            "message": "Phase 2 evidence inspect could not be read.",
+            "message": "GitHub evidence evidence inspect could not be read.",
             "errors": [str(error)],
         }
 
 
-def get_phase2_pipeline_health(project_id: str | None = None) -> dict[str, Any]:
+def get_github_evidence_health(project_id: str | None = None) -> dict[str, Any]:
     requested_project_id = normalize_project_id(project_id)
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "counts": {},
             "health": {
@@ -208,24 +208,24 @@ def get_phase2_pipeline_health(project_id: str | None = None) -> dict[str, Any]:
             },
             "pipeline_complete": False,
             "missing_stages": [],
-            "next_recommended_action": "enable_phase2",
+            "next_recommended_action": "enable_github_evidence_memory",
             "message": DISABLED_MESSAGE,
             "errors": [],
         }
 
     try:
-        counts = evidence_memory.get_phase2_memory_counts(project_id=requested_project_id or None)
+        counts = evidence_memory.get_github_evidence_memory_counts(project_id=requested_project_id or None)
     except Exception as error:  # pragma: no cover - defensive health safety
         return {
             "enabled": True,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": requested_project_id or None,
             "counts": {},
             "health": {},
             "pipeline_complete": False,
             "missing_stages": [],
             "next_recommended_action": "inspect_storage_error",
-            "message": "Phase 2 pipeline health could not be read.",
+            "message": "GitHub evidence pipeline health could not be read.",
             "errors": [str(error)],
         }
 
@@ -250,7 +250,7 @@ def get_phase2_pipeline_health(project_id: str | None = None) -> dict[str, Any]:
     next_action = next_recommended_action(health)
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "counts": counts,
         "health": health,
@@ -261,8 +261,8 @@ def get_phase2_pipeline_health(project_id: str | None = None) -> dict[str, Any]:
     }
 
 
-def phase2_enabled() -> bool:
-    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
+def github_evidence_enabled() -> bool:
+    return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def normalize_project_id(project_id: str | None) -> str:
@@ -355,7 +355,7 @@ def skipped_count(stage: str, result: dict[str, Any]) -> int:
 
 def safe_counts(project_id: str = "") -> dict[str, int]:
     try:
-        return evidence_memory.get_phase2_memory_counts(project_id=project_id or None)
+        return evidence_memory.get_github_evidence_memory_counts(project_id=project_id or None)
     except Exception:
         return {key: 0 for key in COUNT_KEYS}
 

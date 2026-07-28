@@ -1,4 +1,4 @@
-"""Deterministic Phase 2 capability fact extraction."""
+"""Deterministic GitHub evidence capability fact extraction."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 import evidence_memory
 
 
-PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 ENABLED_VALUES = {"1", "true", "yes", "on"}
 DETAIL_CHARS = 220
 MAX_MECHANISMS = 8
@@ -47,18 +47,18 @@ RESUME_ANGLE_TO_CAPABILITY = {
 }
 
 DEFAULT_ALLOWED_CLAIM_BY_CAPABILITY = {
-    "evidence_memory": "maintained source-traceable Phase 2 evidence records",
+    "evidence_memory": "maintained source-traceable GitHub evidence evidence records",
     "github_context_persistence": "persisted raw GitHub context into source-traceable records",
-    "source_traceability": "preserved source evidence identifiers across Phase 2 evidence records",
-    "debuggability": "added safe inspection surfaces for Phase 2 evidence state",
+    "source_traceability": "preserved source evidence identifiers across GitHub evidence evidence records",
+    "debuggability": "added safe inspection surfaces for GitHub evidence evidence state",
     "validation_and_guardrails": "added deterministic guards around unsupported or exaggerated claims",
     "merge_quality_control": "preserved mechanism-rich project evidence during deterministic merge ordering",
     "chunking_and_index_preparation": "converted raw GitHub context into bounded evidence chunks",
-    "schema_and_storage_design": "implemented structured Phase 2 evidence memory records",
-    "testing_and_regression_safety": "added targeted regression tests for Phase 2 memory behavior",
-    "configuration_safety": "kept Phase 2 behavior behind a feature flag boundary",
-    "api_inspection": "added safe Phase 2 status and preview endpoints",
-    "storage_idempotency": "implemented stable IDs and upsert behavior for Phase 2 evidence records",
+    "schema_and_storage_design": "implemented structured GitHub evidence evidence memory records",
+    "testing_and_regression_safety": "added targeted regression tests for GitHub evidence memory behavior",
+    "configuration_safety": "kept GitHub evidence behavior behind a feature flag boundary",
+    "api_inspection": "added safe GitHub evidence status and preview endpoints",
+    "storage_idempotency": "implemented stable IDs and upsert behavior for GitHub evidence evidence records",
     "unsupported_claim_boundary": "preserved boundaries between allowed and forbidden evidence-backed claims",
 }
 
@@ -90,8 +90,8 @@ UNSUPPORTED_FACTUAL_PATTERNS = [
 ]
 
 
-def phase2_enabled() -> bool:
-    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
+def github_evidence_enabled() -> bool:
+    return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def extract_capability_facts_from_evidence_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -154,7 +154,7 @@ def build_capability_fact_from_cards(
         return None
 
     metadata = {
-        "source": "phase2_capability_extractor",
+        "source": "github_evidence_capability_extractor",
         "quality_score": quality_score,
         "skip_reasons": skip_reasons,
         "supporting_evidence_cards": len(cards),
@@ -178,14 +178,14 @@ def build_capability_fact_from_cards(
     )
 
 
-def build_phase2_capability_facts(
+def build_github_evidence_capability_facts(
     project_id: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": project_id or None,
             "processed_evidence_cards": 0,
             "created_or_updated_capability_facts": 0,
@@ -258,10 +258,10 @@ def build_phase2_capability_facts(
             }
         )
 
-    counts = evidence_memory.get_phase2_memory_counts(project_id=project_id)
+    counts = evidence_memory.get_github_evidence_memory_counts(project_id=project_id)
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": project_id or None,
         "processed_evidence_cards": len(cards),
         "created_capability_facts": created_facts,
@@ -269,7 +269,7 @@ def build_phase2_capability_facts(
         "created_or_updated_capability_facts": created_or_updated,
         "skipped_groups": len(skipped),
         "capability_facts_count": counts["capability_facts_count"],
-        "message": "Phase 2 capability facts built successfully.",
+        "message": "GitHub evidence capability facts built successfully.",
         "capability_facts": preview,
         "skips": skipped,
         "errors": [],
@@ -461,7 +461,7 @@ def is_generic_text(text: str) -> bool:
         "",
         "updated code",
         "updated source-backed evidence handling",
-        "maintained source-traceable phase 2 evidence records",
+        "maintained source-traceable GitHub evidence evidence records",
         "unknown",
     }
 

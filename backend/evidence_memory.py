@@ -1,4 +1,4 @@
-"""Phase 2 evidence memory schema and JSONL storage helpers."""
+"""GitHub evidence evidence memory schema and JSONL storage helpers."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Literal, Mapping, TypedDict
 
 
-PHASE2_EVIDENCE_MEMORY_DIR_ENV = "PHASE2_EVIDENCE_MEMORY_DIR"
-DEFAULT_STORAGE_ROOT = Path(__file__).resolve().parents[1] / "information" / "phase2_evidence_memory"
+GITHUB_EVIDENCE_MEMORY_DIR_ENV = "GITHUB_EVIDENCE_MEMORY_DIR"
+DEFAULT_STORAGE_ROOT = Path(__file__).resolve().parents[1] / "information" / "github_evidence_memory"
 
 GITHUB_RAW_SOURCES = "github_raw_sources"
 EVIDENCE_CHUNKS = "evidence_chunks"
@@ -160,10 +160,10 @@ def stable_record_id(prefix: str, parts: Any) -> str:
     return f"{prefix}_{stable_hash(_canonical_json(parts))[:32]}"
 
 
-def get_phase2_memory_dir(storage_dir: str | Path | None = None) -> Path:
+def get_github_evidence_memory_dir(storage_dir: str | Path | None = None) -> Path:
     if storage_dir is not None:
         return Path(storage_dir)
-    configured = os.getenv(PHASE2_EVIDENCE_MEMORY_DIR_ENV, "").strip()
+    configured = os.getenv(GITHUB_EVIDENCE_MEMORY_DIR_ENV, "").strip()
     if configured:
         return Path(configured)
     return DEFAULT_STORAGE_ROOT
@@ -171,13 +171,13 @@ def get_phase2_memory_dir(storage_dir: str | Path | None = None) -> Path:
 
 def get_record_path(record_type: str, storage_dir: str | Path | None = None) -> Path:
     normalized_type = normalize_record_type(record_type)
-    return get_phase2_memory_dir(storage_dir) / RECORD_FILES[normalized_type]
+    return get_github_evidence_memory_dir(storage_dir) / RECORD_FILES[normalized_type]
 
 
 def normalize_record_type(record_type: str) -> str:
     normalized_type = RECORD_TYPE_ALIASES.get(record_type, record_type)
     if normalized_type not in RECORD_FILES:
-        raise ValueError(f"Unknown Phase 2 evidence memory record type: {record_type}")
+        raise ValueError(f"Unknown GitHub evidence evidence memory record type: {record_type}")
     return normalized_type
 
 
@@ -211,7 +211,7 @@ def upsert_jsonl_record(path: str | Path, record: Mapping[str, Any], id_field: s
     record_dict = dict(record)
     record_id = str(record_dict.get(id_field) or "").strip()
     if not record_id:
-        raise ValueError(f"Cannot upsert Phase 2 record without {id_field}")
+        raise ValueError(f"Cannot upsert GitHub evidence record without {id_field}")
 
     records = read_jsonl(path)
     updated = False
@@ -263,7 +263,7 @@ def count_records(
     return len(read_records_by_project(record_type, project_id, storage_dir))
 
 
-def get_phase2_memory_counts(
+def get_github_evidence_memory_counts(
     project_id: str | None = None,
     storage_dir: str | Path | None = None,
 ) -> dict[str, int]:

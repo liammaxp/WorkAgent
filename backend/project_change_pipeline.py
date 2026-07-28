@@ -1,6 +1,6 @@
-"""Manual Phase 3 diff-memory pipeline orchestration.
+"""Manual project change memory diff-memory pipeline orchestration.
 
-This module adapts already-saved GitHub context into Phase 3 artifacts. It does
+This module adapts already-saved GitHub context into project change memory artifacts. It does
 not fetch GitHub data, call LLMs, touch Chroma, or alter resume generation.
 """
 
@@ -12,35 +12,53 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from phase3_diff_memory import (
-    CAPABILITY_TYPES,
-    DEFAULT_PHASE3_MEMORY_PATH,
-    RawDiffInput,
-    build_evidence_card,
-    build_raw_change_summary,
-    extract_capability_facts,
-    extract_diff_units,
-    get_phase3_project_memory,
-    is_phase3_diff_memory_enabled,
-    load_phase3_project_memory,
-    persist_phase3_artifacts,
-    score_evidence_card,
-    stable_hash_text,
-    summarize_phase3_project_memory,
-)
+if __package__:
+    from .project_change_memory import (
+        CAPABILITY_TYPES,
+        DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
+        RawDiffInput,
+        build_evidence_card,
+        build_raw_change_summary,
+        extract_capability_facts,
+        extract_diff_units,
+        get_project_change_memory,
+        is_project_change_memory_enabled,
+        load_project_change_memory,
+        persist_project_change_artifacts,
+        score_evidence_card,
+        stable_hash_text,
+        summarize_project_change_memory,
+    )
+else:
+    from project_change_memory import (
+        CAPABILITY_TYPES,
+        DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
+        RawDiffInput,
+        build_evidence_card,
+        build_raw_change_summary,
+        extract_capability_facts,
+        extract_diff_units,
+        get_project_change_memory,
+        is_project_change_memory_enabled,
+        load_project_change_memory,
+        persist_project_change_artifacts,
+        score_evidence_card,
+        stable_hash_text,
+        summarize_project_change_memory,
+    )
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_GITHUB_REPO_SCAN_STATE_PATH = Path("information/github_repo_scan_state.json")
-PHASE3_DISABLED_MESSAGE = "Phase 3 diff memory is disabled. Set USE_PHASE3_DIFF_MEMORY=1 to enable it."
+PROJECT_CHANGE_DISABLED_MESSAGE = "project change memory is disabled. Set USE_PROJECT_CHANGE_MEMORY=1 to enable it."
 MAX_INSPECT_SAMPLE_LIMIT = 20
 DEFAULT_INSPECT_SAMPLE_LIMIT = 5
 PIPELINE_STATUSES = {"disabled", "no_source", "completed", "completed_with_skips", "failed"}
 
 
 @dataclass
-class Phase3PipelineResult:
+class ProjectChangePipelineResult:
     enabled: bool
     status: str
     source_context_count: int
@@ -58,7 +76,7 @@ class Phase3PipelineResult:
     errors: list[str]
 
 
-def pipeline_result_to_dict(result: Phase3PipelineResult) -> dict[str, Any]:
+def pipeline_result_to_dict(result: ProjectChangePipelineResult) -> dict[str, Any]:
     return asdict(result)
 
 
@@ -66,12 +84,12 @@ def empty_pipeline_result(
     *,
     enabled: bool,
     status: str,
-    memory_path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    memory_path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
     source_context_count: int = 0,
     skipped_sources: list[dict[str, Any]] | None = None,
     errors: list[str] | None = None,
-) -> Phase3PipelineResult:
-    return Phase3PipelineResult(
+) -> ProjectChangePipelineResult:
+    return ProjectChangePipelineResult(
         enabled=enabled,
         status=status if status in PIPELINE_STATUSES else "failed",
         source_context_count=source_context_count,
@@ -90,7 +108,7 @@ def empty_pipeline_result(
     )
 
 
-def load_saved_github_contexts_for_phase3(
+def load_saved_github_contexts_for_project_change_memory(
     scan_state_path: str | Path = DEFAULT_GITHUB_REPO_SCAN_STATE_PATH,
 ) -> list[dict[str, Any]]:
     path = Path(scan_state_path)
@@ -132,7 +150,7 @@ def normalize_saved_github_contexts(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def collect_phase3_raw_diff_inputs(
+def collect_project_change_raw_diff_inputs(
     github_contexts: list[dict[str, Any]],
 ) -> tuple[list[RawDiffInput], list[dict[str, Any]]]:
     raw_inputs: list[RawDiffInput] = []
@@ -142,9 +160,9 @@ def collect_phase3_raw_diff_inputs(
         if not isinstance(context, dict):
             skipped_sources.append(skipped_source(reason="malformed_context"))
             continue
-        repo = phase3_context_repo(context)
-        project_id = phase3_context_project_id(context)
-        latest_commit_sha = phase3_context_latest_commit_sha(context)
+        repo = project_change_context_repo(context)
+        project_id = project_change_context_project_id(context)
+        latest_commit_sha = project_change_context_latest_commit_sha(context)
         if not project_id:
             skipped_sources.append(skipped_source(repo=repo, commit_sha=latest_commit_sha, reason="missing_project_id"))
             continue
@@ -174,18 +192,18 @@ def dedupe_raw_diff_inputs(items: list[RawDiffInput]) -> list[RawDiffInput]:
     return [by_key[key] for key in sorted(by_key)]
 
 
-def run_phase3_diff_memory_pipeline(
+def run_project_change_memory_pipeline(
     github_contexts: list[dict[str, Any]] | None = None,
-    memory_path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    memory_path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
     min_evidence_score: int = 6,
-) -> Phase3PipelineResult:
-    if not is_phase3_diff_memory_enabled():
+) -> ProjectChangePipelineResult:
+    if not is_project_change_memory_enabled():
         return empty_pipeline_result(enabled=False, status="disabled", memory_path=memory_path)
 
     try:
-        contexts = github_contexts if github_contexts is not None else load_saved_github_contexts_for_phase3()
+        contexts = github_contexts if github_contexts is not None else load_saved_github_contexts_for_project_change_memory()
     except Exception as error:
-        logger.warning("Phase 3 saved GitHub context load failed: %s", error)
+        logger.warning("project change memory saved GitHub context load failed: %s", error)
         return empty_pipeline_result(
             enabled=True,
             status="failed",
@@ -193,7 +211,7 @@ def run_phase3_diff_memory_pipeline(
             errors=[safe_error_message(error)],
         )
 
-    raw_inputs, skipped_sources = collect_phase3_raw_diff_inputs(contexts)
+    raw_inputs, skipped_sources = collect_project_change_raw_diff_inputs(contexts)
     raw_inputs = dedupe_raw_diff_inputs(raw_inputs)
     if not raw_inputs:
         status = "no_source"
@@ -218,7 +236,7 @@ def run_phase3_diff_memory_pipeline(
                 summaries.append(summary)
                 candidate_cards.append(build_evidence_card(summary))
         except Exception as error:
-            logger.warning("Phase 3 source processing failed for %s: %s", raw_input.file_path, error)
+            logger.warning("project change memory source processing failed for %s: %s", raw_input.file_path, error)
             skipped_sources.append(
                 skipped_source(
                     project_id=raw_input.project_id,
@@ -237,7 +255,7 @@ def run_phase3_diff_memory_pipeline(
     capabilities = extract_capability_facts(qualified_cards, min_evidence_score=min_evidence_score)
 
     try:
-        persist_phase3_artifacts(
+        persist_project_change_artifacts(
             summaries,
             candidate_cards,
             capabilities,
@@ -245,8 +263,8 @@ def run_phase3_diff_memory_pipeline(
             min_evidence_score=min_evidence_score,
         )
     except Exception as error:
-        logger.warning("Phase 3 persistence failed: %s", error)
-        return Phase3PipelineResult(
+        logger.warning("project change memory persistence failed: %s", error)
+        return ProjectChangePipelineResult(
             enabled=True,
             status="failed",
             source_context_count=len(contexts),
@@ -259,7 +277,7 @@ def run_phase3_diff_memory_pipeline(
             persisted_project_count=0,
             skipped_source_count=len(skipped_sources),
             skipped_sources=sort_skipped_sources(skipped_sources),
-            project_summaries=build_phase3_project_summaries(
+            project_summaries=build_project_change_summaries(
                 raw_inputs,
                 diff_units,
                 summaries,
@@ -272,7 +290,7 @@ def run_phase3_diff_memory_pipeline(
         )
 
     status = "completed_with_skips" if skipped_sources or processing_errors else "completed"
-    project_summaries = build_phase3_project_summaries(
+    project_summaries = build_project_change_summaries(
         raw_inputs,
         diff_units,
         summaries,
@@ -280,7 +298,7 @@ def run_phase3_diff_memory_pipeline(
         qualified_cards,
         capabilities,
     )
-    return Phase3PipelineResult(
+    return ProjectChangePipelineResult(
         enabled=True,
         status=status,
         source_context_count=len(contexts),
@@ -299,21 +317,21 @@ def run_phase3_diff_memory_pipeline(
     )
 
 
-def get_phase3_project_inspect(
+def inspect_project_change_memory(
     project_id: str | None = None,
-    memory_path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+    memory_path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
     sample_limit: int | str = DEFAULT_INSPECT_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     limit = safe_sample_limit(sample_limit)
-    enabled = is_phase3_diff_memory_enabled()
+    enabled = is_project_change_memory_enabled()
     requested_project_id = str(project_id or "").strip()
     try:
         if requested_project_id:
-            entry = get_phase3_project_memory(requested_project_id, memory_path)
+            entry = get_project_change_memory(requested_project_id, memory_path)
             return {
                 "enabled": enabled,
                 "project_id": requested_project_id,
-                **phase3_project_counts(entry),
+                **project_change_counts(entry),
                 "capability_types": capability_types_from_project_entry(entry),
                 "sample_limit": limit,
                 "sample_raw_change_summaries": sample_raw_change_summaries(entry, limit),
@@ -321,11 +339,11 @@ def get_phase3_project_inspect(
                 "sample_capability_facts": sample_capability_facts(entry, limit),
                 "errors": [],
             }
-        memory = load_phase3_project_memory(memory_path)
+        memory = load_project_change_memory(memory_path)
         projects = [
             {
                 "project_id": project_key,
-                **phase3_project_counts(entry),
+                **project_change_counts(entry),
                 "capability_types": capability_types_from_project_entry(entry),
             }
             for project_key, entry in sorted(memory.get("projects", {}).items())
@@ -350,10 +368,10 @@ def get_phase3_project_inspect(
         }
 
 
-def get_phase3_pipeline_health(
-    memory_path: str | Path = DEFAULT_PHASE3_MEMORY_PATH,
+def get_project_change_health(
+    memory_path: str | Path = DEFAULT_PROJECT_CHANGE_MEMORY_PATH,
 ) -> dict[str, Any]:
-    if not is_phase3_diff_memory_enabled():
+    if not is_project_change_memory_enabled():
         return {
             "enabled": False,
             "status": "disabled",
@@ -370,7 +388,7 @@ def get_phase3_pipeline_health(
 
     memory_exists = Path(memory_path).exists()
     try:
-        memory = load_phase3_project_memory(memory_path)
+        memory = load_project_change_memory(memory_path)
     except Exception as error:
         return {
             "enabled": True,
@@ -410,7 +428,7 @@ def get_phase3_pipeline_health(
     }
 
 
-def phase3_context_repo(context: dict[str, Any]) -> str:
+def project_change_context_repo(context: dict[str, Any]) -> str:
     repo = str(context.get("repository") or "").strip()
     if repo:
         return repo
@@ -422,15 +440,15 @@ def phase3_context_repo(context: dict[str, Any]) -> str:
     return url
 
 
-def phase3_context_project_id(context: dict[str, Any]) -> str:
+def project_change_context_project_id(context: dict[str, Any]) -> str:
     return (
         str(context.get("project_id") or "").strip()
         or str(context.get("project_name") or "").strip()
-        or phase3_context_repo(context)
+        or project_change_context_repo(context)
     )
 
 
-def phase3_context_latest_commit_sha(context: dict[str, Any]) -> str:
+def project_change_context_latest_commit_sha(context: dict[str, Any]) -> str:
     incremental = context.get("incremental_update")
     if isinstance(incremental, dict) and str(incremental.get("head_sha") or "").strip():
         return str(incremental.get("head_sha") or "").strip()
@@ -439,9 +457,9 @@ def phase3_context_latest_commit_sha(context: dict[str, Any]) -> str:
 
 def iter_context_patch_entries(context: dict[str, Any]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    repo = phase3_context_repo(context)
-    project_id = phase3_context_project_id(context)
-    latest_sha = phase3_context_latest_commit_sha(context)
+    repo = project_change_context_repo(context)
+    project_id = project_change_context_project_id(context)
+    latest_sha = project_change_context_latest_commit_sha(context)
 
     def add_change(change: Any, *, commit: dict[str, Any] | None = None, source_group: str = "file_changes") -> None:
         if not isinstance(change, dict):
@@ -606,7 +624,7 @@ def any_source_skip_for_project(skipped_sources: list[dict[str, Any]], project_i
     )
 
 
-def build_phase3_project_summaries(
+def build_project_change_summaries(
     raw_inputs: list[RawDiffInput],
     diff_units: list[Any],
     summaries: list[Any],
@@ -659,7 +677,7 @@ def safe_sample_limit(value: int | str | None) -> int:
     return max(0, min(parsed, MAX_INSPECT_SAMPLE_LIMIT))
 
 
-def phase3_project_counts(entry: dict[str, Any]) -> dict[str, int]:
+def project_change_counts(entry: dict[str, Any]) -> dict[str, int]:
     return {
         "raw_change_summary_count": len(entry.get("raw_change_summaries") or []),
         "evidence_card_count": len(entry.get("evidence_cards") or []),
@@ -730,7 +748,7 @@ def aggregate_memory_counts(projects: dict[str, Any]) -> dict[str, int]:
     for entry in projects.values():
         if not isinstance(entry, dict):
             continue
-        counts = phase3_project_counts(entry)
+        counts = project_change_counts(entry)
         for key in totals:
             totals[key] += counts[key]
     return totals

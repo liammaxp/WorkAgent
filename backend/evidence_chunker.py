@@ -1,4 +1,4 @@
-"""Deterministic Phase 2 evidence chunking helpers."""
+"""Deterministic GitHub evidence evidence chunking helpers."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from typing import Any
 import evidence_memory
 
 
-PHASE2_FLAG_ENV = "USE_GITHUB_CONTEXT_PHASE2"
+GITHUB_EVIDENCE_MEMORY_ENV = "USE_GITHUB_EVIDENCE_MEMORY"
 ENABLED_VALUES = {"1", "true", "yes", "on"}
-PHASE2_CHUNK_TARGET_CHARS = 3000
-PHASE2_CHUNK_MAX_CHARS = 6000
-PHASE2_CHUNK_MIN_CHARS = 80
-PHASE2_CHUNK_SUMMARY_CHARS = 240
+GITHUB_EVIDENCE_CHUNK_TARGET_CHARS = 3000
+GITHUB_EVIDENCE_CHUNK_MAX_CHARS = 6000
+GITHUB_EVIDENCE_CHUNK_MIN_CHARS = 80
+GITHUB_EVIDENCE_CHUNK_SUMMARY_CHARS = 240
 
 KEYWORD_PATTERNS = [
     ("bullet_depth_profile", r"\bbullet_depth_profile\b"),
@@ -60,8 +60,8 @@ TECHNICAL_TAG_RULES = {
 }
 
 
-def phase2_enabled() -> bool:
-    return str(os.getenv(PHASE2_FLAG_ENV, "1")).strip().lower() in ENABLED_VALUES
+def github_evidence_enabled() -> bool:
+    return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
 
 
 def build_evidence_chunks_from_raw_sources(raw_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -94,7 +94,7 @@ def build_evidence_chunks_from_raw_source(raw_source: dict[str, Any]) -> list[di
     if chunks:
         return chunks
 
-    fallback_text = text[:PHASE2_CHUNK_TARGET_CHARS].strip()
+    fallback_text = text[:GITHUB_EVIDENCE_CHUNK_TARGET_CHARS].strip()
     if fallback_text:
         fallback = make_chunk(
             raw_source,
@@ -112,14 +112,14 @@ def build_evidence_chunks_from_raw_source(raw_source: dict[str, Any]) -> list[di
     return []
 
 
-def chunk_phase2_raw_sources(
+def chunk_github_evidence_raw_sources(
     project_id: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if not phase2_enabled():
+    if not github_evidence_enabled():
         return {
             "enabled": False,
-            "phase": "phase2",
+            "memory_type": "github_evidence",
             "project_id": project_id or None,
             "processed_raw_sources": 0,
             "created_chunks": 0,
@@ -166,17 +166,17 @@ def chunk_phase2_raw_sources(
             }
         )
 
-    counts = evidence_memory.get_phase2_memory_counts(project_id=project_id)
+    counts = evidence_memory.get_github_evidence_memory_counts(project_id=project_id)
     return {
         "enabled": True,
-        "phase": "phase2",
+        "memory_type": "github_evidence",
         "project_id": project_id or None,
         "processed_raw_sources": len(raw_sources),
         "created_chunks": created_chunks,
         "updated_chunks": updated_chunks,
         "created_or_updated_chunks": created_or_updated_chunks,
         "chunks_count": counts["chunks_count"],
-        "message": "Phase 2 evidence chunks built successfully.",
+        "message": "GitHub evidence evidence chunks built successfully.",
         "sources": source_summaries,
     }
 
@@ -385,14 +385,14 @@ def pack_segments(segments: list[str]) -> list[str]:
         segment = segment.strip()
         if not segment:
             continue
-        if len(segment) > PHASE2_CHUNK_MAX_CHARS:
+        if len(segment) > GITHUB_EVIDENCE_CHUNK_MAX_CHARS:
             if current:
                 packed.append(current.strip())
                 current = ""
             packed.extend(bounded_windows(segment))
             continue
         candidate = f"{current}\n\n{segment}".strip() if current else segment
-        if len(candidate) > PHASE2_CHUNK_TARGET_CHARS and current:
+        if len(candidate) > GITHUB_EVIDENCE_CHUNK_TARGET_CHARS and current:
             packed.append(current.strip())
             current = segment
         else:
@@ -402,7 +402,7 @@ def pack_segments(segments: list[str]) -> list[str]:
     return [
         window
         for chunk in packed
-        for window in (bounded_windows(chunk) if len(chunk) > PHASE2_CHUNK_MAX_CHARS else [chunk])
+        for window in (bounded_windows(chunk) if len(chunk) > GITHUB_EVIDENCE_CHUNK_MAX_CHARS else [chunk])
     ]
 
 
@@ -410,15 +410,15 @@ def bounded_windows(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    if len(text) <= PHASE2_CHUNK_MAX_CHARS:
+    if len(text) <= GITHUB_EVIDENCE_CHUNK_MAX_CHARS:
         return [text]
     windows = []
     start = 0
     while start < len(text):
-        end = min(len(text), start + PHASE2_CHUNK_TARGET_CHARS)
+        end = min(len(text), start + GITHUB_EVIDENCE_CHUNK_TARGET_CHARS)
         if end < len(text):
             boundary = max(text.rfind("\n\n", start, end), text.rfind("\n", start, end))
-            if boundary > start + PHASE2_CHUNK_MIN_CHARS:
+            if boundary > start + GITHUB_EVIDENCE_CHUNK_MIN_CHARS:
                 end = boundary
         window = text[start:end].strip()
         if window:
@@ -428,7 +428,7 @@ def bounded_windows(text: str) -> list[str]:
 
 
 def should_keep_chunk(text: str, keywords: list[str]) -> bool:
-    return len(text) >= PHASE2_CHUNK_MIN_CHARS or bool(keywords)
+    return len(text) >= GITHUB_EVIDENCE_CHUNK_MIN_CHARS or bool(keywords)
 
 
 def chunk_type_for_source_type(source_type: str) -> str:
@@ -518,9 +518,9 @@ def first_line(text: str) -> str:
 
 def truncate_summary(text: str) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
-    if len(text) <= PHASE2_CHUNK_SUMMARY_CHARS:
+    if len(text) <= GITHUB_EVIDENCE_CHUNK_SUMMARY_CHARS:
         return text
-    return text[: PHASE2_CHUNK_SUMMARY_CHARS - 3].rstrip() + "..."
+    return text[: GITHUB_EVIDENCE_CHUNK_SUMMARY_CHARS - 3].rstrip() + "..."
 
 
 def count_lines(text: str) -> int:
