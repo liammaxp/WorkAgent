@@ -17,6 +17,7 @@ from backend.project_capability_builder import (
     build_project_capability_facts,
 )
 from backend.project_capability_grouping import group_project_evidence_facts
+from backend.project_capability_extractor import extract_project_capabilities
 from backend.project_capability_memory import CapabilityCandidate
 from backend.project_capability_scoring import (
     assess_capability_candidate_support,
@@ -339,6 +340,52 @@ def test_fact_uses_authoritative_stable_pcf_identity():
     )
     assert first.fact.capability_id == second.fact.capability_id == expected.capability_id
     assert first.fact.capability_id.startswith("pcf_") and len(first.fact.capability_id) == 28
+
+
+def test_extractor_and_verified_builder_use_same_capability_identity():
+    candidate, assessment, policy, facts = _verified()
+    verified = _build((candidate, assessment, policy, facts))
+    extracted, _report = extract_project_capabilities(candidate.project_id, facts)
+    extracted_fact = next(
+        fact for fact in extracted if fact.capability_type == candidate.capability_type
+    )
+    authoritative = ProjectCapabilityFact(
+        project_id=candidate.project_id,
+        capability_type=candidate.capability_type,
+        present=True,
+        source_evidence_fact_ids=list(candidate.supporting_evidence_ids),
+    )
+    assert extracted_fact.source_evidence_fact_ids == list(candidate.supporting_evidence_ids)
+    assert verified.fact is not None
+    assert extracted_fact.capability_id == verified.fact.capability_id == authoritative.capability_id
+
+
+def test_capability_identity_does_not_change_with_nonidentity_fields():
+    identity = {
+        "project_id": "project-a",
+        "capability_type": "output_quality_control",
+        "present": True,
+        "source_evidence_fact_ids": ["pef_identity_b", "pef_identity_a"],
+    }
+    base = ProjectCapabilityFact(**identity)
+    variants = (
+        ProjectCapabilityFact(**identity, mechanisms=["atomic artifact replacement"]),
+        ProjectCapabilityFact(**identity, metric_support=MetricSupport.EXPLICIT),
+        ProjectCapabilityFact(**identity, confidence=Confidence.HIGH),
+        ProjectCapabilityFact(**identity, technical_tags=["FastAPI"]),
+        ProjectCapabilityFact(**identity, allowed_resume_claims=["mechanism:stable identity"]),
+        ProjectCapabilityFact(**identity, forbidden_claims=["unsupported metric claim"]),
+        ProjectCapabilityFact(**{**identity, "source_evidence_fact_ids": ["pef_identity_a", "pef_identity_b"]}),
+    )
+    assert all(item.capability_id == base.capability_id for item in variants)
+
+    identity_changes = (
+        ProjectCapabilityFact(**{**identity, "project_id": "project-b"}),
+        ProjectCapabilityFact(**{**identity, "capability_type": "failure_recovery"}),
+        ProjectCapabilityFact(**{**identity, "present": False}),
+        ProjectCapabilityFact(**{**identity, "source_evidence_fact_ids": ["pef_identity_a"]}),
+    )
+    assert len({base.capability_id, *(item.capability_id for item in identity_changes)}) == 5
 
 
 def test_builder_returns_existing_project_capability_fact_model():

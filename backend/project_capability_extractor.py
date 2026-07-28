@@ -34,7 +34,6 @@ from backend.project_evidence_models import (
     ProjectCapabilityFact,
     ProjectEvidenceFact,
     EvidenceSourceRef,
-    build_project_evidence_stable_id,
 )
 
 
@@ -1009,15 +1008,7 @@ def _extract_one_project(
             metric_support = _metric_support_for_facts(selected_facts)
             mechanisms = _selected_mechanisms(selected_facts)
             confidence = _confidence_for_proof(definition, selected_facts, selected_kinds)
-            capability_id = build_project_evidence_stable_id("pcf_", project_id, {
-                "project_id": project_id,
-                "capability_type": definition.capability_type,
-                "source_evidence_fact_ids": sorted(selected_ids),
-                "mechanisms": mechanisms,
-                "metric_support": metric_support.value,
-            })
             emitted.append(ProjectCapabilityFact(
-                capability_id=capability_id,
                 project_id=project_id,
                 capability_type=definition.capability_type,
                 present=True,
