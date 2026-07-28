@@ -15,12 +15,18 @@ from backend.project_capability_taxonomy import (
     FORBIDDEN_INFERENCE_REGISTRY,
     SIGNAL_REGISTRY,
     ProjectCapabilityDefinition,
+    capability_taxonomy_to_dict,
+    get_capability_rule,
+    get_capability_taxonomy,
+    get_capability_types_for_signal,
     get_project_capability_alias_target,
     get_project_capability_definition,
     is_project_capability_supported,
     list_project_capability_definitions,
     list_project_capability_overlap_rules,
     list_project_evidence_signal_identifiers,
+    normalize_capability_label,
+    resolve_capability_type,
     validate_project_capability_taxonomy,
     validate_project_capability_type,
 )
@@ -29,6 +35,8 @@ from backend.project_evidence_scoring import score_project_evidence_facts
 from backend.project_evidence_synthesizer import synthesize_project_evidence_facts
 from backend.project_evidence_input import load_project_evidence_inputs
 from backend.project_evidence_models import EvidenceType, ProjectCapabilityFact, ProjectEvidenceFact
+from backend.project_evidence_models import MetricSupport
+from backend.project_evidence_memory import load_project_evidence_memory
 
 
 REQUIRED_CAPABILITIES = {
@@ -427,3 +435,75 @@ def test_real_taxonomy_audit_is_read_only_and_creates_no_capability_facts():
     assert not any(isinstance(item, ProjectCapabilityFact) for item in scored)
     assert before_facts == [item.to_json() for item in scored]
     assert before_mtimes == after_mtimes
+
+
+def test_canonical_registry_exposes_explicit_future_proof_minimums():
+    registry = get_capability_taxonomy()
+    assert registry is CAPABILITY_TAXONOMY
+    for rule in registry.values():
+        assert rule.minimum_total_fact_count >= 1
+        assert rule.minimum_direct_fact_count >= 1
+        assert 1 <= rule.minimum_distinct_signal_group_count <= len(rule.required_signal_groups)
+        assert rule.minimum_mechanism_count >= 1
+        assert get_capability_rule(rule.capability_type) is rule
+
+
+def test_normalized_alias_lookup_is_deterministic_and_not_fuzzy():
+    assert normalize_capability_label("  Local-Project  Memory ") == "local_project_memory"
+    assert resolve_capability_type(" local-project-memory ") == "project_memory_management"
+    assert resolve_capability_type("Project Memory Management") == "project_memory_management"
+    assert get_capability_rule("LOCAL PROJECT MEMORY") is definition("project_memory_management")
+    assert resolve_capability_type("project_memory") is None
+    assert resolve_capability_type("retriev") is None
+
+
+def test_normalized_alias_collision_is_rejected():
+    report = validate_project_capability_taxonomy(
+        aliases=(
+            ("shared-alias", "claim_validation"),
+            ("shared_alias", "data_persistence"),
+        ),
+    )
+    assert any("normalized_alias_collision" in error for error in report.errors)
+
+
+def test_registered_signal_mapping_is_exact_and_deterministic():
+    first = get_capability_types_for_signal("source-grounding")
+    assert first == tuple(sorted(first))
+    assert "evidence_grounded_generation" in first
+    assert get_capability_types_for_signal("source grounding") == first
+    assert get_capability_types_for_signal("ground") == ()
+
+
+def test_registry_and_rules_cannot_be_mutated_by_callers():
+    registry = get_capability_taxonomy()
+    with pytest.raises(TypeError):
+        registry["new_capability"] = CAPABILITY_DEFINITIONS[0]
+    with pytest.raises(FrozenInstanceError):
+        CAPABILITY_DEFINITIONS[0].display_name = "Changed"
+
+
+def test_registry_serialization_is_stable_and_json_compatible():
+    first = capability_taxonomy_to_dict()
+    second = capability_taxonomy_to_dict()
+    assert first == second
+    assert json.dumps(first, ensure_ascii=False, sort_keys=True) == json.dumps(
+        second, ensure_ascii=False, sort_keys=True
+    )
+    assert list(first["definitions"]) == sorted(CAPABILITY_TAXONOMY)
+
+
+def test_taxonomy_uses_authoritative_metric_support_values():
+    assert {item.value for item in MetricSupport} == {"none", "approximate", "explicit"}
+
+
+def test_real_capability_diagnostics_remain_unchanged_and_read_only():
+    artifact = Path(__file__).resolve().parents[1] / "information" / "project_evidence_memory.json"
+    before = artifact.read_bytes()
+    before_mtime = artifact.stat().st_mtime_ns
+    loaded = load_project_evidence_memory(artifact)
+    assert loaded.status == "ready" and loaded.snapshot is not None
+    assert loaded.snapshot.diagnostics.capability_fact_count == 0
+    assert loaded.snapshot.diagnostics.unsupported_capability_blocked_count == 11
+    assert artifact.read_bytes() == before
+    assert artifact.stat().st_mtime_ns == before_mtime
