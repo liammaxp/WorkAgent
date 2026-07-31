@@ -28,6 +28,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+# Supported launchers run ``api_server:app`` from the backend directory.  Add
+# the repository root only for that legacy top-level import mode so semantic
+# backend package imports resolve without changing package-mode behavior.
+if __package__ in {None, ""}:
+    _repository_root = str(Path(__file__).resolve().parent.parent)
+    if _repository_root not in sys.path:
+        sys.path.insert(0, _repository_root)
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from openai import APIStatusError

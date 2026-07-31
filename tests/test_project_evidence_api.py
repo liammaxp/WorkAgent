@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +16,22 @@ import project_change_pipeline  # noqa: E402
 
 
 RAW_KEYS = {"raw_text", "patch_text", "hunk_text", "added_lines", "removed_lines", "content"}
+
+
+def test_api_server_imports_from_supported_backend_working_directory():
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-c", "import api_server; print(api_server.app.title)"],
+        cwd=ROOT / "backend",
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "WorkAgent API"
 
 
 def keys(value):
