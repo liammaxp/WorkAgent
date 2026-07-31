@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
+import json
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 import capability_extractor
@@ -19,6 +23,7 @@ DISABLED_MESSAGE = "GitHub context evidence memory is disabled."
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 SUMMARY_CHARS = 240
+PIPELINE_RUN_MANIFEST = ".pipeline_runs.json"
 
 STAGE_ORDER = [
     "chunk",
@@ -105,6 +110,9 @@ def run_github_evidence_pipeline(
                 "stage": stage,
                 "ok": False,
                 "processed": 0,
+                "created": 0,
+                "updated": 0,
+                "unchanged": 0,
                 "created_or_updated": 0,
                 "skipped": 0,
                 "message": f"GitHub evidence pipeline stage failed: {stage}",
@@ -124,6 +132,8 @@ def run_github_evidence_pipeline(
                 break
 
     counts_after = safe_counts(requested_project_id)
+    if not errors and requested_stages == STAGE_ORDER:
+        save_pipeline_run_manifest(requested_project_id)
     return {
         "enabled": True,
         "ok": not errors,
@@ -248,13 +258,19 @@ def get_github_evidence_health(project_id: str | None = None) -> dict[str, Any]:
         if not present
     ]
     next_action = next_recommended_action(health)
+    records_available = all(health.values())
+    lineage_current = pipeline_run_manifest_is_current(requested_project_id) if records_available else False
+    if records_available and not lineage_current:
+        next_action = "run_pipeline"
     return {
         "enabled": True,
         "memory_type": "github_evidence",
         "project_id": requested_project_id or None,
         "counts": counts,
         "health": health,
-        "pipeline_complete": next_action in {"inspect", "complete"},
+        "records_available": records_available,
+        "pipeline_complete": lineage_current,
+        "lineage_current": lineage_current,
         "missing_stages": missing_stages,
         "next_recommended_action": next_action,
         "errors": [],
@@ -263,6 +279,67 @@ def get_github_evidence_health(project_id: str | None = None) -> dict[str, Any]:
 
 def github_evidence_enabled() -> bool:
     return str(os.getenv(GITHUB_EVIDENCE_MEMORY_ENV, "1")).strip().lower() in ENABLED_VALUES
+
+
+def _pipeline_manifest_path() -> Path:
+    return evidence_memory.get_github_evidence_memory_dir() / PIPELINE_RUN_MANIFEST
+
+
+def _project_record_signatures(project_id: str) -> dict[str, str]:
+    signatures = {}
+    for record_type in evidence_memory.RECORD_FILES:
+        records = evidence_memory.read_records(record_type)
+        if project_id:
+            records = [record for record in records if str(record.get("project_id") or "") == project_id]
+        payload = json.dumps(records, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        signatures[record_type] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return signatures
+
+
+def save_pipeline_run_manifest(project_id: str) -> None:
+    path = _pipeline_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        manifests = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        manifests = {}
+    if not isinstance(manifests, dict):
+        manifests = {}
+    manifest_project_ids = [project_id] if project_id else sorted({
+        str(record.get("project_id") or "")
+        for record in evidence_memory.read_records(evidence_memory.GITHUB_RAW_SOURCES)
+        if str(record.get("project_id") or "")
+    })
+    if not manifest_project_ids:
+        manifest_project_ids = [""]
+    for current_project_id in manifest_project_ids:
+        manifests[current_project_id or "__all__"] = {
+            "signatures": _project_record_signatures(current_project_id)
+        }
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(manifests, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def pipeline_run_manifest_is_current(project_id: str) -> bool:
+    path = _pipeline_manifest_path()
+    try:
+        manifests = json.loads(path.read_text(encoding="utf-8"))
+        manifest = manifests.get(project_id or "__all__", {})
+        return manifest.get("signatures") == _project_record_signatures(project_id)
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return False
 
 
 def normalize_project_id(project_id: str | None) -> str:
@@ -315,6 +392,9 @@ def summarize_stage_result(stage: str, result: dict[str, Any]) -> dict[str, Any]
         "stage": stage,
         "ok": ok,
         "processed": processed_count(stage, result),
+        "created": stage_count(stage, result, "created"),
+        "updated": stage_count(stage, result, "updated"),
+        "unchanged": stage_count(stage, result, "unchanged"),
         "created_or_updated": created_or_updated_count(stage, result),
         "skipped": skipped_count(stage, result),
         "message": str(result.get("message") or ""),
@@ -343,12 +423,23 @@ def created_or_updated_count(stage: str, result: dict[str, Any]) -> int:
     return safe_int(result.get(key_by_stage.get(stage, "")))
 
 
+def stage_count(stage: str, result: dict[str, Any], kind: str) -> int:
+    suffix_by_stage = {
+        "chunk": "chunks",
+        "summarize_changes": "summaries",
+        "build_evidence_cards": "evidence_cards",
+        "build_capability_facts": "capability_facts",
+    }
+    suffix = suffix_by_stage.get(stage)
+    return safe_int(result.get(f"{kind}_{suffix}")) if suffix else 0
+
+
 def skipped_count(stage: str, result: dict[str, Any]) -> int:
     key_by_stage = {
         "chunk": "skipped_raw_sources",
         "summarize_changes": "skipped_chunks",
         "build_evidence_cards": "skipped_summaries",
-        "build_capability_facts": "skipped_groups",
+        "build_capability_facts": "skipped_evidence_cards",
     }
     return safe_int(result.get(key_by_stage.get(stage, ""), 0))
 

@@ -1869,12 +1869,23 @@ def update_application_record(
     if not fields:
         return json.dumps({"updated": False, "reason": "No fields provided."})
 
-    assignments = ", ".join([f"{key} = ?" for key, _ in fields])
-    values = [value for _, value in fields]
-    values.append(record_id)
-
     with closing(sqlite3.connect(APPLICATION_DB_PATH)) as connection:
         with connection:
+            columns = ", ".join(key for key, _ in fields)
+            existing = connection.execute(
+                f"SELECT {columns} FROM applications WHERE id = ?", (record_id,)
+            ).fetchone()
+            if existing is None:
+                return json.dumps({"updated": False, "id": record_id, "reason": "Record not found."})
+            changed_fields = [
+                (key, value) for index, (key, value) in enumerate(fields)
+                if existing[index] != value
+            ]
+            if not changed_fields:
+                return json.dumps({"updated": False, "id": record_id, "reason": "Values unchanged."})
+            assignments = ", ".join([f"{key} = ?" for key, _ in changed_fields])
+            values = [value for _, value in changed_fields]
+            values.append(record_id)
             cursor = connection.execute(
                 f"""
                 UPDATE applications

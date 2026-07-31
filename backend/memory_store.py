@@ -192,6 +192,7 @@ class MemoryVectorStore:
         inserted = 0
         updated = 0
         unchanged = 0
+        deduplicated = 0
         for record in records:
             embedding = self.embedder.embed(record["document"])
             existing = collection.get(ids=[record["id"]], include=["documents"])
@@ -219,7 +220,7 @@ class MemoryVectorStore:
                     same_repository = metadata.get("repository") == record["metadata"].get("repository")
                     if same_section or same_repository:
                         collection.delete(ids=[similar_id])
-                        updated += 1
+                        deduplicated += 1
                         break
 
             collection.upsert(
@@ -232,7 +233,12 @@ class MemoryVectorStore:
                 updated += 1
             else:
                 inserted += 1
-        return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+        return {
+            "inserted": inserted,
+            "updated": updated,
+            "unchanged": unchanged,
+            "deduplicated": deduplicated,
+        }
 
     def _replace_profile(self, memory: dict[str, Any], source: str) -> dict[str, int]:
         records = self._profile_records(memory, source)

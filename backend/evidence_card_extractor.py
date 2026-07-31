@@ -242,6 +242,7 @@ def build_github_evidence_cards(
     }
     created_cards = 0
     updated_cards = 0
+    unchanged_cards = 0
     created_or_updated = 0
     skipped = []
     cards_preview = []
@@ -258,13 +259,16 @@ def build_github_evidence_cards(
             )
             continue
         evidence_id = str(card.get("evidence_id") or "")
-        evidence_memory.upsert_evidence_card(card)
-        if evidence_id in existing_ids:
+        _, write_status = evidence_memory.upsert_evidence_card_with_status(card)
+        if write_status == "updated":
             updated_cards += 1
-        else:
+        elif write_status == "created":
             created_cards += 1
             existing_ids.add(evidence_id)
-        created_or_updated += 1
+        else:
+            unchanged_cards += 1
+        if write_status != "unchanged":
+            created_or_updated += 1
         cards_preview.append(
             {
                 "evidence_id": evidence_id,
@@ -282,6 +286,7 @@ def build_github_evidence_cards(
         "processed_summaries": len(summaries),
         "created_evidence_cards": created_cards,
         "updated_evidence_cards": updated_cards,
+        "unchanged_evidence_cards": unchanged_cards,
         "created_or_updated_evidence_cards": created_or_updated,
         "skipped_summaries": len(skipped),
         "evidence_cards_count": counts["evidence_cards_count"],

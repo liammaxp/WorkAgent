@@ -124,7 +124,19 @@ async function request(path, options = {}) {
 
 export const api = {
   getStatus: () => request("/status"),
-  getOutputFile: (path) => request(`/output-file?${new URLSearchParams({ path })}`),
+  getOutputFilePage: (path, offset = 0) =>
+    request(`/output-file?${new URLSearchParams({ path, offset: String(offset) })}`),
+  getOutputFile: async (path) => {
+    const pages = [];
+    let offset = 0;
+    let response = null;
+    do {
+      response = await request(`/output-file?${new URLSearchParams({ path, offset: String(offset) })}`);
+      pages.push(response?.content || "");
+      offset = response?.next_offset;
+    } while (response?.truncated && Number.isInteger(offset) && offset >= 0);
+    return { ...response, content: pages.join("") };
+  },
   launchOutputFile: (path) =>
     request(`/output-file/launch?${new URLSearchParams({ path })}`, { method: "POST" }),
   deleteOutputFile: (path) =>

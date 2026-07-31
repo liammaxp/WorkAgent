@@ -205,12 +205,16 @@ def build_github_evidence_capability_facts(
 
     grouped = group_cards_by_capability(cards)
     skipped = []
+    unmapped_card_count = 0
+    rejected_group_count = 0
+    rejected_group_card_count = 0
     existing_ids = {
         str(record.get("capability_id") or "")
         for record in evidence_memory.read_records(evidence_memory.CAPABILITY_FACTS)
     }
     created_facts = 0
     updated_facts = 0
+    unchanged_facts = 0
     created_or_updated = 0
     preview = []
 
@@ -222,6 +226,7 @@ def build_github_evidence_capability_facts(
     for card in cards:
         card_id = str(card.get("evidence_id") or "")
         if card_id and card_id not in mapped_card_ids:
+            unmapped_card_count += 1
             skipped.append(
                 {
                     "evidence_id": card_id,
@@ -233,6 +238,8 @@ def build_github_evidence_capability_facts(
     for (current_project_id, capability_type), group_cards in grouped.items():
         fact = build_capability_fact_from_cards(current_project_id, capability_type, group_cards)
         if fact is None:
+            rejected_group_count += 1
+            rejected_group_card_count += len(group_cards)
             skipped.append(
                 {
                     "project_id": current_project_id,
@@ -242,13 +249,16 @@ def build_github_evidence_capability_facts(
             )
             continue
         capability_id = str(fact.get("capability_id") or "")
-        evidence_memory.upsert_capability_fact(fact)
-        if capability_id in existing_ids:
+        _, write_status = evidence_memory.upsert_capability_fact_with_status(fact)
+        if write_status == "updated":
             updated_facts += 1
-        else:
+        elif write_status == "created":
             created_facts += 1
             existing_ids.add(capability_id)
-        created_or_updated += 1
+        else:
+            unchanged_facts += 1
+        if write_status != "unchanged":
+            created_or_updated += 1
         preview.append(
             {
                 "capability_id": capability_id,
@@ -266,8 +276,12 @@ def build_github_evidence_capability_facts(
         "processed_evidence_cards": len(cards),
         "created_capability_facts": created_facts,
         "updated_capability_facts": updated_facts,
+        "unchanged_capability_facts": unchanged_facts,
         "created_or_updated_capability_facts": created_or_updated,
-        "skipped_groups": len(skipped),
+        "skipped_groups": rejected_group_count,
+        "unmapped_cards": unmapped_card_count,
+        "rejected_groups": rejected_group_count,
+        "skipped_evidence_cards": unmapped_card_count + rejected_group_card_count,
         "capability_facts_count": counts["capability_facts_count"],
         "message": "GitHub evidence capability facts built successfully.",
         "capability_facts": preview,

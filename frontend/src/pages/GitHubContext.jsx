@@ -81,7 +81,9 @@ function evidencePipelineText(language) {
       stageResults: "Stage results",
       ok: "OK",
       processed: "Processed",
-      createdUpdated: "Created/updated",
+      created: "Created",
+      updated: "Updated",
+      unchanged: "Unchanged",
       skipped: "Skipped",
       message: "Message",
       summaryOnly: "Only pipeline summaries are shown here; raw text, patches, and inspect samples are not rendered.",
@@ -127,8 +129,10 @@ function evidencePipelineText(language) {
     countsAfter: "当前数量",
     stageResults: "阶段结果",
     ok: "成功",
-    processed: "已处理",
-    createdUpdated: "新增或更新",
+      processed: "已处理",
+      created: "新增",
+      updated: "实际更新",
+      unchanged: "未变化",
     skipped: "已跳过",
     message: "消息",
     summaryOnly: "这里只显示流水线摘要；不会渲染原文、patch 或 inspect 样例。",
@@ -233,7 +237,9 @@ function EvidencePipelineBuildResult({ result, error, ui }) {
                 <th>{ui.stage}</th>
                 <th>{ui.ok}</th>
                 <th>{ui.processed}</th>
-                <th>{ui.createdUpdated}</th>
+                <th>{ui.created}</th>
+                <th>{ui.updated}</th>
+                <th>{ui.unchanged}</th>
                 <th>{ui.skipped}</th>
                 <th>{ui.message}</th>
               </tr>
@@ -244,7 +250,9 @@ function EvidencePipelineBuildResult({ result, error, ui }) {
                   <td>{evidencePipelineStageLabel(stage.stage, ui)}</td>
                   <td>{stage.ok ? ui.yes : ui.no}</td>
                   <td>{formatCount(stage.processed)}</td>
-                  <td>{formatCount(stage.created_or_updated)}</td>
+                  <td>{formatCount(stage.created)}</td>
+                  <td>{formatCount(stage.updated)}</td>
+                  <td>{formatCount(stage.unchanged)}</td>
                   <td>{formatCount(stage.skipped)}</td>
                   <td>{safeArray(stage.errors).join(", ") || "-"}</td>
                 </tr>

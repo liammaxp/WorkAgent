@@ -181,21 +181,31 @@ def build_github_evidence_raw_change_summaries(
     }
     created_summaries = 0
     updated_summaries = 0
+    unchanged_summaries = 0
+    skipped_chunks = []
     created_or_updated = 0
     summaries_preview: list[dict[str, Any]] = []
 
     for chunk in chunks:
         summary = extract_raw_change_summary_from_chunk(chunk)
         if summary is None:
+            skipped_chunks.append({
+                "chunk_id": str(chunk.get("chunk_id") or ""),
+                "project_id": str(chunk.get("project_id") or ""),
+                "reason": "chunk produced no qualifying change summary",
+            })
             continue
         change_id = str(summary.get("change_id") or "")
-        evidence_memory.upsert_raw_change_summary(summary)
-        if change_id in existing_ids:
+        _, write_status = evidence_memory.upsert_raw_change_summary_with_status(summary)
+        if write_status == "updated":
             updated_summaries += 1
-        else:
+        elif write_status == "created":
             created_summaries += 1
             existing_ids.add(change_id)
-        created_or_updated += 1
+        else:
+            unchanged_summaries += 1
+        if write_status != "unchanged":
+            created_or_updated += 1
         summaries_preview.append(
             {
                 "change_id": change_id,
@@ -213,10 +223,13 @@ def build_github_evidence_raw_change_summaries(
         "processed_chunks": len(chunks),
         "created_summaries": created_summaries,
         "updated_summaries": updated_summaries,
+        "unchanged_summaries": unchanged_summaries,
+        "skipped_chunks": len(skipped_chunks),
         "created_or_updated_summaries": created_or_updated,
         "raw_change_summaries_count": counts["raw_change_summaries_count"],
         "message": "GitHub evidence raw change summaries built successfully.",
         "summaries": summaries_preview,
+        "skips": skipped_chunks,
     }
 
 

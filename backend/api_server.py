@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import uuid
+from collections import Counter
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -75,6 +76,7 @@ shutdown_lock = threading.Lock()
 CHAT_SESSION_OUTPUT_DIR = agent.OUTPUT_DIR / "chat_sessions"
 JOB_ANALYSIS_HISTORY_PATH = agent.INFORMATION_DIR / "job_analysis_history.json"
 MAX_JOB_ANALYSIS_HISTORY = 20
+MAX_OUTPUT_TEXT_BYTES = 2 * 1024 * 1024
 chat_session_lock = threading.Lock()
 TAILORED_RESUME_PDF_OUTPUT_DIR = agent.OUTPUT_DIR / "tailored_resume_pdfs"
 LATEX_BUILD_DIR = agent.OUTPUT_DIR / "latex_build"
@@ -3604,6 +3606,32 @@ def normalized_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
 
 
+def structural_json_diff_counts(before: Any, after: Any) -> dict[str, int]:
+    """Count real JSON additions, updates, and removals without trusting model narration."""
+
+    counts = {"added": 0, "updated": 0, "removed": 0}
+
+    def visit(left: Any, right: Any) -> None:
+        if isinstance(left, dict) and isinstance(right, dict):
+            left_keys, right_keys = set(left), set(right)
+            counts["removed"] += len(left_keys - right_keys)
+            counts["added"] += len(right_keys - left_keys)
+            for key in left_keys & right_keys:
+                visit(left[key], right[key])
+            return
+        if isinstance(left, list) and isinstance(right, list):
+            left_items = Counter(normalized_json(item) for item in left)
+            right_items = Counter(normalized_json(item) for item in right)
+            counts["removed"] += sum((left_items - right_items).values())
+            counts["added"] += sum((right_items - left_items).values())
+            return
+        if left != right:
+            counts["updated"] += 1
+
+    visit(before, after)
+    return counts
+
+
 def read_json_file(path: Path, fallback: Any) -> Any:
     if not path.exists():
         return fallback
@@ -4086,6 +4114,8 @@ def repo_project_name(context: dict[str, Any]) -> str:
 
 
 def split_text_into_chunks(text: str, max_chars: int = REPO_CHUNK_TARGET_CHARS) -> list[str]:
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0:
+        raise ValueError("max_chars must be a positive integer")
     text = str(text or "")
     if len(text) <= max_chars:
         return [text]
@@ -4434,6 +4464,7 @@ def update_project_memory_from_repo_analysis(
         if agent.has_usable_repo_context([context])
     ]
     project_memory = read_current_project_memory()
+    initial_project_memory = json.loads(json.dumps(project_memory, ensure_ascii=False))
     changed_any = False
     additions: list[str] = []
     processed_repositories: list[str] = []
@@ -4516,6 +4547,8 @@ Repository analysis payload for exactly one repository:
         "processed_repositories": processed_repositories,
         "skipped_repositories": skipped_repositories,
         "additions": additions,
+        "reported_additions": additions,
+        "change_counts": structural_json_diff_counts(initial_project_memory, project_memory),
         "project_memory": project_memory,
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
     }
@@ -4529,8 +4562,12 @@ def build_project_memory_status_summary(
     before_mtime: Optional[float],
     after_mtime: Optional[float],
 ) -> dict[str, Any]:
-    additions = project_memory_update.get("additions", [])
-    additions_count = len(additions) if isinstance(additions, list) else 0
+    change_counts = project_memory_update.get("change_counts", {})
+    reported_additions = project_memory_update.get("reported_additions", project_memory_update.get("additions", []))
+    reported_additions_count = len(reported_additions) if isinstance(reported_additions, list) else 0
+    added_count = int(change_counts.get("added", 0)) if isinstance(change_counts, dict) else 0
+    changed_count = int(change_counts.get("updated", 0)) if isinstance(change_counts, dict) else 0
+    removed_count = int(change_counts.get("removed", 0)) if isinstance(change_counts, dict) else 0
     updated = bool(project_memory_update.get("updated"))
     usable_repo_count = sum(1 for result in scan_results if not result.get("error"))
     changed_repo_count = sum(1 for result in scan_results if result.get("changed"))
@@ -4542,8 +4579,8 @@ def build_project_memory_status_summary(
 
     if updated:
         status = "updated"
-        label_zh = f"项目记忆已更新：新增 {additions_count} 条事实" if additions_count else "项目记忆已更新"
-        label_en = f"Project Memory updated: {additions_count} new fact(s)" if additions_count else "Project Memory updated"
+        label_zh = f"项目记忆已更新：新增 {added_count}、修改 {changed_count}、移除 {removed_count} 个结构项"
+        label_en = f"Project Memory updated: {added_count} added, {changed_count} changed, {removed_count} removed"
         detail_zh = "GitHub 证据已重新分析，并写入 project_memory.json。"
         detail_en = "GitHub evidence was reanalyzed and written to project_memory.json."
     elif was_reanalyzed and usable_repo_count:
@@ -4568,8 +4605,10 @@ def build_project_memory_status_summary(
     return {
         "status": status,
         "updated": updated,
+        "change_counts": {"added": added_count, "updated": changed_count, "removed": removed_count},
         "reanalyzed": bool(was_reanalyzed),
-        "additions_count": additions_count,
+        "additions_count": added_count,
+        "reported_additions_count": reported_additions_count,
         "usable_repository_count": usable_repo_count,
         "changed_repository_count": changed_repo_count,
         "fetched_repository_count": fetched_repo_count,
@@ -17872,15 +17911,43 @@ def get_file(name: str):
 
 
 @app.get("/api/output-file")
-def get_output_file(path: str = Query(..., min_length=1)):
+def get_output_file(
+    path: str = Query(..., min_length=1),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(MAX_OUTPUT_TEXT_BYTES, ge=1024, le=MAX_OUTPUT_TEXT_BYTES),
+):
     output_file = resolve_output_file(path)
     if output_file.suffix.lower() not in {".txt", ".md", ".json", ".tex"}:
         raise HTTPException(status_code=400, detail="This output file cannot be displayed as text.")
     try:
-        content = output_file.read_text(encoding="utf-8")
+        total_bytes = output_file.stat().st_size
+        if offset > total_bytes:
+            raise HTTPException(status_code=416, detail="Preview offset is beyond the end of the output file.")
+        with output_file.open("rb") as handle:
+            handle.seek(offset)
+            raw_content = handle.read(limit)
+        while raw_content:
+            try:
+                content = raw_content.decode("utf-8")
+                break
+            except UnicodeDecodeError as error:
+                if error.end != len(raw_content) or error.reason != "unexpected end of data":
+                    raise
+                raw_content = raw_content[:-1]
+        else:
+            content = ""
     except UnicodeDecodeError as error:
         raise HTTPException(status_code=400, detail="This output file is not UTF-8 text.") from error
-    return {"path": str(output_file), "content": content}
+    next_offset = offset + len(raw_content)
+    truncated = next_offset < total_bytes
+    return {
+        "path": str(output_file),
+        "content": content,
+        "offset": offset,
+        "next_offset": next_offset if truncated else None,
+        "total_bytes": total_bytes,
+        "truncated": truncated,
+    }
 
 
 @app.post("/api/output-file/launch")

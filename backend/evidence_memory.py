@@ -5,9 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Mapping, TypedDict
+
+
+_JSONL_THREAD_LOCK = threading.RLock()
 
 
 GITHUB_EVIDENCE_MEMORY_DIR_ENV = "GITHUB_EVIDENCE_MEMORY_DIR"
@@ -198,34 +204,93 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     return records
 
 
-def write_jsonl(path: str | Path, records: list[Mapping[str, Any]]) -> None:
+@contextmanager
+def _jsonl_file_lock(path: Path):
+    """Serialize a JSONL read/modify/write across threads and processes."""
+
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _JSONL_THREAD_LOCK, lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:  # pragma: no cover - exercised on POSIX builds
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:  # pragma: no cover - exercised on POSIX builds
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _write_jsonl_unlocked(path: Path, records: list[Mapping[str, Any]]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(dict(record), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-            handle.write("\n")
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", newline="\n", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            for record in records:
+                handle.write(json.dumps(dict(record), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
-def upsert_jsonl_record(path: str | Path, record: Mapping[str, Any], id_field: str) -> dict[str, Any]:
+def write_jsonl(path: str | Path, records: list[Mapping[str, Any]]) -> None:
+    path = Path(path)
+    with _jsonl_file_lock(path):
+        _write_jsonl_unlocked(path, records)
+
+
+def upsert_jsonl_record_with_status(
+    path: str | Path, record: Mapping[str, Any], id_field: str
+) -> tuple[dict[str, Any], str]:
     record_dict = dict(record)
     record_id = str(record_dict.get(id_field) or "").strip()
     if not record_id:
         raise ValueError(f"Cannot upsert GitHub evidence record without {id_field}")
 
-    records = read_jsonl(path)
-    updated = False
-    next_records: list[dict[str, Any]] = []
-    for existing in records:
-        if str(existing.get(id_field) or "") == record_id:
+    path = Path(path)
+    with _jsonl_file_lock(path):
+        records = read_jsonl(path)
+        status = "created"
+        next_records: list[dict[str, Any]] = []
+        for existing in records:
+            if str(existing.get(id_field) or "") == record_id:
+                next_records.append(record_dict)
+                status = "unchanged" if existing == record_dict else "updated"
+            else:
+                next_records.append(existing)
+        if status == "created":
             next_records.append(record_dict)
-            updated = True
-        else:
-            next_records.append(existing)
-    if not updated:
-        next_records.append(record_dict)
-    write_jsonl(path, next_records)
-    return record_dict
+        if status != "unchanged":
+            _write_jsonl_unlocked(path, next_records)
+    return record_dict, status
+
+
+def upsert_jsonl_record(path: str | Path, record: Mapping[str, Any], id_field: str) -> dict[str, Any]:
+    upserted, _ = upsert_jsonl_record_with_status(path, record, id_field)
+    return upserted
 
 
 def read_records(record_type: str, storage_dir: str | Path | None = None) -> list[dict[str, Any]]:
@@ -579,6 +644,16 @@ def upsert_evidence_chunk(
     return upsert_jsonl_record(get_record_path(EVIDENCE_CHUNKS, storage_dir), normalized, "chunk_id")
 
 
+def upsert_evidence_chunk_with_status(
+    record: Mapping[str, Any], storage_dir: str | Path | None = None,
+) -> tuple[EvidenceChunk, str]:
+    normalized = normalize_evidence_chunk(record)
+    upserted, status = upsert_jsonl_record_with_status(
+        get_record_path(EVIDENCE_CHUNKS, storage_dir), normalized, "chunk_id"
+    )
+    return upserted, status  # type: ignore[return-value]
+
+
 def make_raw_change_summary(
     *,
     project_id: str,
@@ -635,6 +710,16 @@ def upsert_raw_change_summary(
 ) -> RawChangeSummary:
     normalized = normalize_raw_change_summary(record)
     return upsert_jsonl_record(get_record_path(RAW_CHANGE_SUMMARIES, storage_dir), normalized, "change_id")
+
+
+def upsert_raw_change_summary_with_status(
+    record: Mapping[str, Any], storage_dir: str | Path | None = None,
+) -> tuple[RawChangeSummary, str]:
+    normalized = normalize_raw_change_summary(record)
+    upserted, status = upsert_jsonl_record_with_status(
+        get_record_path(RAW_CHANGE_SUMMARIES, storage_dir), normalized, "change_id"
+    )
+    return upserted, status  # type: ignore[return-value]
 
 
 def make_evidence_card(
@@ -703,6 +788,16 @@ def upsert_evidence_card(
     return upsert_jsonl_record(get_record_path(EVIDENCE_CARDS, storage_dir), normalized, "evidence_id")
 
 
+def upsert_evidence_card_with_status(
+    record: Mapping[str, Any], storage_dir: str | Path | None = None,
+) -> tuple[EvidenceCard, str]:
+    normalized = normalize_evidence_card(record)
+    upserted, status = upsert_jsonl_record_with_status(
+        get_record_path(EVIDENCE_CARDS, storage_dir), normalized, "evidence_id"
+    )
+    return upserted, status  # type: ignore[return-value]
+
+
 def make_capability_fact(
     *,
     project_id: str,
@@ -743,7 +838,7 @@ def normalize_capability_fact(record: Mapping[str, Any]) -> CapabilityFact:
         capability_id=_string(record.get("capability_id")),
         project_id=_string(record.get("project_id")),
         capability_type=_string(record.get("capability_type")),
-        present=bool(record.get("present", True)),
+        present=_boolean(record.get("present"), default=True),
         confidence=_string(record.get("confidence") or "low"),
         mechanisms=_list(record.get("mechanisms")),
         source_evidence_ids=_list(record.get("source_evidence_ids")),
@@ -758,26 +853,43 @@ def upsert_capability_fact(
     record: Mapping[str, Any],
     storage_dir: str | Path | None = None,
 ) -> CapabilityFact:
+    upserted, _ = upsert_capability_fact_with_status(record, storage_dir)
+    return upserted
+
+
+def upsert_capability_fact_with_status(
+    record: Mapping[str, Any], storage_dir: str | Path | None = None,
+) -> tuple[CapabilityFact, str]:
     normalized = normalize_capability_fact(record)
     path = get_record_path(CAPABILITY_FACTS, storage_dir)
-    records = read_jsonl(path)
-    merged_record: dict[str, Any] = dict(normalized)
-    retained_records: list[dict[str, Any]] = []
+    with _jsonl_file_lock(path):
+        records = read_jsonl(path)
+        merged_record: dict[str, Any] = dict(normalized)
+        retained_records: list[dict[str, Any]] = []
+        matched_records: list[dict[str, Any]] = []
 
-    for existing in records:
-        same_id = str(existing.get("capability_id") or "") == normalized["capability_id"]
-        same_capability = (
-            str(existing.get("project_id") or "") == normalized["project_id"]
-            and str(existing.get("capability_type") or "") == normalized["capability_type"]
-        )
-        if same_id or same_capability:
-            merged_record = _merge_capability_facts(existing, merged_record)
+        for existing in records:
+            same_id = str(existing.get("capability_id") or "") == normalized["capability_id"]
+            same_capability = (
+                str(existing.get("project_id") or "") == normalized["project_id"]
+                and str(existing.get("capability_type") or "") == normalized["capability_type"]
+            )
+            if same_id or same_capability:
+                matched_records.append(existing)
+                merged_record = _merge_capability_facts(existing, merged_record)
+            else:
+                retained_records.append(existing)
+
+        retained_records.append(merged_record)
+        if not matched_records:
+            status = "created"
+        elif len(matched_records) == 1 and matched_records[0] == merged_record:
+            status = "unchanged"
         else:
-            retained_records.append(existing)
-
-    retained_records.append(merged_record)
-    write_jsonl(path, retained_records)
-    return merged_record
+            status = "updated"
+        if status != "unchanged":
+            _write_jsonl_unlocked(path, retained_records)
+    return merged_record, status  # type: ignore[return-value]
 
 
 def _canonical_json(value: Any) -> str:
@@ -818,6 +930,22 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _boolean(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError("present must be a boolean")
 
 
 def _merge_capability_facts(existing: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, Any]:

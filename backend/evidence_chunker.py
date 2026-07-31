@@ -141,22 +141,33 @@ def chunk_github_evidence_raw_sources(
     }
     created_chunks = 0
     updated_chunks = 0
+    unchanged_chunks = 0
+    skipped_sources = []
     created_or_updated_chunks = 0
     source_summaries: list[dict[str, Any]] = []
 
     for raw_source in raw_sources:
         chunks = build_evidence_chunks_from_raw_source(raw_source)
+        if not chunks:
+            skipped_sources.append({
+                "source_id": str(raw_source.get("source_id") or ""),
+                "project_id": str(raw_source.get("project_id") or ""),
+                "reason": "source produced no qualifying chunks",
+            })
         source_created_or_updated = 0
         for chunk in chunks:
             chunk_id = str(chunk.get("chunk_id") or "")
-            evidence_memory.upsert_evidence_chunk(chunk)
-            if chunk_id in existing_chunk_ids:
+            _, write_status = evidence_memory.upsert_evidence_chunk_with_status(chunk)
+            if write_status == "updated":
                 updated_chunks += 1
-            else:
+            elif write_status == "created":
                 created_chunks += 1
                 existing_chunk_ids.add(chunk_id)
-            created_or_updated_chunks += 1
-            source_created_or_updated += 1
+            else:
+                unchanged_chunks += 1
+            if write_status != "unchanged":
+                created_or_updated_chunks += 1
+                source_created_or_updated += 1
         source_summaries.append(
             {
                 "source_id": str(raw_source.get("source_id") or ""),
@@ -174,10 +185,13 @@ def chunk_github_evidence_raw_sources(
         "processed_raw_sources": len(raw_sources),
         "created_chunks": created_chunks,
         "updated_chunks": updated_chunks,
+        "unchanged_chunks": unchanged_chunks,
+        "skipped_raw_sources": len(skipped_sources),
         "created_or_updated_chunks": created_or_updated_chunks,
         "chunks_count": counts["chunks_count"],
         "message": "GitHub evidence evidence chunks built successfully.",
         "sources": source_summaries,
+        "skips": skipped_sources,
     }
 
 
