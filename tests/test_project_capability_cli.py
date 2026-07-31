@@ -119,7 +119,52 @@ def _json_stdout(capsys) -> dict:
     return json.loads(captured.out)
 
 
+def _real_output_state() -> tuple[bool, bytes | None, int | None]:
+    if not REAL_OUTPUT.exists():
+        return False, None, None
+    return True, REAL_OUTPUT.read_bytes(), REAL_OUTPUT.stat().st_mtime_ns
+
+
+def _backfill_result(status: str = "created"):
+    return cli.backfill_module.ProjectCapabilityBackfillResult(
+        status=status,
+        source_schema_version="project_evidence_memory.v1",
+        source_content_hash="1" * 64,
+        source_file_sha256_before="2" * 64,
+        source_file_sha256_after="2" * 64,
+        target_schema_version="project_capability_memory.v1",
+        target_content_hash="3" * 64,
+        target_file_sha256="4" * 64,
+        pipeline_status="empty",
+        source_project_count=11,
+        source_evidence_fact_count=283,
+        source_claim_boundary_count=184,
+        source_capability_fact_count=0,
+        candidate_count=57,
+        assessment_count=57,
+        eligible_assessment_count=0,
+        policy_count=0,
+        build_result_count=0,
+        capability_fact_count=0,
+        target_existed_before=status == "unchanged",
+        target_written=status == "created",
+        target_unchanged=status == "unchanged",
+        warnings=("capability_facts_empty",),
+        errors=(),
+        diagnostics={
+            "ambiguous_evidence_count": 4,
+            "matched_evidence_count": 196,
+            "projects_with_capabilities": 0,
+            "projects_without_capabilities": 11,
+            "skipped_evidence_count": 0,
+            "staging_artifact_count": 0,
+            "unmatched_evidence_count": 83,
+        },
+    )
+
+
 def test_project_capability_cli_import_has_no_side_effects():
+    before = _real_output_state()
     code = (
         "from pathlib import Path; import sys; "
         "sys.argv=['project-capability-cli','unexpected']; "
@@ -138,7 +183,7 @@ def test_project_capability_cli_import_has_no_side_effects():
     )
     assert completed.returncode == 0
     assert completed.stdout == completed.stderr == ""
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == before
 
 
 def test_cli_help_lists_semantic_commands():
@@ -152,9 +197,85 @@ def test_cli_help_lists_semantic_commands():
     )
     output = completed.stdout.casefold()
     assert completed.returncode == 0
-    assert all(command in output for command in ("build", "inspect", "validate"))
+    assert all(command in output for command in ("build", "inspect", "validate", "backfill"))
     assert "phase" + "5" not in output
     assert completed.stderr == ""
+
+
+def test_cli_help_lists_backfill_command():
+    completed = subprocess.run(
+        [sys.executable, "-m", "backend.project_capability_cli", "backfill", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert "controlled authoritative backfill" in completed.stdout.casefold()
+    assert all(option not in completed.stdout for option in ("--source", "--output", "--force"))
+    assert completed.stderr == ""
+
+
+def test_cli_backfill_calls_dedicated_backfill_api(monkeypatch, capsys):
+    calls = []
+
+    def spy():
+        calls.append(())
+        return _backfill_result()
+
+    monkeypatch.setattr(
+        cli.backfill_module,
+        "run_authoritative_project_capability_backfill",
+        spy,
+    )
+    assert cli.main(["backfill", "--json"]) == cli.EXIT_SUCCESS
+    payload = _json_stdout(capsys)
+    assert calls == [()]
+    assert payload["command"] == "backfill"
+    assert payload["status"] == "created"
+    assert payload["target"]["written"] is True
+
+
+def test_cli_backfill_json_output_is_safe_and_deterministic(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.backfill_module,
+        "run_authoritative_project_capability_backfill",
+        lambda: _backfill_result(),
+    )
+    argv = ["backfill", "--json"]
+    assert cli.main(argv) == cli.EXIT_SUCCESS
+    first = capsys.readouterr().out
+    assert cli.main(argv) == cli.EXIT_SUCCESS
+    second = capsys.readouterr().out
+
+    assert first == second
+    payload = json.loads(first)
+    assert payload["source"]["project_count"] == 11
+    assert payload["pipeline"]["capability_fact_count"] == 0
+    assert payload["target"]["staging_artifact_count"] == 0
+    assert str(ROOT).casefold() not in first.casefold()
+    assert all(
+        forbidden not in first.casefold()
+        for forbidden in ("raw_text", "raw_diff", "source_code", "credential", "github.com")
+    )
+
+
+@pytest.mark.parametrize("option", ("--source", "--output"))
+def test_cli_backfill_does_not_accept_source_or_output_overrides(
+    monkeypatch, capsys, option
+):
+    monkeypatch.setattr(
+        cli.backfill_module,
+        "run_authoritative_project_capability_backfill",
+        lambda: pytest.fail("backfill must not run for invalid arguments"),
+    )
+    private_value = str(ROOT / "private-override.json")
+    assert cli.main(["backfill", option, private_value]) == cli.EXIT_USAGE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.endswith("error:invalid_arguments\n")
+    assert private_value.casefold() not in captured.err.casefold()
 
 
 def test_cli_without_command_is_a_usage_error(capsys):
@@ -346,6 +467,7 @@ def test_cli_rejects_output_path_without_persist(tmp_path, capsys):
 
 
 def test_cli_build_can_persist_to_explicit_temporary_path(tmp_path, capsys):
+    real_output_before = _real_output_state()
     source = tmp_path / "source.json"
     output = tmp_path / "capability.json"
     _ready_source(source)
@@ -359,10 +481,11 @@ def test_cli_build_can_persist_to_explicit_temporary_path(tmp_path, capsys):
     assert payload["memory"]["persisted"] is True
     assert payload["memory"]["persisted_path"] == output.name
     assert loaded.status == "ready"
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
-def test_cli_cannot_persist_to_real_capability_memory_path_during_step(tmp_path, capsys):
+def test_generic_cli_build_still_cannot_write_real_capability_path(tmp_path, capsys):
+    real_output_before = _real_output_state()
     source = tmp_path / "source.json"
     _empty_source(source)
     code = cli.main([
@@ -371,7 +494,7 @@ def test_cli_cannot_persist_to_real_capability_memory_path_during_step(tmp_path,
 
     assert code == cli.EXIT_SAFETY_VIOLATION
     assert _json_stdout(capsys)["errors"] == ["real_backfill_path_prohibited"]
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_cli_cannot_overwrite_project_evidence_memory(tmp_path, capsys):
@@ -554,16 +677,18 @@ def test_cli_calls_existing_pipeline_and_loader_instead_of_lifecycle_internals(
 
 
 def test_cli_tests_do_not_create_real_project_capability_memory(tmp_path, capsys):
+    real_output_before = _real_output_state()
     source = tmp_path / "source.json"
     _empty_source(source)
     assert PROJECT_CAPABILITY_MEMORY_PATH == REAL_OUTPUT
     assert cli.main(["build", "--source", str(source), "--json"]) == 0
     capsys.readouterr()
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_cli_inspect_real_evidence_memory_read_only():
     before = REAL_SOURCE.read_bytes()
+    real_output_before = _real_output_state()
     completed = subprocess.run(
         [sys.executable, "-m", "backend.project_capability_cli", "inspect", "--json"],
         cwd=ROOT,
@@ -592,7 +717,7 @@ def test_cli_inspect_real_evidence_memory_read_only():
     assert payload["pipeline"]["capability_fact_count"] == 0
     assert REAL_SOURCE.read_bytes() == before
     assert hashlib.sha256(before).hexdigest() == EXPECTED_SOURCE_FILE_HASH
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_project_capability_cli_uses_semantic_naming():

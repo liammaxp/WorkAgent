@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping, Sequence
 
+from backend import project_capability_backfill as backfill_module
 from backend import project_capability_memory as memory_module
 from backend import project_capability_pipeline as pipeline_module
 from backend import project_evidence_memory as evidence_memory_module
@@ -46,7 +47,7 @@ class _Parser(argparse.ArgumentParser):
 def _build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="python -m backend.project_capability_cli",
-        description="Build, inspect, or validate Project Capability Memory safely.",
+        description="Build, inspect, validate, or backfill Project Capability Memory safely.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -97,6 +98,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Project Capability Memory artifact to validate.",
     )
     validate.add_argument("--json", action="store_true", help="Print canonical JSON output.")
+
+    backfill = commands.add_parser(
+        "backfill",
+        help="Create or confirm the exact authoritative local capability-memory artifact.",
+        description=(
+            "Run the controlled authoritative backfill with fixed source and target paths. "
+            "Arbitrary paths and unsafe overrides are not supported."
+        ),
+    )
+    backfill.add_argument("--json", action="store_true", help="Print canonical JSON output.")
     return parser
 
 
@@ -192,6 +203,52 @@ def _validation_summary(loaded: Any) -> dict[str, Any]:
     }
 
 
+def _backfill_summary(result: Any) -> dict[str, Any]:
+    return {
+        "command": "backfill",
+        "status": result.status,
+        "source": {
+            "schema_version": result.source_schema_version,
+            "content_hash": result.source_content_hash,
+            "file_sha256": (
+                result.source_file_sha256_after or result.source_file_sha256_before
+            ),
+            "file_sha256_before": result.source_file_sha256_before,
+            "file_sha256_after": result.source_file_sha256_after,
+            "project_count": result.source_project_count,
+            "evidence_fact_count": result.source_evidence_fact_count,
+            "claim_boundary_count": result.source_claim_boundary_count,
+            "capability_fact_count": result.source_capability_fact_count,
+        },
+        "pipeline": {
+            "status": result.pipeline_status,
+            "candidate_count": result.candidate_count,
+            "assessment_count": result.assessment_count,
+            "eligible_assessment_count": result.eligible_assessment_count,
+            "policy_count": result.policy_count,
+            "build_result_count": result.build_result_count,
+            "capability_fact_count": result.capability_fact_count,
+            "matched_evidence_count": int(result.diagnostics.get("matched_evidence_count", 0)),
+            "unmatched_evidence_count": int(result.diagnostics.get("unmatched_evidence_count", 0)),
+            "ambiguous_evidence_count": int(result.diagnostics.get("ambiguous_evidence_count", 0)),
+            "skipped_evidence_count": int(result.diagnostics.get("skipped_evidence_count", 0)),
+            "projects_with_capabilities": int(result.diagnostics.get("projects_with_capabilities", 0)),
+            "projects_without_capabilities": int(result.diagnostics.get("projects_without_capabilities", 0)),
+        },
+        "target": {
+            "schema_version": result.target_schema_version,
+            "content_hash": result.target_content_hash,
+            "file_sha256": result.target_file_sha256,
+            "existed_before": result.target_existed_before,
+            "written": result.target_written,
+            "unchanged": result.target_unchanged,
+            "staging_artifact_count": int(result.diagnostics.get("staging_artifact_count", 0)),
+        },
+        "warnings": list(result.warnings),
+        "errors": list(result.errors),
+    }
+
+
 def _error_summary(command: str, code: str) -> dict[str, Any]:
     return {
         "command": command,
@@ -223,7 +280,8 @@ def _print_human(summary: Mapping[str, Any]) -> None:
             "schema_version", "content_hash", "file_sha256", "project_count",
             "evidence_fact_count", "claim_boundary_count", "capability_fact_count",
         ):
-            print(f"source_{key}: {source[key]}")
+            if key in source:
+                print(f"source_{key}: {source[key]}")
     pipeline = summary.get("pipeline")
     if isinstance(pipeline, Mapping):
         for key in (
@@ -233,9 +291,11 @@ def _print_human(summary: Mapping[str, Any]) -> None:
             "build_result_count", "capability_fact_count", "projects_with_capabilities",
             "projects_without_capabilities",
         ):
-            print(f"pipeline_{key}: {pipeline[key]}")
+            if key in pipeline:
+                print(f"pipeline_{key}: {pipeline[key]}")
         for key in ("assessment_status_counts", "policy_status_counts", "build_status_counts"):
-            print(f"pipeline_{key}: {json.dumps(pipeline[key], sort_keys=True, separators=(',', ':'))}")
+            if key in pipeline:
+                print(f"pipeline_{key}: {json.dumps(pipeline[key], sort_keys=True, separators=(',', ':'))}")
     memory = summary.get("memory")
     if isinstance(memory, Mapping):
         for key in ("schema_version", "content_hash", "persisted", "persisted_path"):
@@ -247,6 +307,13 @@ def _print_human(summary: Mapping[str, Any]) -> None:
     validation = summary.get("validation")
     if isinstance(validation, Mapping):
         print(f"validation_valid: {validation['valid']}")
+    target = summary.get("target")
+    if isinstance(target, Mapping):
+        for key in (
+            "schema_version", "content_hash", "file_sha256", "existed_before",
+            "written", "unchanged", "staging_artifact_count",
+        ):
+            print(f"target_{key}: {target[key]}")
     print(f"warnings: {','.join(summary.get('warnings', [])) or 'none'}")
     print(f"errors: {','.join(summary.get('errors', [])) or 'none'}")
 
@@ -276,6 +343,20 @@ def _pipeline_exit_code(result: Any) -> int:
     if "persistence_validation_failed" in result.errors:
         return EXIT_PERSISTENCE_FAILED
     return EXIT_PIPELINE_FAILED
+
+
+def _backfill_exit_code(result: Any) -> int:
+    if result.status in {"created", "unchanged"}:
+        return EXIT_SUCCESS
+    if result.status == "source_missing":
+        return EXIT_ARTIFACT_MISSING
+    if result.status in {"source_invalid", "target_invalid"}:
+        return EXIT_ARTIFACT_INVALID
+    if result.status == "pipeline_failed":
+        return EXIT_PIPELINE_FAILED
+    if result.status == "persistence_failed":
+        return EXIT_PERSISTENCE_FAILED
+    return EXIT_SAFETY_VIOLATION
 
 
 def _run_pipeline_command(args: argparse.Namespace) -> int:
@@ -340,6 +421,25 @@ def _run_validate_command(args: argparse.Namespace) -> int:
     return code
 
 
+def _run_backfill_command(args: argparse.Namespace) -> int:
+    try:
+        result = backfill_module.run_authoritative_project_capability_backfill()
+    except Exception:
+        return _emit_error(
+            "backfill",
+            "backfill_invocation_failed",
+            json_output=bool(args.json),
+            exit_code=EXIT_PIPELINE_FAILED,
+        )
+    summary = _backfill_summary(result)
+    _emit(summary, json_output=bool(args.json))
+    code = _backfill_exit_code(result)
+    if code != EXIT_SUCCESS:
+        for error in result.errors or ("backfill_failed",):
+            print(f"error:{error}", file=sys.stderr)
+    return code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse one explicit command and return its deterministic process exit code."""
 
@@ -352,6 +452,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_pipeline_command(args)
     if args.command == "validate":
         return _run_validate_command(args)
+    if args.command == "backfill":
+        return _run_backfill_command(args)
     return EXIT_USAGE
 
 
