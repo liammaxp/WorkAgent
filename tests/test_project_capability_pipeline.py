@@ -42,6 +42,12 @@ EXPECTED_SOURCE_CONTENT_HASH = "37967289816ec13638b4b30e31a74f52688acc9bc08ff6c6
 EXPECTED_SOURCE_FILE_HASH = "95750df456d1fb3dea56cf40891593834a52731414a882896d99aa5a51b3f106"
 
 
+def _real_output_state() -> tuple[bool, bytes | None, int | None]:
+    if not REAL_OUTPUT.exists():
+        return False, None, None
+    return True, REAL_OUTPUT.read_bytes(), REAL_OUTPUT.stat().st_mtime_ns
+
+
 def _fact(
     evidence_id: str,
     *,
@@ -111,6 +117,7 @@ def _write_source(path: Path, snapshot) -> None:
 
 
 def test_pipeline_builds_capability_memory_from_verified_synthetic_evidence():
+    real_output_before = _real_output_state()
     result = build_project_capability_pipeline(source_memory=_verified_snapshot())
 
     assert result.status == "ready"
@@ -123,7 +130,7 @@ def test_pipeline_builds_capability_memory_from_verified_synthetic_evidence():
     assert len(result.memory.capability_facts) == 1
     assert type(result.memory.capability_facts[0]) is ProjectCapabilityFact
     assert result.persisted_path is None
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_pipeline_returns_valid_empty_memory_when_no_capability_is_verified():
@@ -372,14 +379,16 @@ def test_pipeline_does_not_persist_by_default(tmp_path):
 
 
 def test_pipeline_requires_explicit_output_path_for_persistence():
+    real_output_before = _real_output_state()
     result = run_project_capability_pipeline(source_path=REAL_SOURCE, persist=True)
     assert result.status == "failed"
     assert result.source_load_status == "not_loaded"
     assert result.errors == ("explicit_output_path_required",)
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_pipeline_can_persist_validated_memory_to_explicit_temporary_path(tmp_path):
+    real_output_before = _real_output_state()
     source = tmp_path / "source.json"
     output = tmp_path / "project_capability_memory.json"
     _write_source(source, _verified_snapshot())
@@ -394,7 +403,7 @@ def test_pipeline_can_persist_validated_memory_to_explicit_temporary_path(tmp_pa
     assert loaded.status == "ready"
     assert loaded.memory == result.memory
     assert result.source_file_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_pipeline_failure_preserves_existing_output_artifact(tmp_path):
@@ -495,8 +504,8 @@ def test_pipeline_uses_existing_lifecycle_modules(monkeypatch):
 
 
 def test_step_does_not_create_real_project_capability_memory_artifact():
+    real_output_before = _real_output_state()
     assert PROJECT_CAPABILITY_MEMORY_PATH == REAL_OUTPUT
-    assert not REAL_OUTPUT.exists()
     result = run_project_capability_pipeline(source_path=REAL_SOURCE)
     assert result.persisted_path is None
     blocked = run_project_capability_pipeline(
@@ -506,7 +515,7 @@ def test_step_does_not_create_real_project_capability_memory_artifact():
     )
     assert blocked.status == "failed"
     assert blocked.errors == ("real_output_path_forbidden",)
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_pipeline_cannot_overwrite_project_evidence_memory():
@@ -526,6 +535,7 @@ def test_pipeline_cannot_overwrite_project_evidence_memory():
 def test_real_project_evidence_memory_pipeline_returns_valid_empty_memory_read_only():
     before_bytes = REAL_SOURCE.read_bytes()
     before_hash = hashlib.sha256(before_bytes).hexdigest()
+    real_output_before = _real_output_state()
     result = run_project_capability_pipeline(source_path=REAL_SOURCE, persist=False)
 
     assert result.status == "empty"
@@ -551,7 +561,7 @@ def test_real_project_evidence_memory_pipeline_returns_valid_empty_memory_read_o
     assert result.memory.diagnostics.projects_without_capabilities == 11
     assert REAL_SOURCE.read_bytes() == before_bytes
     assert hashlib.sha256(REAL_SOURCE.read_bytes()).hexdigest() == before_hash
-    assert not REAL_OUTPUT.exists()
+    assert _real_output_state() == real_output_before
 
 
 def test_project_capability_pipeline_uses_semantic_naming():

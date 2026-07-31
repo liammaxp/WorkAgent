@@ -419,9 +419,20 @@ def test_project_capability_memory_contains_no_raw_or_sensitive_content():
         )
 
 
-def test_step_does_not_create_real_project_capability_memory_artifact():
+def test_memory_loader_does_not_create_or_modify_real_project_capability_memory_artifact():
     assert PROJECT_CAPABILITY_MEMORY_PATH == REAL_CAPABILITY_ARTIFACT
-    assert not REAL_CAPABILITY_ARTIFACT.exists()
+    before = (
+        REAL_CAPABILITY_ARTIFACT.exists(),
+        REAL_CAPABILITY_ARTIFACT.read_bytes() if REAL_CAPABILITY_ARTIFACT.exists() else None,
+        REAL_CAPABILITY_ARTIFACT.stat().st_mtime_ns if REAL_CAPABILITY_ARTIFACT.exists() else None,
+    )
+    load_project_capability_memory()
+    after = (
+        REAL_CAPABILITY_ARTIFACT.exists(),
+        REAL_CAPABILITY_ARTIFACT.read_bytes() if REAL_CAPABILITY_ARTIFACT.exists() else None,
+        REAL_CAPABILITY_ARTIFACT.stat().st_mtime_ns if REAL_CAPABILITY_ARTIFACT.exists() else None,
+    )
+    assert after == before
 
 
 def test_memory_stores_only_authoritative_project_capability_fact():

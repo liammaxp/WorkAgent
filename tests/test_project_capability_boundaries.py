@@ -439,6 +439,10 @@ def test_claim_policy_inheritance_does_not_generate_project_capability_fact():
 def test_real_ineligible_candidates_do_not_enter_boundary_inheritance():
     before = ARTIFACT.read_bytes()
     before_mtime = ARTIFACT.stat().st_mtime_ns
+    capability_artifact = ROOT / "information" / "project_capability_memory.json"
+    capability_before = (
+        capability_artifact.read_bytes(), capability_artifact.stat().st_mtime_ns
+    ) if capability_artifact.exists() else None
     loaded = load_project_evidence_memory(ARTIFACT)
     assert loaded.status == "ready" and loaded.snapshot is not None
     assessments = []
@@ -467,7 +471,10 @@ def test_real_ineligible_candidates_do_not_enter_boundary_inheritance():
     assert sum(len(project.capability_facts) for project in loaded.snapshot.projects) == 0
     assert ARTIFACT.read_bytes() == before
     assert ARTIFACT.stat().st_mtime_ns == before_mtime
-    assert not (ROOT / "information" / "project_capability_memory.json").exists()
+    capability_after = (
+        capability_artifact.read_bytes(), capability_artifact.stat().st_mtime_ns
+    ) if capability_artifact.exists() else None
+    assert capability_after == capability_before
 
 
 def test_project_capability_boundaries_use_semantic_naming():

@@ -42,6 +42,16 @@ EXPECTED_CONTENT_HASH = "37967289816ec13638b4b30e31a74f52688acc9bc08ff6c6faf760b
 EXPECTED_FILE_HASH = "95750df456d1fb3dea56cf40891593834a52731414a882896d99aa5a51b3f106"
 
 
+def _capability_artifact_state() -> tuple[bool, bytes | None, int | None]:
+    if not CAPABILITY_ARTIFACT.exists():
+        return False, None, None
+    return (
+        True,
+        CAPABILITY_ARTIFACT.read_bytes(),
+        CAPABILITY_ARTIFACT.stat().st_mtime_ns,
+    )
+
+
 def _fact(
     evidence_id: str,
     *,
@@ -131,6 +141,7 @@ def _build(verified=None):
 
 
 def test_builds_authoritative_project_capability_fact_from_verified_inputs():
+    capability_before = _capability_artifact_state()
     candidate, _assessment, policy, facts = _verified()
     result = _build((candidate, _assessment, policy, facts))
     assert result.build_status == "built"
@@ -142,7 +153,7 @@ def test_builds_authoritative_project_capability_fact_from_verified_inputs():
     assert result.fact.forbidden_claims == list(policy.forbidden_claims)
     assert result.fact.metric_support.value == policy.metric_support
     assert result.fact.capability_id.startswith("pcf_")
-    assert not CAPABILITY_ARTIFACT.exists()
+    assert _capability_artifact_state() == capability_before
 
 
 def test_ineligible_support_assessment_cannot_build_fact():
@@ -494,15 +505,16 @@ def test_fact_build_result_serialization_is_deterministic_and_safe():
 
 def test_fact_builder_does_not_persist_capability_memory():
     before = ARTIFACT.read_bytes()
-    assert not CAPABILITY_ARTIFACT.exists()
+    capability_before = _capability_artifact_state()
     assert _build().build_status == "built"
     assert ARTIFACT.read_bytes() == before
-    assert not CAPABILITY_ARTIFACT.exists()
+    assert _capability_artifact_state() == capability_before
 
 
 def test_real_ineligible_lifecycle_builds_zero_capability_facts_read_only():
     before = ARTIFACT.read_bytes()
     before_mtime = ARTIFACT.stat().st_mtime_ns
+    capability_before = _capability_artifact_state()
     loaded = load_project_evidence_memory(ARTIFACT)
     assert loaded.status == "ready" and loaded.snapshot is not None
     candidates = []
@@ -536,7 +548,7 @@ def test_real_ineligible_lifecycle_builds_zero_capability_facts_read_only():
     assert hashlib.sha256(ARTIFACT.read_bytes()).hexdigest() == EXPECTED_FILE_HASH
     assert ARTIFACT.read_bytes() == before
     assert ARTIFACT.stat().st_mtime_ns == before_mtime
-    assert not CAPABILITY_ARTIFACT.exists()
+    assert _capability_artifact_state() == capability_before
 
 
 def test_project_capability_builder_uses_semantic_naming():
