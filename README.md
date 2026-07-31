@@ -53,7 +53,7 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Start from an example system prompt and customize the agent prompt from the Web UI.
 - Scan GitHub repository links from the resume and vector memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
-- Process saved GitHub evidence through an internal project evidence pipeline that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, and extracts capability signals without inferring unsupported claims. Project evidence remains a Python-internal backend layer and is not exposed through the Web UI or HTTP API.
+- Process saved GitHub evidence through a semantic project evidence pipeline that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, groups and assesses capability candidates, inherits claim boundaries, and builds authoritative capability facts without inferring unsupported claims. The backend exposes bounded project-evidence status, build, inspect, health, preview, and raw-inspection endpoints; the full processing panel is development-only in the Web UI.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
 - Switch the Web UI between Chinese and English.
@@ -73,7 +73,8 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- project_evidence_models.py    # Bounded project-evidence models and semantic stable IDs
 |   |-- project_evidence_input.py     # Read-only evidence, change-memory, and project-fact adapters
 |   |-- project_evidence_*.py         # Evidence normalization, synthesis, scoring, and persistence
-|   |-- project_capability_*.py       # Capability taxonomy and deterministic extraction
+|   |-- project_capability_*.py       # Capability taxonomy, grouping, scoring, boundaries, and fact building
+|   |-- project_capability_memory.py   # Authoritative capability-fact memory model and deterministic persistence
 |   |-- project_claim_boundaries.py   # Conservative allowed/forbidden claim boundaries
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
@@ -109,7 +110,7 @@ The system has seven main layers:
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
 4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: GitHub evidence raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
 5. `backend/project_change_memory.py` and `backend/project_change_pipeline.py`: project-change extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
-6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, capability extraction, claim boundaries, and atomic project-evidence-memory persistence. This layer consumes GitHub evidence, optional project-change memory, and project facts without adding an HTTP route.
+6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, and atomic project-evidence-memory persistence. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory persistence remains a Python-internal boundary.
 7. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 ## Model Providers
@@ -319,6 +320,12 @@ Main FastAPI endpoints:
 - `GET /api/github/change-memory/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
+- `GET /api/project-evidence/status`
+- `POST /api/project-evidence/build`
+- `GET /api/project-evidence/inspect`
+- `GET /api/project-evidence/health`
+- `GET /api/project-evidence/preview`
+- `GET /api/project-evidence/raw`
 - `GET /api/applications`
 - `POST /api/applications`
 - `PATCH /api/applications/{record_id}`
@@ -362,7 +369,9 @@ GitHub evidence memory is controlled by `USE_GITHUB_EVIDENCE_MEMORY`. When enabl
 
 Project change memory is controlled by `USE_PROJECT_CHANGE_MEMORY`. When enabled, its pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_change_memory.json`. `POST /api/github/change-memory/build` runs the pipeline, `GET /api/github/change-memory/inspect` returns bounded per-project samples and capability types, and `GET /api/github/change-memory/health` reports whether the saved memory is ready, empty, degraded, or disabled.
 
-Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persists to `information/project_evidence_memory.json` with schema `project_evidence_memory.v1`. Its Python pipeline reads GitHub evidence JSONL, optional project-change memory, `project_memory.json`, and `project_compact_facts.json`; then it normalizes, synthesizes, scores, extracts capabilities, builds claim boundaries, and atomically validates the resulting memory. It has no `/api/project-evidence/*` route or frontend trigger. Invalid or incomplete optional inputs become sorted warnings; unsupported metrics and capability inferences remain outside synthesized claims.
+Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persists to `information/project_evidence_memory.json` with schema `project_evidence_memory.v1`. Its semantic production pipeline reads GitHub evidence JSONL, optional project-change memory, `project_memory.json`, and `project_compact_facts.json`; then it normalizes, synthesizes, scores, extracts and assesses capabilities, inherits claim boundaries, builds authoritative capability facts, and atomically validates the resulting memory. `POST /api/project-evidence/build` runs the project-change and project-evidence chain over saved local inputs; the status, inspect, health, preview, and bounded raw endpoints are read-only except for the build operation. Invalid or incomplete optional inputs become sorted warnings; unsupported metrics and capability inferences remain outside synthesized claims.
+
+Project capability memory is defined by `project_capability_memory.v1` and persists to `information/project_capability_memory.json` through Python-internal builders, validators, loaders, and atomic persistence helpers. It accepts only already-built authoritative capability facts, derives deterministic project summaries and diagnostics, stores a canonical content hash, rejects malformed or conflicting identities, forbids raw/sensitive artifact content, and protects the upstream project-evidence artifact path from overwrite. This persistence layer has no dedicated HTTP route or production frontend trigger yet.
 
 ## Local Files And Privacy
 
@@ -380,6 +389,7 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/github_evidence_memory/`
 - `information/project_change_memory.json`
 - `information/project_evidence_memory.json`
+- `information/project_capability_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -597,6 +607,12 @@ $projectEvidenceTests = Get-ChildItem tests -File | Where-Object { $_.Name -matc
 python -m pytest $projectEvidenceTests -q
 ```
 
+Project capability-memory persistence tests:
+
+```powershell
+python -m pytest tests\test_project_capability_persistence.py -q
+```
+
 Repository privacy-policy regression test:
 
 ```powershell
@@ -616,7 +632,7 @@ Production frontend output is written to `outputs/frontend/`.
 
 - Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
 - GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all GitHub evidence and project change memory records.
-- Project evidence memory is persisted and inspectable through Python backend interfaces, but it is not exposed through FastAPI or rendered in the GitHub Evidence page.
+- Project evidence memory is persisted and inspectable through bounded FastAPI endpoints, while the full project-evidence explorer is not rendered in the GitHub Evidence page. The development-only evidence pipeline panel is hidden from production builds.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
@@ -625,7 +641,7 @@ Production frontend output is written to `outputs/frontend/`.
 - Expand the Agent Chat application-material flow to include job analysis and interview prep.
 - Add persistent task queues and WebSocket/SSE streaming.
 - Add structured GitHub evidence visualization.
-- Define an explicit production contract before connecting project evidence claim boundaries to generation or UI flows.
+- Connect the validated project capability facts and claim boundaries to resume-generation decisions and a polished read-only evidence explorer.
 - Add application dashboards, statistics, batch actions, and richer search.
 - Add document preview and DOCX export.
 - Improve mobile layout and add dark mode.
@@ -680,6 +696,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 提供可直接试用的示例系统 Prompt，并支持在 Web UI 中编辑个性化 Prompt。
 - 从简历和向量记忆中扫描 GitHub 仓库链接，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
 - 保守使用 GitHub 证据支持项目描述，避免夸大个人贡献。
+- 通过 semantic project evidence pipeline 处理已保存的 GitHub 证据：校验有界输入、规范化和去重记录、合成保守 evidence facts、评分证据质量、分组和评估 capability candidates、继承 claim boundaries，并在不推断 unsupported claim 的前提下构建权威 capability facts。后端提供有界的 `/api/project-evidence/*` 状态、构建、检查、健康、预览和 raw inspect 接口；完整处理面板仅在开发环境显示。
 - 使用本地 SQLite 数据库追踪求职申请。
 - 同时提供本地 Web UI 和原始 CLI 流程。
 - 在 Web UI 中切换中文和英文。
@@ -696,6 +713,10 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- evidence_*.py        # GitHub evidence 分块、变更摘要、证据卡辅助模块
 |   |-- project_change_memory.py # project change memory schema、提取和持久化
 |   |-- project_change_pipeline.py    # project change memory pipeline、inspect 和 health 辅助逻辑
+|   |-- project_evidence_*.py         # project evidence 模型、pipeline、评分、合成和持久化
+|   |-- project_capability_*.py       # capability taxonomy、分组、评分、boundary 和 fact 构建
+|   |-- project_capability_memory.py  # 权威 capability fact memory 模型和确定性持久化
+|   |-- project_claim_boundaries.py   # 保守的 claim boundary
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # 紧凑技术 taxonomy 和安全声明辅助逻辑
 |   |-- data/
@@ -722,14 +743,15 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 `-- README.md
 ```
 
-系统主要分为六层：
+系统主要分为七层：
 
 1. `backend/main.py`：本地 agent 逻辑、模型适配器、文件工具、GitHub 上下文提取和 SQLite 投递记录。
 2. `backend/memory_store.py`：Chroma collections、确定性的本地向量化、写入前相似度对比、语义检索和旧 JSON 自动迁移。
 3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
 4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 GitHub evidence raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
 5. `backend/project_change_memory.py` 和 `backend/project_change_pipeline.py`：从已保存的 GitHub compare/file patch 提取 project change memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
-6. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。
+6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py` 和 `backend/project_claim_boundaries.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建，以及原子 project evidence memory 持久化。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；该能力记忆持久化仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
+7. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。
 
 ## 模型配置
 
@@ -935,6 +957,12 @@ background/prompt.example.txt
 - `GET /api/github/change-memory/health`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
+- `GET /api/project-evidence/status`
+- `POST /api/project-evidence/build`
+- `GET /api/project-evidence/inspect`
+- `GET /api/project-evidence/health`
+- `GET /api/project-evidence/preview`
+- `GET /api/project-evidence/raw`
 - `GET /api/applications`
 - `POST /api/applications`
 - `PATCH /api/applications/{record_id}`
@@ -976,7 +1004,9 @@ GitHub evidence memory 由 `USE_GITHUB_EVIDENCE_MEMORY` 控制。启用后，Git
 
 Project change memory 由 `USE_PROJECT_CHANGE_MEMORY` 控制。启用后，project change memory pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_change_memory.json`。`POST /api/github/change-memory/build` 用于运行该 pipeline，`GET /api/github/change-memory/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/change-memory/health` 返回当前 project change memory 是否 ready、empty、degraded 或 disabled。
 
-Project evidence memory 由 `USE_PROJECT_EVIDENCE_MEMORY` 控制，并按 `project_evidence_memory.v1` schema 持久化到 `information/project_evidence_memory.json`。它从 GitHub evidence JSONL、可选的 project-change memory、`project_memory.json` 和 `project_compact_facts.json` 只读读取输入，然后执行规范化、合成、质量评分、能力抽取、claim boundary 构建和原子校验；当前没有 `/api/project-evidence/*` 接口或前端触发入口。无效或不完整的可选输入会变成排序后的 warning，不支持的指标和能力推断不会进入合成声明。
+Project evidence memory 由 `USE_PROJECT_EVIDENCE_MEMORY` 控制，并按 `project_evidence_memory.v1` schema 持久化到 `information/project_evidence_memory.json`。它从 GitHub evidence JSONL、可选的 project-change memory、`project_memory.json` 和 `project_compact_facts.json` 只读读取输入，然后执行规范化、合成、质量评分、能力抽取和评估、claim boundary 继承、权威 capability fact 构建和原子校验。`POST /api/project-evidence/build` 会在已保存的本地输入上运行 project-change 与 project-evidence 链路，其他 status、inspect、health、preview 和有界 raw 接口用于读取；当前没有生产版前端触发入口。无效或不完整的可选输入会变成排序后的 warning，不支持的指标和能力推断不会进入合成声明。
+
+Project capability memory 按 `project_capability_memory.v1` schema 持久化到 `information/project_capability_memory.json`，由 Python 内部 builder、validator、loader 和 atomic persistence helper 使用。它只接受已经构建的权威 capability facts，生成确定性的项目摘要、diagnostics 和 content hash，拒绝格式错误、冲突 identity、raw/敏感 artifact 内容，并保护上游 project evidence artifact 不被覆盖；目前没有独立 HTTP 接口或生产版前端触发入口。
 
 ## 本地文件与隐私
 
@@ -1198,6 +1228,12 @@ python -m py_compile backend\memory_store.py backend\api_server.py backend\main.
 python -m pytest tests -q
 ```
 
+Project capability memory 持久化测试：
+
+```powershell
+python -m pytest tests\test_project_capability_persistence.py -q
+```
+
 仓库隐私策略回归测试：
 
 ```powershell
@@ -1217,6 +1253,7 @@ npm run build
 
 - 较长生成任务可以在后台运行并取消，但还没有 token-by-token 流式输出。
 - GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
+- Project evidence memory 已可通过有界 FastAPI 接口持久化和检查，但 GitHub Evidence 页面尚未渲染完整的 project-evidence explorer；证据处理面板仅在开发构建中显示。
 - 简历和求职信没有内置文档预览或 DOCX 导出；安装 LaTeX 工具链后可以把定制简历导出为 PDF。
 - 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。
 
@@ -1225,6 +1262,7 @@ npm run build
 - 扩展 Agent Chat 求职材料流程，加入职位分析和面试准备。
 - 增加持久任务队列和 WebSocket/SSE 流式输出。
 - 增加结构化 GitHub 证据可视化。
+- 将已校验的 project capability facts 和 claim boundaries 接入简历生成决策，并增加只读 evidence explorer。
 - 增加投递统计、批量操作和更丰富的搜索。
 - 增加文档预览和 DOCX 导出。
 - 改进移动端布局并增加深色模式。
