@@ -370,6 +370,27 @@ def _normalize(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
+def normalize_project_claim(value: str) -> str:
+    """Return the authoritative whitespace-normalized claim representation."""
+
+    if not isinstance(value, str):
+        raise TypeError("claim value must be a string")
+    return _normalize(value)
+
+
+def normalize_project_serialized_claim(value: str) -> str:
+    """Validate and normalize one serialized project claim without widening it."""
+
+    normalized = normalize_project_claim(value)
+    prefix, separator, claim_value = normalized.partition(":")
+    if not separator or prefix not in _PREFIX_TO_TYPE:
+        raise ValueError("unsupported serialized claim type")
+    safe_value = _safe_claim_value(_PREFIX_TO_TYPE[prefix], claim_value)
+    if not safe_value:
+        raise ValueError("unsafe or blank serialized claim")
+    return f"{prefix}:{safe_value}"
+
+
 def _quality_score(fact: ProjectEvidenceFact) -> int:
     value = fact.quality_score
     if value is None or isinstance(value, bool):
@@ -464,8 +485,31 @@ def _metric_policies(value: str, support: MetricSupport) -> tuple[bool, tuple[st
     return True, ()
 
 
+def is_project_resume_metric_claim(value: str) -> bool:
+    """Return whether a numeric value is a resume metric rather than an identifier/count."""
+
+    normalized = normalize_project_claim(value)
+    return bool(_NUMERIC_RE.search(normalized) and not _NON_RESUME_METRIC_RE.search(normalized))
+
+
+def evaluate_project_numeric_claim(
+    value: str,
+    metric_support: MetricSupport | str,
+) -> tuple[bool, tuple[str, ...]]:
+    """Apply the existing exact/approximate numeric-claim policy."""
+
+    support = metric_support if isinstance(metric_support, MetricSupport) else MetricSupport(metric_support)
+    return _metric_policies(normalize_project_claim(value), support)
+
+
 def _impact_blockers(value: str) -> tuple[str, ...]:
     return tuple(sorted(code for code, pattern in _IMPACT_POLICY_PATTERNS.items() if pattern.search(value)))
+
+
+def get_project_claim_safety_blockers(value: str) -> tuple[str, ...]:
+    """Return existing absolute/unsupported impact policy codes for one claim."""
+
+    return _impact_blockers(normalize_project_claim(value))
 
 
 def _new_claim(
@@ -1173,6 +1217,21 @@ def _parse_claim_meta(note: str) -> tuple[str, str, str, str, str, tuple[str, ..
     return parts[1], parts[2], parts[3], parts[4], parts[5], evidence, capabilities
 
 
+def get_project_claim_boundary_evidence_ids(
+    boundary: ProjectClaimBoundary,
+) -> tuple[str, ...]:
+    """Return exact Evidence Fact IDs from validated claim metadata notes."""
+
+    if not isinstance(boundary, ProjectClaimBoundary):
+        raise TypeError("boundary must be a ProjectClaimBoundary")
+    identifiers: set[str] = set()
+    for note in boundary.notes:
+        parsed = _parse_claim_meta(note)
+        if parsed is not None:
+            identifiers.update(parsed[5])
+    return tuple(sorted(identifiers))
+
+
 def validate_project_claim_boundary(
     boundary: ProjectClaimBoundary,
     *,
@@ -1334,6 +1393,12 @@ __all__ = [
     "build_project_claim_boundaries_by_project",
     "build_project_evidence_claim_boundary",
     "build_project_claim_boundary",
+    "evaluate_project_numeric_claim",
+    "get_project_claim_boundary_evidence_ids",
+    "get_project_claim_safety_blockers",
+    "is_project_resume_metric_claim",
     "list_project_claim_types",
+    "normalize_project_claim",
+    "normalize_project_serialized_claim",
     "validate_project_claim_boundary",
 ]

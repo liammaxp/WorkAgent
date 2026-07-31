@@ -11,7 +11,7 @@ inside each group and set-like evidence collections are stored alphabetically.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import re
 from types import MappingProxyType
 from typing import Iterable, Mapping
@@ -55,6 +55,8 @@ class ProjectCapabilityDefinition:
     minimum_quality_score: int
     minimum_direct_fact_count: int
     minimum_total_fact_count: int
+    minimum_distinct_signal_group_count: int
+    minimum_mechanism_count: int
     requires_direct_provenance: bool
     allows_contextual_support: bool
     high_risk: bool
@@ -305,6 +307,8 @@ def _definition(
         minimum_quality_score=minimum_quality_score,
         minimum_direct_fact_count=minimum_direct_fact_count,
         minimum_total_fact_count=minimum_total_fact_count,
+        minimum_distinct_signal_group_count=len(required),
+        minimum_mechanism_count=1,
         requires_direct_provenance=True,
         allows_contextual_support=allows_contextual_support,
         high_risk=high_risk,
@@ -625,6 +629,18 @@ def _alias_items(
     return tuple(aliases)
 
 
+def normalize_capability_label(value: str) -> str:
+    """Normalize an exact label form without performing fuzzy matching."""
+
+    if not isinstance(value, str):
+        raise TypeError("capability label must be a string")
+    normalized = re.sub(r"[\s-]+", "_", value.strip().casefold())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized or not _IDENTIFIER_RE.fullmatch(normalized):
+        raise ValueError("capability label must normalize to a semantic identifier")
+    return normalized
+
+
 def validate_project_capability_taxonomy(
     definitions: Iterable[ProjectCapabilityDefinition] | None = None,
     *,
@@ -724,6 +740,8 @@ def validate_project_capability_taxonomy(
             item.minimum_quality_score,
             item.minimum_direct_fact_count,
             item.minimum_total_fact_count,
+            item.minimum_distinct_signal_group_count,
+            item.minimum_mechanism_count,
         )
         if any(isinstance(value, bool) or not isinstance(value, int) for value in numeric_values):
             error(f"{prefix}:invalid_numeric_policy")
@@ -735,6 +753,10 @@ def validate_project_capability_taxonomy(
             error(f"{prefix}:direct_count_exceeds_total")
         if item.requires_direct_provenance and item.minimum_direct_fact_count < 1:
             error(f"{prefix}:direct_provenance_without_direct_fact")
+        if not 1 <= item.minimum_distinct_signal_group_count <= len(item.required_signal_groups):
+            error(f"{prefix}:invalid_distinct_signal_group_count")
+        if item.minimum_mechanism_count < 1:
+            error(f"{prefix}:invalid_mechanism_count")
         if item.high_risk and item.minimum_quality_score < 70:
             error(f"{prefix}:weak_high_risk_threshold")
 
@@ -762,6 +784,7 @@ def validate_project_capability_taxonomy(
     if len(alias_names) != len(set(alias_names)):
         error("aliases:duplicate_alias")
     alias_map = dict(alias_items)
+    normalized_alias_owners: dict[str, str] = {}
     for index, (alias, target) in enumerate(alias_items):
         prefix = f"alias[{index}]"
         if not isinstance(alias, str) or not _IDENTIFIER_RE.fullmatch(alias):
@@ -772,6 +795,15 @@ def validate_project_capability_taxonomy(
             error(f"{prefix}:missing_target")
         if target in alias_map:
             error(f"{prefix}:alias_chain")
+        try:
+            normalized_alias = normalize_capability_label(alias)
+        except (TypeError, ValueError):
+            normalized_alias = ""
+        previous_owner = normalized_alias_owners.get(normalized_alias)
+        if normalized_alias and previous_owner is not None and previous_owner != target:
+            error(f"{prefix}:normalized_alias_collision")
+        elif normalized_alias:
+            normalized_alias_owners[normalized_alias] = target
         visited: set[str] = set()
         current = alias
         while current in alias_map:
@@ -829,6 +861,71 @@ def validate_project_capability_type(capability_type: str) -> str:
     return canonical
 
 
+def resolve_capability_type(capability_type_or_alias: str) -> str | None:
+    """Resolve a canonical type or declared alias after exact normalization."""
+
+    try:
+        normalized = normalize_capability_label(capability_type_or_alias)
+    except (TypeError, ValueError):
+        return None
+    canonical = CAPABILITY_ALIASES.get(normalized, normalized)
+    return canonical if canonical in CAPABILITY_TAXONOMY else None
+
+
+def get_capability_rule(
+    capability_type_or_alias: str,
+) -> ProjectCapabilityDefinition | None:
+    canonical = resolve_capability_type(capability_type_or_alias)
+    return CAPABILITY_TAXONOMY.get(canonical) if canonical is not None else None
+
+
+def get_capability_taxonomy() -> Mapping[str, ProjectCapabilityDefinition]:
+    """Return the immutable canonical registry."""
+
+    return CAPABILITY_TAXONOMY
+
+
+def get_capability_types_for_signal(signal: str) -> tuple[str, ...]:
+    """Map one exact registered signal or technical tag to capability types."""
+
+    try:
+        normalized = normalize_capability_label(signal)
+    except (TypeError, ValueError):
+        return ()
+    if normalized not in SIGNAL_REGISTRY:
+        return ()
+    return tuple(
+        definition.capability_type
+        for definition in CAPABILITY_DEFINITIONS
+        if normalized in definition.supporting_signals
+        or any(normalized in group for group in definition.required_signal_groups)
+    )
+
+
+def capability_taxonomy_to_dict() -> dict[str, object]:
+    """Serialize the registry and signal mapping in stable canonical order."""
+
+    definitions: dict[str, object] = {}
+    for definition in CAPABILITY_DEFINITIONS:
+        payload = asdict(definition)
+        payload["aliases"] = [
+            alias for alias, target in CAPABILITY_ALIAS_ITEMS
+            if target == definition.capability_type
+        ]
+        payload["required_signal_groups"] = [
+            list(group) for group in definition.required_signal_groups
+        ]
+        for key, value in tuple(payload.items()):
+            if isinstance(value, tuple):
+                payload[key] = list(value)
+        definitions[definition.capability_type] = payload
+    return {
+        "definitions": definitions,
+        "aliases": dict(CAPABILITY_ALIAS_ITEMS),
+        "signals": list(SIGNAL_REGISTRY),
+    }
+
+
 def is_project_capability_supported(capability_type: str) -> bool:
     """Return whether a canonical identifier or declared alias is supported."""
 
@@ -877,12 +974,18 @@ __all__ = [
     "ProjectCapabilityDefinition",
     "ProjectCapabilityOverlapRule",
     "ProjectCapabilityTaxonomyValidationReport",
+    "capability_taxonomy_to_dict",
+    "get_capability_rule",
+    "get_capability_taxonomy",
+    "get_capability_types_for_signal",
     "get_project_capability_alias_target",
     "get_project_capability_definition",
     "is_project_capability_supported",
     "list_project_capability_definitions",
     "list_project_capability_overlap_rules",
     "list_project_evidence_signal_identifiers",
+    "normalize_capability_label",
+    "resolve_capability_type",
     "validate_project_capability_taxonomy",
     "validate_project_capability_type",
 ]

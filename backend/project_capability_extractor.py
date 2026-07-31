@@ -34,7 +34,6 @@ from backend.project_evidence_models import (
     ProjectCapabilityFact,
     ProjectEvidenceFact,
     EvidenceSourceRef,
-    build_project_evidence_stable_id,
 )
 
 
@@ -390,6 +389,14 @@ def _safe_quality_score(fact: ProjectEvidenceFact) -> int:
     return max(0, min(100, int(value)))
 
 
+def get_project_evidence_quality_score(fact: ProjectEvidenceFact) -> int:
+    """Return the extractor's authoritative bounded Evidence Fact quality."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("get_project_evidence_quality_score expects ProjectEvidenceFact")
+    return _safe_quality_score(fact)
+
+
 def _flatten_metadata_values(value: Any) -> list[str]:
     if isinstance(value, str):
         normalized = " ".join(value.split())
@@ -617,6 +624,14 @@ def _independent_evidence_identity(fact: ProjectEvidenceFact) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def get_independent_project_evidence_identity(fact: ProjectEvidenceFact) -> str:
+    """Return the privacy-safe identity used for independent direct evidence."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("get_independent_project_evidence_identity expects ProjectEvidenceFact")
+    return _independent_evidence_identity(fact)
+
+
 def _base_lineage_identity(fact: ProjectEvidenceFact) -> str:
     payload = sorted({_ref_identity(ref, include_hash=False) for ref in fact.source_refs})
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
@@ -659,6 +674,19 @@ def _eligible_kind(
     return None
 
 
+def classify_project_capability_evidence_kind(
+    fact: ProjectEvidenceFact,
+    definition: ProjectCapabilityDefinition,
+) -> str | None:
+    """Expose the extractor's existing direct/contextual proof classification."""
+
+    if not isinstance(fact, ProjectEvidenceFact):
+        raise TypeError("classify_project_capability_evidence_kind expects ProjectEvidenceFact")
+    if not isinstance(definition, ProjectCapabilityDefinition):
+        raise TypeError("definition must be a ProjectCapabilityDefinition")
+    return _eligible_kind(fact, classify_project_evidence_source_category(fact), definition)
+
+
 def _metric_support_for_facts(facts: Sequence[ProjectEvidenceFact]) -> MetricSupport:
     metric_facts = [
         fact
@@ -689,6 +717,16 @@ def _selected_mechanisms(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
     return output
 
 
+def select_project_evidence_mechanisms(
+    facts: Sequence[ProjectEvidenceFact],
+) -> tuple[str, ...]:
+    """Return the extractor's bounded, normalized, deduplicated mechanisms."""
+
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("select_project_evidence_mechanisms expects ProjectEvidenceFact values")
+    return tuple(_selected_mechanisms(facts))
+
+
 def _selected_tags(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
     excluded = set(list_project_evidence_signal_identifiers()) | set(CAPABILITY_ALIASES) | set(CAPABILITY_TAXONOMY)
     values = {
@@ -698,6 +736,16 @@ def _selected_tags(facts: Sequence[ProjectEvidenceFact]) -> list[str]:
         if " ".join(tag.split()) and " ".join(tag.split()).casefold() not in excluded
     }
     return sorted(values, key=lambda value: (value.casefold(), value))
+
+
+def select_project_evidence_technical_tags(
+    facts: Sequence[ProjectEvidenceFact],
+) -> tuple[str, ...]:
+    """Return technical tags selected by the existing extractor rules."""
+
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("select_project_evidence_technical_tags expects ProjectEvidenceFact values")
+    return tuple(_selected_tags(facts))
 
 
 def _confidence_for_proof(
@@ -712,6 +760,24 @@ def _confidence_for_proof(
     if all_direct and len(independent) >= 2 and strong:
         return Confidence.HIGH
     return Confidence.MEDIUM
+
+
+def derive_project_capability_confidence(
+    definition: ProjectCapabilityDefinition,
+    facts: Sequence[ProjectEvidenceFact],
+) -> Confidence:
+    """Apply the extractor's existing confidence rule to deterministic proof inputs."""
+
+    if not isinstance(definition, ProjectCapabilityDefinition):
+        raise TypeError("definition must be a ProjectCapabilityDefinition")
+    if any(not isinstance(fact, ProjectEvidenceFact) for fact in facts):
+        raise TypeError("facts must contain ProjectEvidenceFact values")
+    selected_kinds = {
+        fact.evidence_fact_id: kind
+        for fact in facts
+        if (kind := classify_project_capability_evidence_kind(fact, definition)) is not None
+    }
+    return _confidence_for_proof(definition, facts, selected_kinds)
 
 
 def _empty_capability_report(*, project_count: int = 0, fact_count: int = 0) -> ProjectCapabilityExtractionReport:
@@ -942,15 +1008,7 @@ def _extract_one_project(
             metric_support = _metric_support_for_facts(selected_facts)
             mechanisms = _selected_mechanisms(selected_facts)
             confidence = _confidence_for_proof(definition, selected_facts, selected_kinds)
-            capability_id = build_project_evidence_stable_id("pcf_", project_id, {
-                "project_id": project_id,
-                "capability_type": definition.capability_type,
-                "source_evidence_fact_ids": sorted(selected_ids),
-                "mechanisms": mechanisms,
-                "metric_support": metric_support.value,
-            })
             emitted.append(ProjectCapabilityFact(
-                capability_id=capability_id,
                 project_id=project_id,
                 capability_type=definition.capability_type,
                 present=True,
@@ -1181,11 +1239,17 @@ __all__ = [
     "ProjectSignalExtractionDecision",
     "ProjectSignalExtractionReport",
     "ProjectSignalExtractionRule",
+    "classify_project_capability_evidence_kind",
     "classify_project_evidence_source_category",
+    "derive_project_capability_confidence",
     "extract_project_evidence_capabilities_by_project",
     "extract_project_evidence_fact_signals",
     "extract_project_evidence_fact_signals_many",
     "extract_project_capabilities",
+    "get_independent_project_evidence_identity",
+    "get_project_evidence_quality_score",
     "list_project_evidence_signal_extraction_rules",
+    "select_project_evidence_mechanisms",
+    "select_project_evidence_technical_tags",
     "validate_project_evidence_signal_extraction_rules",
 ]
