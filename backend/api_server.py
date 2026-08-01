@@ -50,6 +50,7 @@ import evidence_memory
 import evidence_pipeline
 import main as agent
 import project_change_pipeline
+from backend import project_retrieval_v2
 from backend import project_evidence_pipeline as semantic_evidence_pipeline
 from tech_ontology import (
     build_tech_ontology_index,
@@ -7100,6 +7101,12 @@ def retrieve_evidence_for_project(project: dict[str, Any]) -> list[dict[str, Any
     return agent.MEMORY_STORE.read_github_contexts(query=query)
 
 
+def retrieve_evidence_for_project_for_resume(project: dict[str, Any]) -> list[dict[str, Any]]:
+    if project_retrieval_v2.is_github_evidence_retrieval_v2_enabled():
+        return project_retrieval_v2.retrieve_evidence_for_project_v2(project)
+    return retrieve_evidence_for_project(project)
+
+
 STAR_FIELD_LABELS = {
     "situation": "Situation / 业务背景",
     "task": "Task / 个人贡献",
@@ -8783,7 +8790,7 @@ def build_resume_star_check(body: ResumeStarCheckBody) -> dict[str, Any]:
     for project in selected_projects:
         assert_agent_task_not_cancelled()
         project_name = project_display_name(project)
-        evidence = retrieve_evidence_for_project(project)
+        evidence = retrieve_evidence_for_project_for_resume(project)
         evidence_card = build_project_evidence_card(project_name, "project", compact_project_for_prompt(project), compact_github_evidence_for_prompt(evidence))
         completion = build_star_completion(project, evidence_card)
         missing_labels = [STAR_FIELD_LABELS[field] for field in completion["missing_fields"]]
@@ -15514,7 +15521,7 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
     candidates = []
     selected_project_memory = {"projects": [compact_project_for_prompt(project) for project in selected_projects]}
     for project in selected_projects:
-        evidence = retrieve_evidence_for_project(project)
+        evidence = retrieve_evidence_for_project_for_resume(project)
         candidates.append(build_project_resume_candidate(
             job_description,
             resume,
