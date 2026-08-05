@@ -386,6 +386,25 @@ export const api = {
       signal: requestOptions.signal,
     }),
   getGithubConfig: () => request("/github/config"),
+  getUnresolvedRepositoryMappings: (options = {}) =>
+    request("/github/repository-mappings/unresolved", { signal: options.signal }),
+  getRepositoryMappingProjects: (options = {}) =>
+    request("/github/repository-mappings/projects", { signal: options.signal }),
+  confirmRepositoryMapping: ({ project_id, repository, confirmed, aliases = [] }) => {
+    const payload = { project_id, repository, confirmed };
+    if (Array.isArray(aliases) && aliases.length) payload.aliases = aliases;
+    return request("/github/repository-mappings/confirm", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getGitHubEvidencePreparationStatus: (options = {}) =>
+    request("/github/evidence-preparation", { signal: options.signal }),
+  runGitHubEvidencePreparation: () =>
+    request("/github/evidence-preparation/run", {
+      method: "POST",
+      body: JSON.stringify({ confirmed: true }),
+    }),
   getGithubContextStatus: () => request("/github/context/status"),
   getGithubContextPreview: (projectId = "", limit = 5) => {
     const params = new URLSearchParams();

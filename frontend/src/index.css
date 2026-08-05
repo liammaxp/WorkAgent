@@ -1399,6 +1399,164 @@ th {
   line-height: 1.6;
 }
 
+.repository-association-heading,
+.repository-association-summary,
+.repository-association-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.repository-association-heading {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.repository-association-heading .card-title {
+  margin-bottom: 6px;
+}
+
+.repository-association-heading .helper-text {
+  margin: 0;
+}
+
+.repository-association-message:empty {
+  display: none;
+}
+
+.repository-association-message,
+.repository-association-loading,
+.repository-association-error,
+.repository-association-conflict,
+.field-error {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.repository-association-message.success {
+  color: var(--success);
+}
+
+.repository-association-message.warning,
+.repository-association-conflict {
+  color: var(--warning);
+}
+
+.repository-association-message.error,
+.repository-association-error,
+.field-error {
+  color: var(--danger);
+}
+
+.repository-association-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.repository-association-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.repository-association-item.conflict {
+  border-color: var(--warning);
+}
+
+.repository-association-summary {
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repository-association-summary p {
+  margin: 0;
+}
+
+.repository-association-name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+}
+
+.repository-association-form {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 16px;
+  padding-top: 4px;
+}
+
+.repository-association-form > .helper-text,
+.repository-association-actions {
+  grid-column: 1 / -1;
+}
+
+.repository-association-form .field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.repository-association-actions {
+  justify-content: flex-end;
+}
+
+.evidence-preparation-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.evidence-preparation-heading p,
+.evidence-preparation-state p,
+.evidence-preparation-confirmation p {
+  margin-bottom: 0;
+}
+
+.evidence-preparation-state,
+.evidence-preparation-confirmation,
+.evidence-preparation-feedback {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.evidence-preparation-feedback:empty {
+  display: none;
+}
+
+.evidence-preparation-feedback.success { border-color: var(--success); }
+.evidence-preparation-feedback.warning,
+.evidence-preparation-state.partial,
+.evidence-preparation-state.mapping_required { border-color: var(--warning); }
+.evidence-preparation-feedback.error,
+.evidence-preparation-state.error,
+.evidence-preparation-state.blocked { border-color: var(--danger); }
+
+.evidence-preparation-confirmation h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.evidence-preparation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     flex-direction: column;
@@ -1474,5 +1632,33 @@ th {
   .agent-progress-actions {
     flex-direction: row;
     justify-content: flex-end;
+  }
+
+  .repository-association-heading,
+  .repository-association-item,
+  .repository-association-form {
+    grid-template-columns: 1fr;
+  }
+
+  .repository-association-heading,
+  .evidence-preparation-heading,
+  .repository-association-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .repository-association-form > .helper-text,
+  .repository-association-actions {
+    grid-column: 1;
+  }
+
+  .repository-association-item > .btn,
+  .repository-association-actions .btn,
+  .evidence-preparation-actions .btn {
+    width: 100%;
+  }
+
+  .evidence-preparation-actions {
+    flex-direction: column;
   }
 }

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test src/api/repositoryMappings.test.js src/api/evidencePreparation.test.js src/components/github/repositoryAssociation.test.js src/components/github/evidencePreparation.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },

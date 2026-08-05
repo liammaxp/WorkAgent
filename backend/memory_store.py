@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -255,9 +256,43 @@ class MemoryVectorStore:
         self._ensure_client()
         return self._replace_profile(memory, source)
 
+    def _collection_count_read_only(self, collection_name: str, live_collection: Any) -> int:
+        database_path = (self.persist_directory / "chroma.sqlite3").resolve()
+        if database_path.is_file():
+            try:
+                connection = sqlite3.connect(
+                    f"file:{database_path.as_posix()}?mode=ro&immutable=1", uri=True,
+                )
+                try:
+                    row = connection.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM embeddings
+                        WHERE segment_id = (
+                            SELECT segments.id
+                            FROM segments
+                            JOIN collections ON collections.id = segments.collection
+                            WHERE collections.name = ? AND segments.scope = 'METADATA'
+                            LIMIT 1
+                        )
+                        """,
+                        (collection_name,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+            except (OSError, sqlite3.Error):
+                return 0
+            return int(row[0]) if row and isinstance(row[0], int) and row[0] > 0 else 0
+        if live_collection is None:
+            return 0
+        try:
+            count = live_collection.count()
+        except Exception:
+            return 0
+        return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
+
     def profile_count(self) -> int:
-        self._ensure_client()
-        return self._profile.count()
+        return self._collection_count_read_only(PROFILE_COLLECTION, self._profile)
 
     def read_profile(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
         self._ensure_client()
@@ -396,13 +431,121 @@ class MemoryVectorStore:
             documents = self._github.get(include=["documents"]).get("documents", [])
         return [json.loads(document.split("\n", 1)[1]) for document in documents]
 
-    def list_github_repositories(self) -> list[dict[str, str]]:
-        self._ensure_client()
-        if not self._github.count():
+    def search_github_vector_records(
+        self,
+        query: str,
+        n_results: int = 5,
+        *,
+        project_id: str = "",
+        authority: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Use the default-off HTTP bridge without opening local persistence."""
+
+        if not isinstance(query, str) or not query.strip() or isinstance(n_results, bool):
             return []
-        metadatas = self._github.get(include=["metadatas"]).get("metadatas", [])
+        if not isinstance(n_results, int) or n_results <= 0:
+            return []
+        try:
+            try:
+                from backend.chroma_http_vector_search import search_github_evidence_vectors_http
+            except ModuleNotFoundError:  # pragma: no cover - legacy backend-directory launch mode
+                from chroma_http_vector_search import search_github_evidence_vectors_http
+            return search_github_evidence_vectors_http(
+                query=query,
+                n_results=n_results,
+                project_id=project_id,
+                embedder=self.embedder,
+                authority=authority,
+            )
+        except Exception:
+            return []
+
+    def inspect_github_vector_metadata(self, limit: int = 10000) -> list[dict[str, Any]]:
+        """Inspect existing GitHub vector IDs and metadata without documents or embeddings."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            return []
+        database_path = (self.persist_directory / "chroma.sqlite3").resolve()
+        if database_path.is_file():
+            try:
+                connection = sqlite3.connect(
+                    f"file:{database_path.as_posix()}?mode=ro&immutable=1", uri=True,
+                )
+                try:
+                    collection_row = connection.execute(
+                        "SELECT id FROM collections WHERE name = ? LIMIT 1", (GITHUB_COLLECTION,),
+                    ).fetchone()
+                    if not collection_row:
+                        return []
+                    segment_row = connection.execute(
+                        "SELECT id FROM segments WHERE collection = ? AND scope = 'METADATA' LIMIT 1",
+                        (collection_row[0],),
+                    ).fetchone()
+                    if not segment_row:
+                        return []
+                    safe_keys = (
+                        "github_repository", "project_id", "project_name", "repo",
+                        "repository", "repository_url", "source", "updated_at",
+                    )
+                    placeholders = ",".join("?" for _ in safe_keys)
+                    rows = connection.execute(
+                        f"""
+                        SELECT selected.id, selected.embedding_id, metadata.key, metadata.string_value
+                        FROM (
+                            SELECT id, embedding_id FROM embeddings
+                            WHERE segment_id = ? ORDER BY id LIMIT ?
+                        ) AS selected
+                        LEFT JOIN embedding_metadata AS metadata
+                          ON metadata.id = selected.id AND metadata.key IN ({placeholders})
+                        ORDER BY selected.id, metadata.key
+                        """,
+                        (segment_row[0], min(limit, 10000), *safe_keys),
+                    ).fetchall()
+                finally:
+                    connection.close()
+            except (OSError, sqlite3.Error):
+                return []
+            records: dict[int, dict[str, Any]] = {}
+            for internal_id, record_id, key, string_value in rows:
+                record = records.setdefault(internal_id, {
+                    "vector_record_id": str(record_id), "metadata": {},
+                })
+                if isinstance(key, str) and isinstance(string_value, str):
+                    record["metadata"][key.lower()] = string_value
+            return list(records.values())
+        collection = self._github
+        if collection is None:
+            return []
+        count = collection.count()
+        if not count:
+            return []
+        result = collection.get(limit=min(limit, count), include=["metadatas"])
+        ids = result.get("ids", [])
+        metadatas = result.get("metadatas", [])
+        safe_keys = {
+            "github_repository", "project_id", "project_name", "repo", "repository",
+            "repository_url", "source", "updated_at",
+        }
+        return [
+            {
+                "vector_record_id": str(record_id),
+                "metadata": {
+                    str(key).lower(): value
+                    for key, value in metadata.items()
+                    if isinstance(metadata, dict)
+                    and str(key).lower() in safe_keys
+                    and isinstance(value, str)
+                } if isinstance(metadata, dict) else {},
+            }
+            for record_id, metadata in zip(ids, metadatas)
+        ]
+
+    def list_github_repositories(self) -> list[dict[str, str]]:
         repository_map: dict[str, dict[str, str]] = {}
-        for metadata in metadatas:
+        for record in self.inspect_github_vector_metadata():
+            metadata = record.get("metadata", {})
+            if not isinstance(metadata, dict):
+                continue
             repository = canonical_github_repository(metadata.get("repository"))
             if not repository:
                 continue
@@ -414,55 +557,26 @@ class MemoryVectorStore:
         return sorted(repositories, key=lambda item: item["updated_at"], reverse=True)
 
     def github_metadata_status(self) -> dict[str, Any]:
-        if chromadb is None:
-            raise RuntimeError(
-                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
-            ) from CHROMA_IMPORT_ERROR
-        if not self.persist_directory.exists():
+        if not self.persist_directory.exists() and self._github is None:
             return {"available": False, "count": 0, "repositories": []}
-
-        self._ensure_client(migrate=False)
-        count = self._github.count()
-        if not count:
-            return {"available": True, "count": 0, "repositories": []}
-
-        metadatas = self._github.get(include=["metadatas"]).get("metadatas", [])
-        repository_map: dict[str, dict[str, str]] = {}
-        for metadata in metadatas:
-            repository = canonical_github_repository(metadata.get("repository"))
-            if not repository:
-                continue
-            updated_at = str(metadata.get("updated_at", ""))
-            current = repository_map.get(repository)
-            if current is None or updated_at > current["updated_at"]:
-                repository_map[repository] = {"repository": repository, "updated_at": updated_at}
-
-        repositories = list(repository_map.values())
         return {
             "available": True,
-            "count": count,
-            "repositories": sorted(repositories, key=lambda item: item["updated_at"], reverse=True),
+            "count": self.github_count(),
+            "repositories": self.list_github_repositories(),
         }
 
     def github_preview_metadata(self, limit: int = 5) -> list[dict[str, Any]]:
-        if chromadb is None:
-            raise RuntimeError(
-                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
-            ) from CHROMA_IMPORT_ERROR
-        if not self.persist_directory.exists():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             return []
-
-        self._ensure_client(migrate=False)
-        if not self._github.count():
-            return []
-
-        result = self._github.get(include=["metadatas"], limit=max(1, int(limit)))
         records = []
-        for record_id, metadata in zip(result.get("ids", []), result.get("metadatas", [])):
+        for record in self.inspect_github_vector_metadata(limit=limit):
+            metadata = record.get("metadata", {})
+            if not isinstance(metadata, dict):
+                continue
             repository = canonical_github_repository(metadata.get("repository"))
             records.append(
                 {
-                    "id": str(record_id),
+                    "id": str(record.get("vector_record_id", "")),
                     "repository": repository,
                     "updated_at": str(metadata.get("updated_at", "")),
                     "source": str(metadata.get("source", "")),
@@ -537,5 +651,4 @@ class MemoryVectorStore:
         return {"canonicalized": canonicalized, "deleted": len(set(deleted_ids))}
 
     def github_count(self) -> int:
-        self._ensure_client()
-        return self._github.count()
+        return self._collection_count_read_only(GITHUB_COLLECTION, self._github)

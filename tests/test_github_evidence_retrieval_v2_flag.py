@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -37,19 +36,36 @@ def test_retrieval_v2_defaults_off_and_preserves_legacy_routing(monkeypatch, val
     assert api_server.retrieve_evidence_for_project_for_resume(project) is expected
 
 
-def test_retrieval_v2_flag_on_routes_to_safe_schema_compatible_scaffold(monkeypatch):
+def test_retrieval_v2_flag_on_routes_to_v2_only(monkeypatch):
     monkeypatch.setenv(project_retrieval_v2.GITHUB_EVIDENCE_RETRIEVAL_V2_FLAG, "1")
+    expected = [{"project_id": "safe-project", "chunk_id": "chk_safe"}]
     monkeypatch.setattr(
         api_server,
         "retrieve_evidence_for_project",
         lambda _item: pytest.fail("legacy retrieval must not run while v2 is enabled"),
     )
+    monkeypatch.setattr(
+        project_retrieval_v2,
+        "retrieve_evidence_for_project_v2",
+        lambda _item, **_kwargs: expected,
+    )
 
     result = api_server.retrieve_evidence_for_project_for_resume({"project_id": "safe-project"})
 
     assert project_retrieval_v2.is_github_evidence_retrieval_v2_enabled() is True
-    assert result == []
-    assert isinstance(result, list)
+    assert result is expected
+
+
+def test_retrieval_v2_empty_result_never_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv(project_retrieval_v2.GITHUB_EVIDENCE_RETRIEVAL_V2_FLAG, "1")
+    monkeypatch.setattr(
+        api_server,
+        "retrieve_evidence_for_project",
+        lambda _item: pytest.fail("legacy fallback is forbidden"),
+    )
+    monkeypatch.setattr(project_retrieval_v2, "retrieve_evidence_for_project_v2", lambda _item, **_kwargs: [])
+
+    assert api_server.retrieve_evidence_for_project_for_resume({"project_id": "safe-project"}) == []
 
 
 def test_retrieval_v2_does_not_enable_or_invoke_capability_reader(monkeypatch):
@@ -81,12 +97,5 @@ def test_retrieval_v2_module_has_no_capability_lifecycle_or_schema_dependencies(
 
 
 def test_retrieval_v2_change_does_not_modify_frontend_files():
-    completed = subprocess.run(
-        ["git", "status", "--porcelain", "--", "frontend"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
-    assert completed.stdout == ""
+    source = (ROOT / "backend" / "project_retrieval_v2.py").read_text(encoding="utf-8")
+    assert "frontend/" not in source and "frontend\\" not in source

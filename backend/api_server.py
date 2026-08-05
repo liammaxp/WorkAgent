@@ -40,7 +40,7 @@ if __package__ in {None, ""}:
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from openai import APIStatusError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import capability_extractor
 import evidence_card_extractor
@@ -51,6 +51,11 @@ import evidence_pipeline
 import main as agent
 import project_change_pipeline
 from backend import project_retrieval_v2
+from backend import project_repository_mapping_service
+from backend import github_evidence_preparation_service
+from backend.github_evidence_chunks import DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH
+from backend.github_evidence_materializer import DEFAULT_MATERIALIZATION_MANIFEST_PATH
+from backend.github_raw_storage import DEFAULT_GITHUB_RAW_SOURCES_PATH
 from backend import project_evidence_pipeline as semantic_evidence_pipeline
 from tech_ontology import (
     build_tech_ontology_index,
@@ -121,6 +126,8 @@ GITHUB_CONTEXT_PREVIEW_TEXT_CHARS = 800
 GITHUB_CONTEXT_RAW_DEFAULT_CHARS = 10_000
 GITHUB_CONTEXT_RAW_MIN_CHARS = 500
 GITHUB_CONTEXT_RAW_MAX_CHARS = 30_000
+PROJECT_REPOSITORY_CONFIRMATIONS_PATH = agent.INFORMATION_DIR / "project_repository_confirmations.json"
+PROJECT_REPOSITORY_IDENTITY_PATH = agent.INFORMATION_DIR / "project_repository_identity.json"
 logger = logging.getLogger(__name__)
 
 FILE_MAP = {
@@ -644,6 +651,9 @@ MAX_PROMPT_CLAIMS = 12
 MAX_PROMPT_SIGNAL_CHARS = 240
 MAX_PROMPT_FILE_SUMMARY_CHARS = 500
 MAX_PROMPT_EVIDENCE_CHARS = 9000
+RESUME_PROJECT_EVIDENCE_LIMIT = 8
+RESUME_EVIDENCE_RETRIEVAL_MODE_LEGACY = "legacy"
+RESUME_EVIDENCE_RETRIEVAL_MODE_V2 = "retrieval_v2"
 MAX_TECH_ONTOLOGY_PROMPT_ENTRIES = 10
 MAX_TECH_ONTOLOGY_BULLET_ENTRIES = 8
 MAX_TECH_ONTOLOGY_ENTRY_CHARS = 800
@@ -876,6 +886,22 @@ class GitHubConfigBody(BaseModel):
     author_names: list[str] = Field(default_factory=list)
     author_emails: list[str] = Field(default_factory=list)
     token: str = ""
+
+
+class ProjectRepositoryConfirmationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    repository: str
+    confirmed: bool
+    aliases: list[str] = Field(default_factory=list)
+
+
+class GitHubEvidencePreparationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed: bool
+
 
 
 class ApplicationCreateBody(BaseModel):
@@ -5150,8 +5176,150 @@ def validation_for_prompt(validation: Any, candidate_id: str = "", project: str 
     }
 
 
+def _has_retrieval_v2_resume_evidence_shape(value: Any) -> bool:
+    return isinstance(value, dict) and any(
+        key in value for key in ("project_id", "chunk_id", "source_id", "search_sources", "query_groups")
+    )
+
+
+def _is_retrieval_v2_resume_evidence_item(value: Any) -> bool:
+    return (
+        _has_retrieval_v2_resume_evidence_shape(value)
+        and isinstance(value.get("project_id"), str)
+        and bool(value.get("project_id"))
+        and isinstance(value.get("chunk_id"), str)
+        and bool(value.get("chunk_id"))
+        and isinstance(value.get("source_id"), str)
+        and bool(value.get("source_id"))
+        and isinstance(value.get("repo"), str)
+        and bool(value.get("repo"))
+    )
+
+
+def _resume_evidence_prompt_text(value: Any, max_chars: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value[:max_chars]
+
+
+def _resume_evidence_prompt_labels(value: Any, max_items: int, max_chars: int) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    labels = []
+    seen = set()
+    for item in value:
+        label = _resume_evidence_prompt_text(item, max_chars)
+        normalized = label.casefold()
+        if not label or normalized in seen:
+            continue
+        seen.add(normalized)
+        labels.append(label)
+        if len(labels) >= max_items:
+            break
+    return labels
+
+
+def _resume_evidence_prompt_score(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    score = float(value)
+    return score if 0.0 <= score <= 1.0 else 0.0
+
+
+def serialize_resume_evidence_for_budget(evidence: Any) -> str:
+    safe = evidence if isinstance(evidence, list) else []
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def truncate_resume_evidence_for_prompt_budget(
+    evidence: Any,
+    max_chars: int = MAX_PROMPT_EVIDENCE_CHARS,
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(evidence, list)
+        or isinstance(max_chars, bool)
+        or not isinstance(max_chars, int)
+        or max_chars < 2
+    ):
+        return []
+    bounded = []
+    for item in evidence[:RESUME_PROJECT_EVIDENCE_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        candidate = bounded + [item]
+        if len(serialize_resume_evidence_for_budget(candidate)) > max_chars:
+            break
+        bounded.append(item)
+    return bounded
+
+
+def compact_retrieval_v2_evidence_for_prompt(evidence: Any) -> list[dict[str, Any]]:
+    """Project safe adapter output into the existing bounded writer context."""
+
+    contexts = evidence if isinstance(evidence, list) else []
+    compacted = []
+    seen_chunks = set()
+    for context in contexts[:RESUME_PROJECT_EVIDENCE_LIMIT]:
+        if not _is_retrieval_v2_resume_evidence_item(context):
+            continue
+        chunk_id = _resume_evidence_prompt_text(context.get("chunk_id"), 180)
+        if not chunk_id or chunk_id in seen_chunks:
+            continue
+        path = _resume_evidence_prompt_text(context.get("path"), 400)
+        final_score = _resume_evidence_prompt_score(context.get("final_score"))
+        keyword_score = _resume_evidence_prompt_score(context.get("keyword_score"))
+        symbol_score = _resume_evidence_prompt_score(context.get("symbol_score"))
+        vector_score = _resume_evidence_prompt_score(context.get("vector_score"))
+        summary = _resume_evidence_prompt_text(
+            context.get("summary") or context.get("description"),
+            project_retrieval_v2.MAX_V2_SAFE_SUMMARY_CHARS,
+        )
+        text_chars = context.get("text_chars")
+        if isinstance(text_chars, bool) or not isinstance(text_chars, int) or text_chars < 0:
+            text_chars = 0
+        repo = _resume_evidence_prompt_text(context.get("repo"), 240)
+        compacted.append(
+            {
+                "project_id": _resume_evidence_prompt_text(context.get("project_id"), 180),
+                "project_name": _resume_evidence_prompt_text(context.get("project_name"), 160),
+                "chunk_id": chunk_id,
+                "source_id": _resume_evidence_prompt_text(context.get("source_id"), 180),
+                "repo": repo,
+                "repository": repo,
+                "path": path,
+                "commit_sha": _resume_evidence_prompt_text(context.get("commit_sha"), 180),
+                "source_type": _resume_evidence_prompt_text(context.get("source_type"), 64),
+                "chunk_type": _resume_evidence_prompt_text(context.get("chunk_type"), 64),
+                "symbol": _resume_evidence_prompt_text(context.get("symbol"), 180),
+                "summary": summary,
+                "description": summary,
+                "keywords": _resume_evidence_prompt_labels(context.get("keywords"), 16, 80),
+                "technical_tags": _resume_evidence_prompt_labels(context.get("technical_tags"), 16, 80),
+                "final_score": final_score,
+                "keyword_score": keyword_score,
+                "symbol_score": symbol_score,
+                "vector_score": vector_score,
+                "component_scores": {
+                    "keyword": keyword_score,
+                    "symbol": symbol_score,
+                    "vector": vector_score,
+                },
+                "search_sources": _resume_evidence_prompt_labels(context.get("search_sources"), 3, 32),
+                "query_groups": _resume_evidence_prompt_labels(context.get("query_groups"), 8, 64),
+                "match_reasons": _resume_evidence_prompt_labels(context.get("match_reasons"), 12, 120),
+                "text_hash": _resume_evidence_prompt_text(context.get("text_hash"), 64),
+                "text_chars": min(text_chars, 2_000_000),
+                "root_files": [path] if path else [],
+            }
+        )
+        seen_chunks.add(chunk_id)
+    return truncate_resume_evidence_for_prompt_budget(compacted)
+
+
 def repo_evidence_for_prompt(evidence: Any) -> Any:
     contexts = evidence if isinstance(evidence, list) else [evidence]
+    if any(_has_retrieval_v2_resume_evidence_shape(context) for context in contexts):
+        return compact_retrieval_v2_evidence_for_prompt(contexts)
     compacted = []
     for context in contexts[:3]:
         if not isinstance(context, dict):
@@ -7101,9 +7269,35 @@ def retrieve_evidence_for_project(project: dict[str, Any]) -> list[dict[str, Any
     return agent.MEMORY_STORE.read_github_contexts(query=query)
 
 
-def retrieve_evidence_for_project_for_resume(project: dict[str, Any]) -> list[dict[str, Any]]:
+def normalize_resume_evidence_retrieval_mode(value: Any) -> str:
+    if value == RESUME_EVIDENCE_RETRIEVAL_MODE_V2:
+        return RESUME_EVIDENCE_RETRIEVAL_MODE_V2
+    return RESUME_EVIDENCE_RETRIEVAL_MODE_LEGACY
+
+
+def resolve_resume_evidence_retrieval_mode() -> str:
     if project_retrieval_v2.is_github_evidence_retrieval_v2_enabled():
-        return project_retrieval_v2.retrieve_evidence_for_project_v2(project)
+        return RESUME_EVIDENCE_RETRIEVAL_MODE_V2
+    return RESUME_EVIDENCE_RETRIEVAL_MODE_LEGACY
+
+
+def retrieve_evidence_for_project_for_resume(
+    project: dict[str, Any],
+    *,
+    jd_targets: Any = None,
+    retrieval_mode: Any = None,
+) -> list[dict[str, Any]]:
+    mode = (
+        resolve_resume_evidence_retrieval_mode()
+        if retrieval_mode is None
+        else normalize_resume_evidence_retrieval_mode(retrieval_mode)
+    )
+    if mode == RESUME_EVIDENCE_RETRIEVAL_MODE_V2:
+        return project_retrieval_v2.retrieve_evidence_for_project_v2(
+            project,
+            jd_targets=jd_targets,
+            limit=RESUME_PROJECT_EVIDENCE_LIMIT,
+        )
     return retrieve_evidence_for_project(project)
 
 
@@ -8784,13 +8978,14 @@ def build_resume_star_check(body: ResumeStarCheckBody) -> dict[str, Any]:
     project_memory = read_current_project_memory()
     selected_projects = select_staged_projects(job_description, resume, project_memory, body.allow_project_selection)
     asked_keys = {str(key) for key in body.asked_question_keys if str(key).strip()}
+    retrieval_mode = resolve_resume_evidence_retrieval_mode()
     stages = []
     summaries = []
     next_question = None
     for project in selected_projects:
         assert_agent_task_not_cancelled()
         project_name = project_display_name(project)
-        evidence = retrieve_evidence_for_project_for_resume(project)
+        evidence = retrieve_evidence_for_project_for_resume(project, retrieval_mode=retrieval_mode)
         evidence_card = build_project_evidence_card(project_name, "project", compact_project_for_prompt(project), compact_github_evidence_for_prompt(evidence))
         completion = build_star_completion(project, evidence_card)
         missing_labels = [STAR_FIELD_LABELS[field] for field in completion["missing_fields"]]
@@ -15520,8 +15715,13 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
 
     candidates = []
     selected_project_memory = {"projects": [compact_project_for_prompt(project) for project in selected_projects]}
+    retrieval_mode = resolve_resume_evidence_retrieval_mode()
     for project in selected_projects:
-        evidence = retrieve_evidence_for_project_for_resume(project)
+        evidence = retrieve_evidence_for_project_for_resume(
+            project,
+            jd_targets=jd_requirements,
+            retrieval_mode=retrieval_mode,
+        )
         candidates.append(build_project_resume_candidate(
             job_description,
             resume,
@@ -18559,6 +18759,76 @@ def generate_interview_prep_task(body: InterviewPrepBody):
         if agent.file_is_ready(agent.INTERVIEW_PREP_PATH)
         else answer,
     }
+
+
+def _repository_mapping_project_memory() -> dict[str, Any]:
+    payload = project_repository_mapping_service.load_project_memory_for_repository_mapping(
+        agent.PROJECT_MEMORY_PATH
+    )
+    if payload is None:
+        raise HTTPException(status_code=503, detail="Project selection is currently unavailable.")
+    return payload
+
+
+@app.get("/api/github/repository-mappings/unresolved")
+def get_unresolved_repository_mappings():
+    authority = project_repository_mapping_service.load_project_repository_identity_authority(
+        PROJECT_REPOSITORY_IDENTITY_PATH
+    )
+    return project_repository_mapping_service.list_unresolved_repository_mappings(
+        vector_store=agent.MEMORY_STORE, identity_authority=authority,
+    )
+
+
+@app.get("/api/github/repository-mappings/projects")
+def get_repository_mapping_projects():
+    authority = project_repository_mapping_service.load_project_repository_identity_authority(
+        PROJECT_REPOSITORY_IDENTITY_PATH
+    )
+    return project_repository_mapping_service.list_repository_mapping_projects(
+        project_memory=_repository_mapping_project_memory(), identity_authority=authority,
+    )
+
+
+@app.post("/api/github/repository-mappings/confirm")
+def confirm_project_repository_mapping(body: ProjectRepositoryConfirmationBody):
+    return project_repository_mapping_service.confirm_repository_mapping(
+        project_memory=_repository_mapping_project_memory(), request=body.model_dump(),
+        vector_store=agent.MEMORY_STORE,
+        confirmation_path=PROJECT_REPOSITORY_CONFIRMATIONS_PATH,
+        authority_path=PROJECT_REPOSITORY_IDENTITY_PATH,
+        raw_source_path=DEFAULT_GITHUB_RAW_SOURCES_PATH,
+        chunk_path=DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH,
+        manifest_path=DEFAULT_MATERIALIZATION_MANIFEST_PATH,
+    )
+
+
+@app.get("/api/github/evidence-preparation")
+def get_github_evidence_preparation():
+    return github_evidence_preparation_service.get_github_evidence_preparation_status(
+        vector_store=agent.MEMORY_STORE,
+        saved_context_path=agent.GITHUB_REPO_SCAN_STATE_PATH,
+        project_memory_path=agent.PROJECT_MEMORY_PATH,
+        identity_authority_path=PROJECT_REPOSITORY_IDENTITY_PATH,
+        confirmation_path=PROJECT_REPOSITORY_CONFIRMATIONS_PATH,
+        raw_source_path=DEFAULT_GITHUB_RAW_SOURCES_PATH,
+        chunk_path=DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH,
+        manifest_path=DEFAULT_MATERIALIZATION_MANIFEST_PATH,
+    )
+
+
+@app.post("/api/github/evidence-preparation/run")
+def run_github_evidence_preparation(body: GitHubEvidencePreparationBody):
+    return github_evidence_preparation_service.run_github_evidence_preparation(
+        confirmed=body.confirmed, vector_store=agent.MEMORY_STORE,
+        saved_context_path=agent.GITHUB_REPO_SCAN_STATE_PATH,
+        project_memory_path=agent.PROJECT_MEMORY_PATH,
+        identity_authority_path=PROJECT_REPOSITORY_IDENTITY_PATH,
+        confirmation_path=PROJECT_REPOSITORY_CONFIRMATIONS_PATH,
+        raw_source_path=DEFAULT_GITHUB_RAW_SOURCES_PATH,
+        chunk_path=DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH,
+        manifest_path=DEFAULT_MATERIALIZATION_MANIFEST_PATH,
+    )
 
 
 @app.post("/api/github/scan")
