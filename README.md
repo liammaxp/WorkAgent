@@ -53,6 +53,11 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Start from an example system prompt and customize the agent prompt from the Web UI.
 - Scan GitHub repository links from the resume and vector memory, then fetch README, languages, commits, file changes, and diff signals after confirmation.
 - Use GitHub evidence conservatively to support project descriptions without overstating contribution.
+- Make GitHub evidence persistence concurrency-safe and idempotent: JSONL upserts report `created`, `updated`, or `unchanged`, and a pipeline-run manifest detects when derived records are stale relative to their inputs.
+- Report Project Memory changes from structural JSON comparison rather than trusting model-provided counts; large output previews are paginated with UTF-8-safe boundaries.
+- Provide a default-off GitHub evidence retrieval V2 path with bounded project query planning, keyword/symbol/vector hybrid search, backend-only raw-source/chunk storage, and redacted result shapes; the enabled resume path is readiness-gated and fails closed when local prerequisites are unavailable.
+- Maintain an authoritative project-to-repository identity layer with bounded candidate detection, conflict handling, explicit user confirmations, and atomic confirmation artifacts. The GitHub Evidence page now includes a repository-association panel; mappings are scoped to projects and do not silently infer ownership.
+- Prepare saved GitHub evidence through explicit readiness checks and an idempotent materialization service. The backend exposes preparation status/run endpoints, writes redacted raw sources, bounded chunks, and a lineage manifest, and reports partial/blocked states without exposing raw content in product responses.
 - Process saved GitHub evidence through a semantic project evidence pipeline that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, groups and assesses capability candidates, inherits claim boundaries, and builds authoritative capability facts without inferring unsupported claims. The backend exposes bounded project-evidence status, build, inspect, health, preview, and raw-inspection endpoints; the full processing panel is development-only in the Web UI.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
@@ -76,6 +81,11 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- project_capability_*.py       # Capability taxonomy, grouping, scoring, boundaries, and fact building
 |   |-- project_capability_memory.py   # Authoritative capability-fact memory model and deterministic persistence
 |   |-- project_claim_boundaries.py   # Conservative allowed/forbidden claim boundaries
+|   |-- project_repository_identity.py # Authoritative repository identity and confirmation artifacts
+|   |-- project_repository_mapping_service.py # Bounded repository/project association workflow
+|   |-- github_evidence_materializer.py # Idempotent raw-source/chunk materialization and lineage
+|   |-- github_evidence_preparation_service.py # Preparation preflight, locking, and status/run orchestration
+|   |-- evidence_index_readiness.py # Saved evidence/index/vector readiness inspection
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
@@ -108,10 +118,12 @@ The system has seven main layers:
 1. `backend/main.py`: local agent logic, model adapters, file tools, GitHub context extraction, and SQLite application tracking.
 2. `backend/memory_store.py`: Chroma collections, deterministic local embeddings, similarity-aware writes, semantic retrieval, and legacy JSON migration.
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
-4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, and `backend/evidence_*.py`: GitHub evidence raw-source storage plus chunk, change-summary, evidence-card, and capability-fact processing for saved GitHub context.
+4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, `backend/evidence_*.py`, `backend/github_raw_storage.py`, `backend/github_evidence_chunks.py`, `backend/evidence_chunk_search.py`, `backend/github_evidence_materializer.py`, and `backend/evidence_index_readiness.py`: GitHub evidence raw-source storage plus concurrency-safe/idempotent JSONL upserts, lineage-aware materialization, bounded chunking/search, readiness diagnostics, and redacted backend result shapes for saved GitHub context.
 5. `backend/project_change_memory.py` and `backend/project_change_pipeline.py`: project-change extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
 6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, and atomic project-evidence-memory persistence. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory persistence remains a Python-internal boundary.
 7. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+
+The current retrieval V2 work also includes `backend/project_query_planner.py`, `backend/project_retrieval_v2.py`, `backend/evidence_hybrid_retrieval.py`, and `backend/chroma_http_vector_search.py`. The planner builds deterministic, project-scoped, bounded query groups from project facts and JD targets while filtering raw, secret, and boilerplate content. `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` is default-off; when explicitly enabled, resume evidence callers require repository authority, ready materialized/indexed evidence, and the local Chroma HTTP vector backend before routing through bounded hybrid retrieval. It does not enable capability memory, read raw content through the API, or add a frontend retrieval control.
 
 ## Model Providers
 
@@ -255,7 +267,7 @@ The example prompt includes placeholders for name, background, target roles, ski
 - Cover Letter: choose a writing style, optionally use GitHub evidence, generate a cover letter, and edit the saved draft.
 - Applications: add records, filter by status, update records, and delete records.
 - Interview Prep: generate and edit interview preparation notes, with the GitHub-evidence toggle remembered locally.
-- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, review saved repository evidence status, and run the unified Evidence Processing Pipeline for GitHub evidence chunks, change summaries, evidence cards, and capability facts when `USE_GITHUB_EVIDENCE_MEMORY=1`. The backend also exposes bounded context preview/raw inspect APIs and project change memory diff-memory APIs, but the current page keeps the UI focused on summary views instead of rendering full raw content.
+- GitHub Evidence: configure GitHub identity/token, scan repositories from the tailored resume, base resume, and vector memory by default, fetch approved context into Chroma, resolve project-to-repository associations, review saved repository evidence status, and run the unified Evidence Processing Pipeline for GitHub evidence chunks, change summaries, evidence cards, and capability facts when `USE_GITHUB_EVIDENCE_MEMORY=1`. The backend also exposes bounded context preview/raw inspect APIs, repository-mapping APIs, and evidence-preparation/readiness APIs. The page keeps the UI focused on summary views and the association/preparation workflow instead of rendering full raw content; retrieval V2 remains backend-only.
 - Prompt Settings: edit the system prompt and load the reusable example prompt.
 - Agent Chat: free-form chat interface for the same agent workflow, including image attachments and deletion of specific profile-memory facts.
 - Language Switch: change the Web UI between Chinese and English. This affects interface text only; generated content follows the saved job description's predominant language.
@@ -318,6 +330,11 @@ Main FastAPI endpoints:
 - `POST /api/github/change-memory/build`
 - `GET /api/github/change-memory/inspect`
 - `GET /api/github/change-memory/health`
+- `GET /api/github/repository-mappings/unresolved`
+- `GET /api/github/repository-mappings/projects`
+- `POST /api/github/repository-mappings/confirm`
+- `GET /api/github/evidence-preparation`
+- `POST /api/github/evidence-preparation/run`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/project-evidence/status`
@@ -367,11 +384,21 @@ Agent Chat image requests use data URLs:
 
 GitHub evidence memory is controlled by `USE_GITHUB_EVIDENCE_MEMORY`. When enabled, GitHub context sync persists raw sources into JSONL storage under `information/github_evidence_memory/`, and the GitHub evidence pipeline can turn those sources into chunks, raw change summaries, evidence cards, and capability facts. `GET /api/github/evidence/status`, `health`, and `inspect` report counts, project summaries, missing stages, safe samples, and the next recommended action. `POST /api/github/evidence/build` runs the full ordered pipeline, while the stage-specific endpoints run or preview individual stages.
 
+Each evidence stage is safe to rerun: concurrent JSONL updates are serialized, unchanged records do not rewrite their files, and stage results expose created/updated/unchanged counts. A full pipeline run writes a private `.pipeline_runs.json` manifest under the evidence-memory directory; health reports `lineage_current=false` when saved derived records no longer match the recorded input signatures and recommends rerunning the pipeline.
+
 Project change memory is controlled by `USE_PROJECT_CHANGE_MEMORY`. When enabled, its pipeline reads saved GitHub compare/file patches, extracts deterministic diff units, derives raw change summaries, filters evidence cards to qualified claims, aggregates capability facts, and persists the result to `information/project_change_memory.json`. `POST /api/github/change-memory/build` runs the pipeline, `GET /api/github/change-memory/inspect` returns bounded per-project samples and capability types, and `GET /api/github/change-memory/health` reports whether the saved memory is ready, empty, degraded, or disabled.
 
 Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persists to `information/project_evidence_memory.json` with schema `project_evidence_memory.v1`. Its semantic production pipeline reads GitHub evidence JSONL, optional project-change memory, `project_memory.json`, and `project_compact_facts.json`; then it normalizes, synthesizes, scores, extracts and assesses capabilities, inherits claim boundaries, builds authoritative capability facts, and atomically validates the resulting memory. `POST /api/project-evidence/build` runs the project-change and project-evidence chain over saved local inputs; the status, inspect, health, preview, and bounded raw endpoints are read-only except for the build operation. Invalid or incomplete optional inputs become sorted warnings; unsupported metrics and capability inferences remain outside synthesized claims.
 
 Project capability memory is defined by `project_capability_memory.v1` and persists to `information/project_capability_memory.json` through Python-internal builders, validators, loaders, and atomic persistence helpers. It accepts only already-built authoritative capability facts, derives deterministic project summaries and diagnostics, stores a canonical content hash, rejects malformed or conflicting identities, forbids raw/sensitive artifact content, and protects the upstream project-evidence artifact path from overwrite. This persistence layer has no dedicated HTTP route or production frontend trigger yet.
+
+GitHub evidence retrieval V2 is controlled by `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` and is currently default-off. Its bounded planner/search/storage modules preserve project scope, query/result limits, stable ordering, and redacted metadata; raw source text remains outside safe search results. When explicitly enabled, the resume evidence path now requires ready repository authority, materialized chunks, index readiness, and the local Chroma HTTP vector backend, then merges keyword/symbol/vector hits through deterministic hybrid ranking; any missing prerequisite or controlled failure returns an empty result without legacy fallback or writes. The worktree also includes retrieval quality evaluation helpers that compare legacy/V2 safety, determinism, provenance coverage, and bounded context metrics without claiming real-world recall.
+
+Repository identity and evidence preparation are separate from retrieval V2. The repository-mapping endpoints expose unresolved aliases and known projects, then require an explicit `project_id` + canonical `owner/repository` confirmation before writing `information/project_repository_confirmations.json`. Preparation reads saved GitHub context and project memory, validates identity and index readiness, and materializes `information/github_raw_sources.jsonl`, `information/github_evidence_chunks.jsonl`, and `information/github_evidence_materialization.json` under bounded, redacted, idempotent rules. `GET /api/github/evidence-preparation` is a read-only preflight; `POST /api/github/evidence-preparation/run` requires explicit confirmation and reports `ready_to_prepare`, `prepared`, `partial`, `blocked`, or `error` states. The repository association UI is available in the GitHub Evidence page, while retrieval V2 remains backend-only.
+
+The preparation layer also supports readiness checks and bounded vector/lexical/hybrid search inputs. It validates project/repository/path scope, chunk mappings, vector metadata, materialization manifests, and lineage before exposing search candidates; search results contain only bounded metadata, summaries, hashes, labels, and hit reasons, never raw source bodies.
+
+中文说明：仓库身份与 evidence preparation 独立于 retrieval V2。系统会先展示未解决别名和已知项目，只有显式确认 `project_id` 与 canonical `owner/repository` 后才写入确认 artifact；preparation 会校验身份和索引就绪状态，并以有界、脱敏、幂等规则物化 raw source、chunks 与 lineage manifest。状态接口只读，执行接口需要显式确认；仓库关联面板已接入 GitHub Evidence 页面，而 retrieval V2 仍是后端占位脚手架。
 
 ## Local Files And Privacy
 
@@ -389,6 +416,11 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/github_evidence_memory/`
 - `information/project_change_memory.json`
 - `information/project_evidence_memory.json`
+- `information/project_repository_identity.json`
+- `information/project_repository_confirmations.json`
+- `information/github_raw_sources.jsonl`
+- `information/github_evidence_chunks.jsonl`
+- `information/github_evidence_materialization.json`
 - `information/project_capability_memory.json`
 - `information/chroma/`
 - `information/github_accounts.txt`
@@ -619,6 +651,34 @@ Repository privacy-policy regression test:
 python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
+Evidence hardening regression tests:
+
+```powershell
+python -m pytest tests\test_bug_hardening.py -q
+```
+
+GitHub retrieval V2 regression tests:
+
+```powershell
+python -m pytest tests\test_github_evidence_chunking.py tests\test_evidence_chunk_keyword_symbol_search.py tests\test_github_raw_storage_redaction.py tests\test_project_query_planner.py tests\test_github_evidence_retrieval_v2_flag.py -q
+```
+
+Phase 6 preparation, readiness, materialization, and repository-mapping regression tests:
+
+```powershell
+python -m pytest tests\test_github_evidence_retrieval_v2_flag.py tests\test_github_raw_storage_redaction.py tests\test_github_evidence_chunking.py tests\test_evidence_chunk_keyword_symbol_search.py tests\test_evidence_multi_query_vector_search.py tests\test_evidence_hybrid_retrieval.py tests\test_evidence_index_readiness.py tests\test_github_evidence_materialization.py tests\test_github_evidence_preparation_service.py tests\test_github_evidence_preparation_api.py tests\test_project_query_planner.py tests\test_project_repository_identity.py tests\test_project_repository_mapping_service.py tests\test_project_repository_mapping_api.py tests\test_repository_identity_readiness_integration.py -q
+```
+
+The latest preparation/readiness/materialization/repository-mapping focused backend run passed 154 tests. The retrieval V2, Chroma HTTP, hybrid, quality-evaluation, and resume integration/regression suite passed 131 tests. The frontend repository-association/API test script passed 8 tests; `npm run build` transformed 58 modules but could not write `outputs/frontend/assets` because of an environment `EPERM`, so it is not recorded as a successful build.
+
+Retrieval V2 and resume integration regression tests:
+
+```powershell
+python -m pytest -q tests\test_chroma_http_vector_search.py tests\test_evidence_hybrid_retrieval.py tests\test_project_retrieval_v2_integration.py tests\test_retrieval_quality_evaluation.py tests\test_resume_retrieval_v2_evidence_integration.py tests\test_resume_evidence_determinism.py tests\test_resume_evidence_end_to_end_routing.py tests\test_resume_evidence_failure_matrix.py tests\test_resume_evidence_request_isolation.py
+```
+
+The latest run passed 131 tests. It verifies non-empty vector-backed hybrid routing when prerequisites are injected, deterministic multi-project/JD isolation, bounded prompt compaction, fail-closed prerequisite/error handling, and legacy compatibility when the flag is off.
+
 Frontend production build:
 
 ```powershell
@@ -632,6 +692,9 @@ Production frontend output is written to `outputs/frontend/`.
 
 - Long generation tasks can run in the background and be cancelled, but there is still no token-by-token streaming output.
 - GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all GitHub evidence and project change memory records.
+- Evidence lineage and persistence diagnostics are available through backend status/health responses, but the Web UI does not yet expose all created/updated/unchanged counts or manifest details.
+- Retrieval V2 is an internal, default-off backend path: it has no production HTTP route or frontend control, and its enabled resume path requires ready local artifacts plus Chroma HTTP vector access; it fails closed to an empty result when prerequisites are absent.
+- Evidence preparation, materialization, readiness, vector/lexical/hybrid search, quality evaluation, and repository mapping are covered by bounded backend modules and focused tests. The frontend can manage repository association and preparation, but does not yet expose retrieval controls or search results.
 - Project evidence memory is persisted and inspectable through bounded FastAPI endpoints, while the full project-evidence explorer is not rendered in the GitHub Evidence page. The development-only evidence pipeline panel is hidden from production builds.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
@@ -643,6 +706,7 @@ Production frontend output is written to `outputs/frontend/`.
 - Add structured GitHub evidence visualization.
 - Connect the validated project capability facts and claim boundaries to resume-generation decisions and a polished read-only evidence explorer.
 - Add application dashboards, statistics, batch actions, and richer search.
+- Add production observability and end-to-end validation around the non-empty retrieval V2 path, then decide when to expose retrieval results in the frontend.
 - Add document preview and DOCX export.
 - Improve mobile layout and add dark mode.
 
@@ -696,6 +760,7 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 提供可直接试用的示例系统 Prompt，并支持在 Web UI 中编辑个性化 Prompt。
 - 从简历和向量记忆中扫描 GitHub 仓库链接，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
 - 保守使用 GitHub 证据支持项目描述，避免夸大个人贡献。
+- 提供默认关闭的 GitHub evidence retrieval V2 路径：包含有界 project query planner、chunk keyword/symbol/vector hybrid search、仅后端 raw-source/chunk 存储和脱敏结果；显式开启后要求仓库 authority、物化/索引就绪和本地 Chroma HTTP 向量后端，条件不足时 fail-closed。
 - 通过 semantic project evidence pipeline 处理已保存的 GitHub 证据：校验有界输入、规范化和去重记录、合成保守 evidence facts、评分证据质量、分组和评估 capability candidates、继承 claim boundaries，并在不推断 unsupported claim 的前提下构建权威 capability facts。后端提供有界的 `/api/project-evidence/*` 状态、构建、检查、健康、预览和 raw inspect 接口；完整处理面板仅在开发环境显示。
 - 使用本地 SQLite 数据库追踪求职申请。
 - 同时提供本地 Web UI 和原始 CLI 流程。
@@ -711,6 +776,12 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- evidence_memory.py   # GitHub 证据 JSONL 存储
 |   |-- evidence_pipeline.py # GitHub evidence 证据构建编排和检查
 |   |-- evidence_*.py        # GitHub evidence 分块、变更摘要、证据卡辅助模块
+|   |-- github_raw_storage.py / github_evidence_chunks.py # raw 脱敏存储和确定性 chunks
+|   |-- github_evidence_materializer.py / github_evidence_preparation_service.py # 证据物化与准备编排
+|   |-- evidence_index_readiness.py / evidence_vector_search.py # 索引就绪检查和有界向量结果适配
+|   |-- evidence_chunk_search.py / evidence_hybrid_retrieval.py # 词法/混合检索辅助模块
+|   |-- project_query_planner.py # 项目范围内的检索查询规划
+|   |-- project_repository_identity.py / project_repository_mapping_service.py # 项目与仓库权威映射
 |   |-- project_change_memory.py # project change memory schema、提取和持久化
 |   |-- project_change_pipeline.py    # project change memory pipeline、inspect 和 health 辅助逻辑
 |   |-- project_evidence_*.py         # project evidence 模型、pipeline、评分、合成和持久化
@@ -751,7 +822,9 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 GitHub evidence raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
 5. `backend/project_change_memory.py` 和 `backend/project_change_pipeline.py`：从已保存的 GitHub compare/file patch 提取 project change memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
 6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py` 和 `backend/project_claim_boundaries.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建，以及原子 project evidence memory 持久化。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；该能力记忆持久化仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
-7. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。
+7. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。GitHub Evidence 页面已加入未解决仓库的关联确认和 evidence preparation 流程，但尚未接入 retrieval 控制或搜索结果展示。
+
+当前 retrieval V2 工作还包括 `backend/project_query_planner.py` 和 `backend/project_retrieval_v2.py`。planner 从项目事实和 JD targets 构建确定性、项目范围内且有界的查询分组，并过滤 raw、secret 和 boilerplate 内容。`USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 默认关闭；显式开启后，简历证据调用会路由到安全的列表占位结果，后续步骤再实现实际检索。它不会启用 capability memory、通过 API 读取 raw 内容，也没有前端触发入口。
 
 ## 模型配置
 
@@ -955,6 +1028,11 @@ background/prompt.example.txt
 - `POST /api/github/change-memory/build`
 - `GET /api/github/change-memory/inspect`
 - `GET /api/github/change-memory/health`
+- `GET /api/github/repository-mappings/unresolved`
+- `GET /api/github/repository-mappings/projects`
+- `POST /api/github/repository-mappings/confirm`
+- `GET /api/github/evidence-preparation`
+- `POST /api/github/evidence-preparation/run`
 - `GET /api/github/context/preview`
 - `GET /api/github/context/raw`
 - `GET /api/project-evidence/status`
@@ -1002,11 +1080,19 @@ Agent Chat 图片请求使用 data URL：
 
 GitHub evidence memory 由 `USE_GITHUB_EVIDENCE_MEMORY` 控制。启用后，GitHub context 同步会把 raw sources 持久化到 `information/github_evidence_memory/` 下的 JSONL 存储，GitHub evidence pipeline 可以继续把这些来源构建为 chunks、raw change summaries、evidence cards 和 capability facts。`GET /api/github/evidence/status`、`health` 和 `inspect` 会返回计数、项目摘要、缺失阶段、安全样本和下一步建议；`POST /api/github/evidence/build` 运行完整有序 pipeline，阶段专用接口则用于单独运行或预览某个阶段。
 
+每个 evidence 阶段都支持安全重跑：并发 JSONL 更新会被串行化，未变化的记录不会重复写文件，阶段结果会分别报告 created、updated 和 unchanged 数量。完整 pipeline 运行后会在 evidence-memory 目录写入私有的 `.pipeline_runs.json` manifest；如果派生记录与记录中的输入签名不一致，health 会返回 `lineage_current=false` 并建议重新运行 pipeline。
+
 Project change memory 由 `USE_PROJECT_CHANGE_MEMORY` 控制。启用后，project change memory pipeline 会读取已保存的 GitHub compare/file patch，提取确定性的 diff units，生成 raw change summaries，过滤出合格的 evidence cards，聚合 capability facts，并把结果写入 `information/project_change_memory.json`。`POST /api/github/change-memory/build` 用于运行该 pipeline，`GET /api/github/change-memory/inspect` 返回按项目裁剪后的样例和 capability types，`GET /api/github/change-memory/health` 返回当前 project change memory 是否 ready、empty、degraded 或 disabled。
 
 Project evidence memory 由 `USE_PROJECT_EVIDENCE_MEMORY` 控制，并按 `project_evidence_memory.v1` schema 持久化到 `information/project_evidence_memory.json`。它从 GitHub evidence JSONL、可选的 project-change memory、`project_memory.json` 和 `project_compact_facts.json` 只读读取输入，然后执行规范化、合成、质量评分、能力抽取和评估、claim boundary 继承、权威 capability fact 构建和原子校验。`POST /api/project-evidence/build` 会在已保存的本地输入上运行 project-change 与 project-evidence 链路，其他 status、inspect、health、preview 和有界 raw 接口用于读取；当前没有生产版前端触发入口。无效或不完整的可选输入会变成排序后的 warning，不支持的指标和能力推断不会进入合成声明。
 
+仓库映射是显式且按项目隔离的流程：映射接口返回未解决仓库、项目选项、别名和冲突；确认时必须提供 canonical `owner/repository`、`project_id`、`confirmed: true` 以及有界 aliases。前端已在 GitHub Evidence 页面提供关联确认区，后端则以锁、校验和原子写入保存 authority/confirmation artifact。
+
+Evidence preparation 是独立于 retrieval V2 的后端准备流程。`GET /api/github/evidence-preparation` 读取 saved context、Project Memory、mapping、raw/chunk、vector、manifest 和 index readiness 状态；`POST /api/github/evidence-preparation/run` 只接受 `{ "confirmed": true }`，在非阻塞锁下物化有界脱敏 raw source/chunk，并生成 canonical hash、manifest 和稳定的 created/updated/unchanged 计数。该流程可返回 disabled、blocked、busy、partial、prepared 或 error；生产前端尚未调用这些接口。
+
 Project capability memory 按 `project_capability_memory.v1` schema 持久化到 `information/project_capability_memory.json`，由 Python 内部 builder、validator、loader 和 atomic persistence helper 使用。它只接受已经构建的权威 capability facts，生成确定性的项目摘要、diagnostics 和 content hash，拒绝格式错误、冲突 identity、raw/敏感 artifact 内容，并保护上游 project evidence artifact 不被覆盖；目前没有独立 HTTP 接口或生产版前端触发入口。
+
+GitHub evidence retrieval V2 由 `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 控制，目前默认关闭。其 planner/search/storage 模块保持项目范围、查询/结果上限和稳定排序，并只返回脱敏 metadata；raw source 文本不会进入安全搜索结果。显式开启后，简历证据链会要求仓库 authority、物化 chunks、index readiness 和本地 Chroma HTTP 向量后端均就绪，再以确定性规则合并 keyword/symbol/vector 命中；任一前置条件缺失或受控失败都会 fail-closed 返回空结果，不回退 legacy，也不写入文件。当前工作区还包含 retrieval quality evaluation，用于比较 legacy/V2 的安全性、确定性、provenance 覆盖和有界上下文指标，但不宣称真实世界 recall。
 
 ## 本地文件与隐私
 
@@ -1240,6 +1326,34 @@ python -m pytest tests\test_project_capability_persistence.py -q
 python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
+Evidence 加固回归测试：
+
+```powershell
+python -m pytest tests\test_bug_hardening.py -q
+```
+
+GitHub retrieval V2 回归测试：
+
+```powershell
+python -m pytest tests\test_github_evidence_chunking.py tests\test_evidence_chunk_keyword_symbol_search.py tests\test_github_raw_storage_redaction.py tests\test_project_query_planner.py tests\test_github_evidence_retrieval_v2_flag.py -q
+```
+
+Phase 6 准备、就绪、物化和仓库映射回归测试：
+
+```powershell
+python -m pytest tests\test_github_evidence_retrieval_v2_flag.py tests\test_github_raw_storage_redaction.py tests\test_github_evidence_chunking.py tests\test_evidence_chunk_keyword_symbol_search.py tests\test_evidence_multi_query_vector_search.py tests\test_evidence_hybrid_retrieval.py tests\test_evidence_index_readiness.py tests\test_github_evidence_materialization.py tests\test_github_evidence_preparation_service.py tests\test_github_evidence_preparation_api.py tests\test_project_query_planner.py tests\test_project_repository_identity.py tests\test_project_repository_mapping_service.py tests\test_project_repository_mapping_api.py tests\test_repository_identity_readiness_integration.py -q
+```
+
+最近一次后端专项运行通过 154 个测试；前端仓库关联/API 专项脚本通过 8 个测试。`npm run build` 已转换 58 个模块，但因环境 `EPERM` 无法写入 `outputs/frontend/assets`，因此不记为构建成功。
+
+Retrieval V2 与简历证据集成回归测试：
+
+```powershell
+python -m pytest -q tests\test_chroma_http_vector_search.py tests\test_evidence_hybrid_retrieval.py tests\test_project_retrieval_v2_integration.py tests\test_retrieval_quality_evaluation.py tests\test_resume_retrieval_v2_evidence_integration.py tests\test_resume_evidence_determinism.py tests\test_resume_evidence_end_to_end_routing.py tests\test_resume_evidence_failure_matrix.py tests\test_resume_evidence_request_isolation.py
+```
+
+最近一次运行通过 131 个测试，覆盖前置条件满足时的向量 hybrid 路由、多项目/JD 隔离与确定性、prompt 有界压缩、失败矩阵 fail-closed，以及开关关闭时的 legacy 兼容。
+
 前端生产构建：
 
 ```powershell
@@ -1253,6 +1367,9 @@ npm run build
 
 - 较长生成任务可以在后台运行并取消，但还没有 token-by-token 流式输出。
 - GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
+- evidence lineage 和持久化诊断可通过后端 status/health 响应查看，但 Web UI 尚未展示全部 created/updated/unchanged 计数或 manifest 详情。
+- Retrieval V2 仍是内部、默认关闭的后端路径：没有生产 HTTP 接口或前端控件；开启后的简历链路要求本地 artifact 和 Chroma HTTP 向量访问就绪，前置条件不足时安全返回空结果。
+- Evidence preparation、物化、readiness、向量/词法/混合检索、质量评估和仓库映射已具备有界后端模块与专项测试。前端可以管理仓库关联和 preparation，但尚未暴露 retrieval 控制或搜索结果。
 - Project evidence memory 已可通过有界 FastAPI 接口持久化和检查，但 GitHub Evidence 页面尚未渲染完整的 project-evidence explorer；证据处理面板仅在开发构建中显示。
 - 简历和求职信没有内置文档预览或 DOCX 导出；安装 LaTeX 工具链后可以把定制简历导出为 PDF。
 - 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。
@@ -1263,6 +1380,8 @@ npm run build
 - 增加持久任务队列和 WebSocket/SSE 流式输出。
 - 增加结构化 GitHub 证据可视化。
 - 将已校验的 project capability facts 和 claim boundaries 接入简历生成决策，并增加只读 evidence explorer。
+- 增加 retrieval V2 非空路径的生产可观测性和端到端验证，再决定何时在前端展示检索结果。
+- 完成默认关闭的 GitHub evidence retrieval V2：把有界 query planner、chunk keyword/symbol search 和脱敏存储接入真实简历检索，并在验证后再开放开关。
 - 增加投递统计、批量操作和更丰富的搜索。
 - 增加文档预览和 DOCX 导出。
 - 改进移动端布局并增加深色模式。

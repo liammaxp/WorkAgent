@@ -9,6 +9,8 @@ import {
   useAsyncAction,
 } from "../components/ui.jsx";
 import { text, useLanguage } from "../i18n.jsx";
+import RepositoryAssociationSection from "../components/github/RepositoryAssociationSection.jsx";
+import EvidencePreparationSection from "../components/github/EvidencePreparationSection.jsx";
 
 function listToText(values = []) {
   return values.join("\n");
@@ -446,6 +448,7 @@ export default function GitHubContext() {
   const [evidencePipelineBuilding, setEvidencePipelineBuilding] = useState(false);
   const [evidencePipelineError, setEvidencePipelineError] = useState("");
   const [evidencePipelineResult, setEvidencePipelineResult] = useState(null);
+  const [repositoryAssociationRevision, setRepositoryAssociationRevision] = useState(0);
   const { loading, error, success, run } = useAsyncAction();
   const { active: agentActive, runAgentWithProgress } = useAgentProgress();
 
@@ -800,6 +803,11 @@ export default function GitHubContext() {
           </button>
         </div>
       </section>
+
+      <RepositoryAssociationSection
+        onAssociationChanged={() => setRepositoryAssociationRevision((revision) => revision + 1)}
+      />
+      <EvidencePreparationSection refreshSignal={repositoryAssociationRevision} />
 
       {showEvidenceDebug && <section className="card evidence-pipeline-panel">
         <h2 className="card-title">{pipelineCopy.title}</h2>
