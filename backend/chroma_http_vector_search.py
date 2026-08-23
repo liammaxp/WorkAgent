@@ -7,18 +7,16 @@ import json
 import math
 import os
 import re
-import socket
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, TypedDict
 
 try:
-    import chromadb
-    from chromadb.config import Settings
-except ImportError:  # pragma: no cover - exercised when optional dependencies are absent
-    chromadb = None
-    Settings = None
-
-try:
+    from backend.chroma_collection_registry import (
+        GITHUB_EVIDENCE_COLLECTION_NAME,
+        GITHUB_EVIDENCE_SEMANTIC_ID,
+    )
+    from backend.chroma_config import load_chroma_deployment_config
+    from backend.chroma_read_client import ChromaReadClient
     from backend.project_repository_identity import (
         authority_to_repository_mapping,
         load_project_repository_identity_authority,
@@ -26,6 +24,12 @@ try:
         normalize_repository_identity,
     )
 except ModuleNotFoundError:  # pragma: no cover - legacy backend-directory launch mode
+    from chroma_collection_registry import (
+        GITHUB_EVIDENCE_COLLECTION_NAME,
+        GITHUB_EVIDENCE_SEMANTIC_ID,
+    )
+    from chroma_config import load_chroma_deployment_config
+    from chroma_read_client import ChromaReadClient
     from project_repository_identity import (
         authority_to_repository_mapping,
         load_project_repository_identity_authority,
@@ -42,7 +46,7 @@ CHROMA_HTTP_TIMEOUT_ENV = "CHROMA_HTTP_TIMEOUT_SECONDS"
 
 DISABLED_VECTOR_QUERY_BACKEND = "disabled"
 CHROMA_HTTP_VECTOR_QUERY_BACKEND = "chroma_http"
-GITHUB_EVIDENCE_COLLECTION = "github_evidence"
+GITHUB_EVIDENCE_COLLECTION = GITHUB_EVIDENCE_COLLECTION_NAME
 EXPECTED_EMBEDDING_DIMENSIONS = 384
 EXPECTED_DISTANCE_METRIC = "cosine"
 DEFAULT_CHROMA_HTTP_HOST = "127.0.0.1"
@@ -235,52 +239,21 @@ def _authorized_metadata(
     return dict(sorted(safe.items()))
 
 
-def _server_reachable(config: VectorQueryBackendConfig) -> bool:
-    try:
-        with socket.create_connection(
-            (config["host"], config["port"]), timeout=config["timeout_seconds"]
-        ):
-            return True
-    except OSError:
-        return False
-
-
-def _create_http_client(
-    config: VectorQueryBackendConfig,
+def _semantic_reader(
+    *,
+    environ: Mapping[str, str] | None,
+    read_client: Any | None,
     client_factory: Callable[..., Any] | None,
 ) -> Any:
-    if client_factory is not None:
-        return client_factory(
-            host=config["host"], port=config["port"], ssl=config["ssl"],
-            timeout_seconds=config["timeout_seconds"],
-        )
-    if chromadb is None or Settings is None:
-        raise RuntimeError("vector_backend_unavailable")
-    return chromadb.HttpClient(
-        host=config["host"],
-        port=config["port"],
-        ssl=config["ssl"],
-        settings=Settings(anonymized_telemetry=False),
+    if read_client is not None:
+        return read_client
+    config_provider = lambda: load_chroma_deployment_config(environ)
+    if client_factory is None:
+        return ChromaReadClient(config_provider=config_provider)
+    return ChromaReadClient(
+        config_provider=config_provider,
+        factory_builder=client_factory,
     )
-
-
-def _close_client(client: Any) -> None:
-    try:
-        close = getattr(client, "close", None)
-        if callable(close):
-            close()
-    except Exception:
-        pass
-
-
-def _exact_collection(client: Any) -> Any:
-    collection = client.get_collection(name=GITHUB_EVIDENCE_COLLECTION)
-    if getattr(collection, "name", None) != GITHUB_EVIDENCE_COLLECTION:
-        raise ValueError("unexpected_collection")
-    metadata = getattr(collection, "metadata", None)
-    if not isinstance(metadata, Mapping) or metadata.get("hnsw:space") != EXPECTED_DISTANCE_METRIC:
-        raise ValueError("unexpected_distance_metric")
-    return collection
 
 
 def _query_embedding(embedder: Any, query: str) -> list[float] | None:
@@ -315,6 +288,7 @@ def search_github_evidence_vectors_http(
     authority: Any = None,
     environ: Mapping[str, str] | None = None,
     client_factory: Callable[..., Any] | None = None,
+    read_client: Any | None = None,
     skip_socket_preflight: bool = False,
 ) -> list[dict[str, Any]]:
     """Query the exact server-owned collection and return bounded safe records."""
@@ -336,28 +310,25 @@ def search_github_evidence_vectors_http(
     authority_mapping = _load_authority_mapping(authority)
     if embedding is None or not authority_mapping.get("mapping_count"):
         return []
-    if not skip_socket_preflight and not _server_reachable(config):
-        return []
-    client = None
     try:
-        client = _create_http_client(config, client_factory)
-        collection = _exact_collection(client)
-        count = collection.count()
-        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
-            return []
-        result = collection.query(
-            query_embeddings=[embedding],
-            n_results=min(limit, count),
-            include=["distances", "metadatas"],
+        reader = _semantic_reader(
+            environ=environ,
+            read_client=read_client,
+            client_factory=client_factory,
         )
-        ids = result.get("ids", [[]])[0] if isinstance(result, Mapping) else []
-        distances = result.get("distances", [[]])[0] if isinstance(result, Mapping) else []
-        metadatas = result.get("metadatas", [[]])[0] if isinstance(result, Mapping) else []
+        result = reader.vector_query(
+            GITHUB_EVIDENCE_SEMANTIC_ID,
+            consumer_id="github_evidence_vector_reader",
+            query_embedding=embedding,
+            n_results=limit,
+            include_documents=False,
+            metadata_fields=_SAFE_RESULT_METADATA_KEYS,
+            include_distances=True,
+        )
         records: list[dict[str, Any]] = []
-        for rank, (record_id, distance, metadata) in enumerate(
-            zip(ids[:limit], distances[:limit], metadatas[:limit]), start=1
-        ):
-            safe_id = _safe_string(record_id, 180)
+        for hit in result.hits[:limit]:
+            safe_id = _safe_string(hit.record_id, 180)
+            distance = hit.distance
             if (
                 not safe_id
                 or isinstance(distance, bool)
@@ -367,7 +338,7 @@ def search_github_evidence_vectors_http(
             ):
                 continue
             safe_metadata = _authorized_metadata(
-                metadata,
+                hit.metadata,
                 requested_project_id=requested_project,
                 authority_mapping=authority_mapping,
             )
@@ -377,20 +348,18 @@ def search_github_evidence_vectors_http(
                 "vector_record_id": safe_id,
                 "distance": float(distance),
                 "metadata": safe_metadata,
-                "rank": rank,
+                "rank": hit.rank,
             })
         return records[:limit]
     except Exception:
         return []
-    finally:
-        if client is not None:
-            _close_client(client)
 
 
 def inspect_github_evidence_vector_metadata_http(
     *,
     environ: Mapping[str, str] | None = None,
     client_factory: Callable[..., Any] | None = None,
+    read_client: Any | None = None,
     skip_socket_preflight: bool = False,
 ) -> list[dict[str, Any]]:
     """Read bounded identity metadata for the existing collection readiness gate.
@@ -403,40 +372,31 @@ def inspect_github_evidence_vector_metadata_http(
     config = get_vector_query_backend_config(environ)
     if config["backend"] != CHROMA_HTTP_VECTOR_QUERY_BACKEND:
         return []
-    if not skip_socket_preflight and not _server_reachable(config):
-        return []
-    client = None
     try:
-        client = _create_http_client(config, client_factory)
-        collection = _exact_collection(client)
-        count = collection.count()
-        if (
-            isinstance(count, bool)
-            or not isinstance(count, int)
-            or count <= 0
-            or count > MAX_FINGERPRINT_RECORDS
-        ):
-            return []
-        result = collection.get(limit=count, include=["metadatas"])
-        ids = result.get("ids", []) if isinstance(result, Mapping) else []
-        metadatas = result.get("metadatas", []) if isinstance(result, Mapping) else []
-        if len(ids) != count or len(metadatas) != count:
-            return []
+        reader = _semantic_reader(
+            environ=environ,
+            read_client=read_client,
+            client_factory=client_factory,
+        )
+        result = reader.read_records(
+            GITHUB_EVIDENCE_SEMANTIC_ID,
+            consumer_id="github_evidence_metadata_reader",
+            include_documents=False,
+            metadata_fields=_FINGERPRINT_METADATA_KEYS,
+            max_records=MAX_FINGERPRINT_RECORDS,
+        )
         records: list[dict[str, Any]] = []
-        for record_id, metadata in zip(ids, metadatas):
-            safe_id = _safe_string(record_id, 180)
+        for record in result.records:
+            safe_id = _safe_string(record.record_id, 180)
             if not safe_id:
                 return []
             records.append({
                 "vector_record_id": safe_id,
-                "metadata": _safe_metadata(metadata, fingerprint_only=True),
+                "metadata": _safe_metadata(record.metadata, fingerprint_only=True),
             })
         return records
     except Exception:
         return []
-    finally:
-        if client is not None:
-            _close_client(client)
 
 
 def compute_github_evidence_logical_fingerprint_http(
@@ -444,6 +404,7 @@ def compute_github_evidence_logical_fingerprint_http(
     authority: Any = None,
     environ: Mapping[str, str] | None = None,
     client_factory: Callable[..., Any] | None = None,
+    read_client: Any | None = None,
     skip_socket_preflight: bool = False,
 ) -> LogicalCollectionFingerprint:
     """Hash collection identity, record IDs, and authoritative repository metadata."""
@@ -463,30 +424,24 @@ def compute_github_evidence_logical_fingerprint_http(
     authority_mapping = _load_authority_mapping(authority)
     if not authority_mapping.get("mapping_count"):
         return empty
-    if not skip_socket_preflight and not _server_reachable(config):
-        return empty
-    client = None
     try:
-        client = _create_http_client(config, client_factory)
-        collection = _exact_collection(client)
-        count = collection.count()
-        if (
-            isinstance(count, bool)
-            or not isinstance(count, int)
-            or count < 0
-            or count > MAX_FINGERPRINT_RECORDS
-        ):
-            return empty
-        result = collection.get(limit=max(count, 1), include=["metadatas"])
-        ids = result.get("ids", []) if isinstance(result, Mapping) else []
-        metadatas = result.get("metadatas", []) if isinstance(result, Mapping) else []
-        if len(ids) != count or len(metadatas) != count:
-            return empty
+        reader = _semantic_reader(
+            environ=environ,
+            read_client=read_client,
+            client_factory=client_factory,
+        )
+        result = reader.read_records(
+            GITHUB_EVIDENCE_SEMANTIC_ID,
+            consumer_id="github_evidence_metadata_reader",
+            include_documents=False,
+            metadata_fields=_FINGERPRINT_METADATA_KEYS,
+            max_records=MAX_FINGERPRINT_RECORDS,
+        )
         records = []
-        for record_id, metadata in zip(ids, metadatas):
-            safe_id = _safe_string(record_id, 180)
+        for record in result.records:
+            safe_id = _safe_string(record.record_id, 180)
             safe_metadata = _authorized_metadata(
-                metadata,
+                record.metadata,
                 requested_project_id="",
                 authority_mapping=authority_mapping,
                 fingerprint_only=True,
@@ -497,7 +452,7 @@ def compute_github_evidence_logical_fingerprint_http(
         records.sort(key=lambda item: item["id"])
         payload = {
             "collection_name": GITHUB_EVIDENCE_COLLECTION,
-            "record_count": count,
+            "record_count": len(records),
             "records": records,
         }
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -505,7 +460,7 @@ def compute_github_evidence_logical_fingerprint_http(
         return {
             "status": "ready",
             "collection_name": GITHUB_EVIDENCE_COLLECTION,
-            "record_count": count,
+            "record_count": len(records),
             "record_ids": [item["id"] for item in records],
             "repositories": repositories,
             "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
@@ -513,6 +468,3 @@ def compute_github_evidence_logical_fingerprint_http(
         }
     except Exception:
         return empty
-    finally:
-        if client is not None:
-            _close_client(client)

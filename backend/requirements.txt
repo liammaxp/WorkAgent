@@ -4,4 +4,6 @@ requests
 fastapi
 uvicorn[standard]
 chromadb
+httpx
+psutil
 pypdf

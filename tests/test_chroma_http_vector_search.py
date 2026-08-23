@@ -4,10 +4,17 @@ import json
 
 from backend import chroma_http_vector_search as http_vectors
 from backend.memory_store import MemoryVectorStore
+from backend.chroma_read_models import (
+    ChromaReadRecord,
+    ChromaReadResult,
+    ChromaVectorHit,
+    ChromaVectorResult,
+)
 
 
 ENABLED = {
     http_vectors.VECTOR_QUERY_BACKEND_ENV: http_vectors.CHROMA_HTTP_VECTOR_QUERY_BACKEND,
+    "CHROMA_DEPLOYMENT_MODE": "local_http",
     http_vectors.CHROMA_HTTP_HOST_ENV: "127.0.0.1",
     http_vectors.CHROMA_HTTP_PORT_ENV: "8100",
     http_vectors.CHROMA_HTTP_SSL_ENV: "0",
@@ -35,11 +42,8 @@ class Embedder:
         return [0.0] * (http_vectors.EXPECTED_EMBEDDING_DIMENSIONS - 1) + [1.0]
 
 
-class Collection:
-    name = http_vectors.GITHUB_EVIDENCE_COLLECTION
-    metadata = {"hnsw:space": http_vectors.EXPECTED_DISTANCE_METRIC}
-
-    def __init__(self, records=None):
+class SemanticReader:
+    def __init__(self, records=None, error=None):
         self.records = records or [
             (
                 "vec_workagent",
@@ -54,65 +58,40 @@ class Collection:
             ("vec_other", 0.1, {"repository": "liammaxp/other"}),
             ("vec_unresolved", 0.0, {"repository": "liammaxp/unresolved"}),
         ]
-        self.query_kwargs = None
-        self.get_kwargs = None
-
-    def count(self):
-        return len(self.records)
-
-    def query(self, **kwargs):
-        self.query_kwargs = kwargs
-        values = self.records[: kwargs["n_results"]]
-        return {
-            "ids": [[item[0] for item in values]],
-            "distances": [[item[1] for item in values]],
-            "metadatas": [[item[2] for item in values]],
-            "documents": [["diff --git API_KEY=fake"]],
-            "embeddings": [[[0.1]]],
-        }
-
-    def get(self, **kwargs):
-        self.get_kwargs = kwargs
-        return {
-            "ids": [item[0] for item in self.records],
-            "metadatas": [item[2] for item in self.records],
-            "documents": ["must-not-be-consumed" for _ in self.records],
-            "embeddings": [[0.1] for _ in self.records],
-        }
-
-    def __getattr__(self, name):
-        if name in {"add", "upsert", "update", "delete", "peek", "get_or_create_collection"}:
-            raise AssertionError(f"write or unsafe collection method called: {name}")
-        raise AttributeError(name)
-
-
-class Client:
-    def __init__(self, collection=None, error=None):
-        self.collection = collection or Collection()
         self.error = error
-        self.requested_collection = None
-        self.closed = False
+        self.vector_kwargs = None
+        self.read_kwargs = None
 
-    def get_collection(self, *, name):
-        self.requested_collection = name
+    def vector_query(self, semantic_collection_id, **kwargs):
+        self.vector_kwargs = {"semantic_collection_id": semantic_collection_id, **kwargs}
         if self.error is not None:
             raise self.error
-        return self.collection
+        values = self.records[: kwargs["n_results"]]
+        return ChromaVectorResult(
+            semantic_collection_id,
+            tuple(
+                ChromaVectorHit(
+                    record_id=record_id,
+                    distance=distance,
+                    document=None,
+                    metadata=metadata,
+                    rank=rank,
+                )
+                for rank, (record_id, distance, metadata) in enumerate(values, start=1)
+            ),
+        )
 
-    def close(self):
-        self.closed = True
-
-    def __getattr__(self, name):
-        if name in {"get_or_create_collection", "create_collection", "delete_collection", "reset"}:
-            raise AssertionError(f"mutating client method called: {name}")
-        raise AttributeError(name)
-
-
-def _factory(client, calls):
-    def create(**kwargs):
-        calls.append(kwargs)
-        return client
-    return create
+    def read_records(self, semantic_collection_id, **kwargs):
+        self.read_kwargs = {"semantic_collection_id": semantic_collection_id, **kwargs}
+        if self.error is not None:
+            raise self.error
+        return ChromaReadResult(
+            semantic_collection_id,
+            tuple(
+                ChromaReadRecord(record_id, None, metadata)
+                for record_id, _distance, metadata in self.records
+            ),
+        )
 
 
 def _mapping(monkeypatch):
@@ -135,42 +114,36 @@ def test_backend_defaults_to_disabled_and_invalid_values_fail_closed():
         assert http_vectors.get_vector_query_backend_config(values)["backend"] == "disabled"
 
 
-def test_disabled_or_unavailable_server_returns_empty_without_client(monkeypatch):
-    calls = []
-    assert http_vectors.search_github_evidence_vectors_http(
-        query="repository mapping", n_results=5, project_id="workagent",
-        embedder=Embedder(), environ={}, client_factory=lambda **kwargs: calls.append(kwargs),
-    ) == []
-    monkeypatch.setattr(http_vectors, "_server_reachable", lambda config: False)
-    assert http_vectors.search_github_evidence_vectors_http(
-        query="repository mapping", n_results=5, project_id="workagent",
-        embedder=Embedder(), environ=ENABLED, client_factory=lambda **kwargs: calls.append(kwargs),
-    ) == []
-    assert calls == []
-
-
-def test_http_query_uses_exact_collection_authoritative_embedder_and_safe_fields(monkeypatch):
+def test_disabled_or_unavailable_server_returns_empty_without_reader_call(monkeypatch):
     _mapping(monkeypatch)
-    collection = Collection()
-    client = Client(collection)
-    calls = []
+    reader = SemanticReader(error=RuntimeError("PASSWORD=private"))
+    assert http_vectors.search_github_evidence_vectors_http(
+        query="repository mapping", n_results=5, project_id="workagent",
+        embedder=Embedder(), environ={}, read_client=reader,
+    ) == []
+    assert reader.vector_kwargs is None
+    assert http_vectors.search_github_evidence_vectors_http(
+        query="repository mapping", n_results=5, project_id="workagent",
+        embedder=Embedder(), environ=ENABLED, read_client=reader,
+    ) == []
+
+
+def test_http_query_uses_semantic_reader_authoritative_embedder_and_safe_fields(monkeypatch):
+    _mapping(monkeypatch)
+    reader = SemanticReader()
     embedder = Embedder()
     results = http_vectors.search_github_evidence_vectors_http(
         query="repository mapping evidence", n_results=100, project_id="workagent",
-        embedder=embedder, environ=ENABLED, client_factory=_factory(client, calls),
-        skip_socket_preflight=True,
+        embedder=embedder, environ=ENABLED, read_client=reader,
     )
 
     assert embedder.queries == ["repository mapping evidence"]
-    assert client.requested_collection == http_vectors.GITHUB_EVIDENCE_COLLECTION
-    assert client.closed
-    assert calls == [{
-        "host": "127.0.0.1", "port": 8100, "ssl": False, "timeout_seconds": 2.5,
-    }]
-    assert collection.query_kwargs["n_results"] == len(collection.records)
-    assert collection.query_kwargs["include"] == ["distances", "metadatas"]
-    assert len(collection.query_kwargs["query_embeddings"]) == 1
-    assert len(collection.query_kwargs["query_embeddings"][0]) == 384
+    assert reader.vector_kwargs["semantic_collection_id"] == "github_evidence"
+    assert reader.vector_kwargs["consumer_id"] == "github_evidence_vector_reader"
+    assert reader.vector_kwargs["n_results"] == http_vectors.MAX_VECTOR_TOP_K
+    assert reader.vector_kwargs["include_documents"] is False
+    assert reader.vector_kwargs["include_distances"] is True
+    assert len(reader.vector_kwargs["query_embedding"]) == 384
     assert results == [{
         "vector_record_id": "vec_workagent",
         "distance": 0.2,
@@ -186,73 +159,55 @@ def test_http_query_uses_exact_collection_authoritative_embedder_and_safe_fields
         assert forbidden not in serialized
 
 
-def test_missing_collection_wrong_metric_bad_embedding_and_raw_errors_fail_closed(monkeypatch):
+def test_bad_embedding_authority_and_reader_errors_fail_closed(monkeypatch):
     _mapping(monkeypatch)
-    bad_metric = Collection()
-    bad_metric.metadata = {"hnsw:space": "l2"}
-    clients = [Client(error=RuntimeError("PASSWORD=private")), Client(bad_metric)]
-    for client in clients:
-        assert http_vectors.search_github_evidence_vectors_http(
-            query="repository mapping", n_results=5, project_id="workagent",
-            embedder=Embedder(), environ=ENABLED, client_factory=lambda **kwargs: client,
-            skip_socket_preflight=True,
-        ) == []
-        assert client.closed
 
     class WrongDimension:
         def embed(self, query):
             return [0.0] * 10
 
-    calls = []
+    reader = SemanticReader()
     assert http_vectors.search_github_evidence_vectors_http(
         query="repository mapping", n_results=5, project_id="workagent",
-        embedder=WrongDimension(), environ=ENABLED,
-        client_factory=lambda **kwargs: calls.append(kwargs), skip_socket_preflight=True,
+        embedder=WrongDimension(), environ=ENABLED, read_client=reader,
     ) == []
-    assert calls == []
+    assert reader.vector_kwargs is None
+    assert http_vectors.search_github_evidence_vectors_http(
+        query="repository mapping", n_results=5, project_id="workagent",
+        embedder=Embedder(), environ=ENABLED,
+        read_client=SemanticReader(error=RuntimeError("raw private response")),
+    ) == []
 
 
 def test_query_top_k_and_results_are_bounded_in_server_rank_order(monkeypatch):
     _mapping(monkeypatch)
     records = [
-        (
-            f"vec_{index:02d}",
-            index / 100,
-            {"repository": "liammaxp/workagent"},
-        )
+        (f"vec_{index:02d}", index / 100, {"repository": "liammaxp/workagent"})
         for index in range(30)
     ]
-    collection = Collection(records=records)
+    reader = SemanticReader(records=records)
     result = http_vectors.search_github_evidence_vectors_http(
         query="repository mapping", n_results=10_000, project_id="workagent",
-        embedder=Embedder(), environ=ENABLED,
-        client_factory=lambda **kwargs: Client(collection), skip_socket_preflight=True,
+        embedder=Embedder(), environ=ENABLED, read_client=reader,
     )
 
-    assert collection.query_kwargs["n_results"] == http_vectors.MAX_VECTOR_TOP_K
+    assert reader.vector_kwargs["n_results"] == http_vectors.MAX_VECTOR_TOP_K
     assert len(result) == http_vectors.MAX_VECTOR_TOP_K
     assert [item["vector_record_id"] for item in result] == [
         f"vec_{index:02d}" for index in range(http_vectors.MAX_VECTOR_TOP_K)
     ]
 
 
-def test_runtime_http_path_never_constructs_embedded_client(monkeypatch, tmp_path):
+def test_runtime_vector_path_never_initializes_embedded_store(monkeypatch, tmp_path):
     _mapping(monkeypatch)
-    monkeypatch.setattr(http_vectors, "_server_reachable", lambda config: True)
-    client = Client(Collection(records=[
+    reader = SemanticReader(records=[
         ("vec_workagent", 0.25, {"repository": "liammaxp/workagent"})
-    ]))
-
-    class ChromaBoundary:
-        @staticmethod
-        def HttpClient(**kwargs):
-            return client
-
-        @staticmethod
-        def PersistentClient(**kwargs):
-            raise AssertionError("embedded client must not be constructed")
-
-    monkeypatch.setattr(http_vectors, "chromadb", ChromaBoundary)
+    ])
+    monkeypatch.setattr(
+        http_vectors,
+        "_semantic_reader",
+        lambda **_kwargs: reader,
+    )
     monkeypatch.setenv(http_vectors.VECTOR_QUERY_BACKEND_ENV, "chroma_http")
     monkeypatch.setenv(http_vectors.CHROMA_HTTP_HOST_ENV, "127.0.0.1")
     monkeypatch.setenv(http_vectors.CHROMA_HTTP_PORT_ENV, "8100")
@@ -274,15 +229,13 @@ def test_logical_fingerprint_is_bounded_safe_and_order_independent(monkeypatch):
         ("vec_b", 0.2, {"repository": "liammaxp/workagent", "source body": "private"}),
         ("vec_a", 0.1, {"repository": "liammaxp/other", "embedding": "private"}),
     ]
-    first_collection = Collection(records=records)
-    second_collection = Collection(records=list(reversed(records)))
+    first_reader = SemanticReader(records=records)
+    second_reader = SemanticReader(records=list(reversed(records)))
     first = http_vectors.compute_github_evidence_logical_fingerprint_http(
-        environ=ENABLED, client_factory=lambda **kwargs: Client(first_collection),
-        skip_socket_preflight=True,
+        environ=ENABLED, read_client=first_reader,
     )
     second = http_vectors.compute_github_evidence_logical_fingerprint_http(
-        environ=ENABLED, client_factory=lambda **kwargs: Client(second_collection),
-        skip_socket_preflight=True,
+        environ=ENABLED, read_client=second_reader,
     )
 
     assert first == second
@@ -291,7 +244,8 @@ def test_logical_fingerprint_is_bounded_safe_and_order_independent(monkeypatch):
     assert first["record_ids"] == ["vec_a", "vec_b"]
     assert first["repositories"] == ["liammaxp/other", "liammaxp/workagent"]
     assert len(first["fingerprint"]) == 64
-    assert first_collection.get_kwargs == {"limit": 2, "include": ["metadatas"]}
+    assert first_reader.read_kwargs["include_documents"] is False
+    assert first_reader.read_kwargs["max_records"] == http_vectors.MAX_FINGERPRINT_RECORDS
     serialized = json.dumps(first, sort_keys=True)
     assert "source body" not in serialized and "embedding" not in serialized
 
@@ -301,8 +255,7 @@ def test_logical_fingerprint_changes_for_id_or_authorized_repository_metadata(mo
 
     def fingerprint(records):
         return http_vectors.compute_github_evidence_logical_fingerprint_http(
-            environ=ENABLED, client_factory=lambda **kwargs: Client(Collection(records=records)),
-            skip_socket_preflight=True,
+            environ=ENABLED, read_client=SemanticReader(records=records),
         )["fingerprint"]
 
     baseline = fingerprint([("vec_a", 0.1, {"repository": "liammaxp/workagent"})])
@@ -312,15 +265,14 @@ def test_logical_fingerprint_changes_for_id_or_authorized_repository_metadata(mo
 
 
 def test_readiness_metadata_inspection_requests_only_identity_metadata():
-    collection = Collection()
-    client = Client(collection)
+    reader = SemanticReader()
     records = http_vectors.inspect_github_evidence_vector_metadata_http(
         environ=ENABLED,
-        client_factory=lambda **kwargs: client,
-        skip_socket_preflight=True,
+        read_client=reader,
     )
 
-    assert collection.get_kwargs == {"limit": 3, "include": ["metadatas"]}
+    assert reader.read_kwargs["include_documents"] is False
+    assert reader.read_kwargs["metadata_fields"] == http_vectors._FINGERPRINT_METADATA_KEYS
     assert records == [
         {"vector_record_id": "vec_workagent", "metadata": {"repository": "liammaxp/WorkAgent"}},
         {"vector_record_id": "vec_other", "metadata": {"repository": "liammaxp/other"}},
@@ -329,3 +281,11 @@ def test_readiness_metadata_inspection_requests_only_identity_metadata():
     serialized = json.dumps(records, sort_keys=True)
     for forbidden in ("document", "embedding", "raw patch", "diff --git", "API_KEY="):
         assert forbidden not in serialized
+
+
+def test_vector_wrapper_has_no_direct_chroma_or_httpx_client_ownership():
+    source = (http_vectors.__file__ and open(http_vectors.__file__, encoding="utf-8").read())
+    assert "import chromadb" not in source
+    assert "chromadb.Http" + "Client" not in source
+    assert "httpx.Client" not in source
+    assert "socket.create_connection" not in source

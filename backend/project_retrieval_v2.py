@@ -25,6 +25,7 @@ from backend.github_evidence_materializer import (
 )
 from backend.github_raw_storage import DEFAULT_GITHUB_RAW_SOURCES_PATH
 from backend.memory_store import LocalHashEmbedding
+from backend.project_evidence_followup_intents import validate_followup_retrieval_intents
 from backend.project_query_planner import QUERY_GROUPS, build_project_query_plan
 from backend.project_repository_identity import (
     DEFAULT_PROJECT_REPOSITORY_IDENTITY_PATH,
@@ -225,6 +226,7 @@ def retrieve_evidence_for_project_v2(
     jd_targets: Any = None,
     compact_facts: Any = None,
     known_symbols: Any = None,
+    retrieval_intents: Any = None,
     limit: Any = DEFAULT_V2_EVIDENCE_LIMIT,
     readiness_inspector: Callable[..., Any] = inspect_evidence_index_readiness,
     vector_metadata_reader: Callable[..., Any] = inspect_github_evidence_vector_metadata_http,
@@ -251,6 +253,13 @@ def retrieve_evidence_for_project_v2(
         or not isinstance(limit, int)
         or limit <= 0
     ):
+        return []
+    try:
+        validated_intents = validate_followup_retrieval_intents(
+            project_id=project.get("project_id"),
+            retrieval_intents=retrieval_intents,
+        )
+    except (TypeError, ValueError):
         return []
     try:
         if vector_backend_enabled() is not True:
@@ -290,13 +299,16 @@ def retrieve_evidence_for_project_v2(
         ] if isinstance(chunks, (list, tuple)) else []
         if not project_chunks:
             return []
-        plan = query_plan_builder(
-            project_id=project_id,
-            project_memory=_project_memory_for_request(project),
-            compact_facts=compact_facts,
-            jd_targets=jd_targets,
-            known_symbols=known_symbols,
-        )
+        planner_kwargs = {
+            "project_id": project_id,
+            "project_memory": _project_memory_for_request(project),
+            "compact_facts": compact_facts,
+            "jd_targets": jd_targets,
+            "known_symbols": known_symbols,
+        }
+        if validated_intents:
+            planner_kwargs["retrieval_intents"] = validated_intents
+        plan = query_plan_builder(**planner_kwargs)
         if not isinstance(plan, Mapping) or plan.get("project_id") != project_id:
             return []
         local_embedder = embedder if embedder is not None else LocalHashEmbedding()
