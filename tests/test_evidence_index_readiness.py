@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import hashlib
-import sqlite3
 
 from backend import evidence_index_readiness as readiness
 from backend import github_evidence_chunks as chunking
 from backend import project_repository_identity as identity
 from backend.memory_store import MemoryVectorStore
+from backend.chroma_read_models import ChromaReadRecord, ChromaReadResult
 
 
 def project_memory(*projects):
@@ -82,102 +81,72 @@ def test_vector_metadata_inspection_is_read_only_and_sanitized():
     assert "raw_text" not in json.dumps(records)
 
 
+class MetadataReadClient:
+    def __init__(self, records):
+        self.records = records
+        self.calls = []
+
+    def read_records(self, semantic_collection_id, **kwargs):
+        self.calls.append({"semantic_collection_id": semantic_collection_id, **kwargs})
+        maximum = kwargs["max_records"]
+        return ChromaReadResult(
+            semantic_collection_id,
+            tuple(
+                ChromaReadRecord(record_id, None, metadata)
+                for record_id, metadata in self.records[:maximum]
+            ),
+        )
+
+
 def test_memory_store_inspector_requests_metadata_only_without_creating_collection(tmp_path):
-    class Collection:
-        def __init__(self): self.include = None
-        def count(self): return 1
-        def get(self, **kwargs):
-            self.include = kwargs["include"]
-            return {"ids": ["vec_one"], "metadatas": [{"project_id": "ProjectA"}]}
-    store = MemoryVectorStore(tmp_path / "chroma", tmp_path / "memory", tmp_path / "github")
-    store._github = Collection()
+    reader = MetadataReadClient([("vec_one", {"project_id": "ProjectA"})])
+    store = MemoryVectorStore(
+        tmp_path / "chroma",
+        tmp_path / "memory",
+        tmp_path / "github",
+        read_client=reader,
+    )
     assert store.inspect_github_vector_metadata() == [{
         "vector_record_id": "vec_one", "metadata": {"project_id": "ProjectA"},
     }]
-    assert store._github.include == ["metadatas"]
-
-
-def test_memory_store_disk_inspector_is_immutable_sqlite_read_only(tmp_path):
-    chroma_path = tmp_path / "chroma"
-    chroma_path.mkdir()
-    database_path = chroma_path / "chroma.sqlite3"
-    connection = sqlite3.connect(database_path)
-    connection.executescript("""
-        CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-        CREATE TABLE segments (id TEXT PRIMARY KEY, scope TEXT NOT NULL, collection TEXT NOT NULL);
-        CREATE TABLE embeddings (id INTEGER PRIMARY KEY, segment_id TEXT NOT NULL, embedding_id TEXT NOT NULL);
-        CREATE TABLE embedding_metadata (id INTEGER, key TEXT, string_value TEXT);
-        INSERT INTO collections VALUES ('collection', 'github_evidence');
-        INSERT INTO segments VALUES ('metadata-segment', 'METADATA', 'collection');
-        INSERT INTO embeddings VALUES (1, 'metadata-segment', 'vector-one');
-        INSERT INTO embedding_metadata VALUES (1, 'repository', 'owner/repo');
-        INSERT INTO embedding_metadata VALUES (1, 'chroma:document', 'private body');
-    """)
-    connection.commit(); connection.close()
-    before = hashlib.sha256(database_path.read_bytes()).hexdigest()
-    store = MemoryVectorStore(chroma_path, tmp_path / "memory", tmp_path / "github")
-    assert store.inspect_github_vector_metadata() == [{
-        "vector_record_id": "vector-one", "metadata": {"repository": "owner/repo"},
+    assert reader.calls == [{
+        "semantic_collection_id": "github_evidence",
+        "consumer_id": "github_evidence_metadata_reader",
+        "include_documents": False,
+        "metadata_fields": (
+            "github_repository", "project_id", "project_name", "repo", "repository",
+            "repository_project_id", "repository_url", "source", "updated_at",
+        ),
+        "max_records": 10000,
     }]
-    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == before
 
 
-def test_disk_inspector_stays_immutable_when_live_collection_is_initialized(tmp_path):
+def test_memory_store_inspector_never_reads_local_sqlite_or_live_collection(tmp_path):
     chroma_path = tmp_path / "chroma"
     chroma_path.mkdir()
     database_path = chroma_path / "chroma.sqlite3"
-    connection = sqlite3.connect(database_path)
-    connection.executescript("""
-        CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-        CREATE TABLE segments (id TEXT PRIMARY KEY, scope TEXT NOT NULL, collection TEXT NOT NULL);
-        CREATE TABLE embeddings (id INTEGER PRIMARY KEY, segment_id TEXT NOT NULL, embedding_id TEXT NOT NULL);
-        CREATE TABLE embedding_metadata (id INTEGER, key TEXT, string_value TEXT);
-        INSERT INTO collections VALUES ('collection', 'github_evidence');
-        INSERT INTO segments VALUES ('metadata-segment', 'METADATA', 'collection');
-        INSERT INTO embeddings VALUES (1, 'metadata-segment', 'vector-one');
-        INSERT INTO embedding_metadata VALUES (1, 'repository', 'owner/repo');
-    """)
-    connection.commit(); connection.close()
+    database_path.write_bytes(b"must-not-be-read")
 
     class LiveCollection:
         def count(self):
-            raise AssertionError("readiness inspection must not open the live collection")
+            raise AssertionError("business reads must not open the embedded collection")
 
-    store = MemoryVectorStore(chroma_path, tmp_path / "memory", tmp_path / "github")
+    reader = MetadataReadClient([("vector-one", {"repository": "owner/repo"})])
+    store = MemoryVectorStore(
+        chroma_path,
+        tmp_path / "memory",
+        tmp_path / "github",
+        read_client=reader,
+    )
     store._github = LiveCollection()
-    before = hashlib.sha256(database_path.read_bytes()).hexdigest()
     assert store.inspect_github_vector_metadata() == [{
         "vector_record_id": "vector-one", "metadata": {"repository": "owner/repo"},
     }]
-    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == before
+    assert database_path.read_bytes() == b"must-not-be-read"
 
 
-def test_memory_store_status_reads_reuse_immutable_metadata_inspector(tmp_path):
+def test_memory_store_status_reads_use_operational_reader_without_touching_storage(tmp_path):
     chroma_path = tmp_path / "chroma"
-    chroma_path.mkdir()
-    database_path = chroma_path / "chroma.sqlite3"
-    connection = sqlite3.connect(database_path)
-    connection.executescript("""
-        CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-        CREATE TABLE segments (id TEXT PRIMARY KEY, scope TEXT NOT NULL, collection TEXT NOT NULL);
-        CREATE TABLE embeddings (id INTEGER PRIMARY KEY, segment_id TEXT NOT NULL, embedding_id TEXT NOT NULL);
-        CREATE TABLE embedding_metadata (id INTEGER, key TEXT, string_value TEXT);
-        INSERT INTO collections VALUES ('collection', 'github_evidence');
-        INSERT INTO collections VALUES ('profile-collection', 'profile_facts');
-        INSERT INTO segments VALUES ('metadata-segment', 'METADATA', 'collection');
-        INSERT INTO segments VALUES ('profile-segment', 'METADATA', 'profile-collection');
-        INSERT INTO embeddings VALUES (1, 'metadata-segment', 'vector-one');
-        INSERT INTO embeddings VALUES (2, 'metadata-segment', 'vector-two');
-        INSERT INTO embeddings VALUES (3, 'profile-segment', 'profile-one');
-        INSERT INTO embedding_metadata VALUES (1, 'repository', 'owner/repo');
-        INSERT INTO embedding_metadata VALUES (1, 'updated_at', '2026-08-01T00:00:00Z');
-        INSERT INTO embedding_metadata VALUES (1, 'source', 'commit');
-        INSERT INTO embedding_metadata VALUES (1, 'chroma:document', 'private body');
-        INSERT INTO embedding_metadata VALUES (2, 'repository', 'owner/repo');
-        INSERT INTO embedding_metadata VALUES (2, 'updated_at', '2026-08-02T00:00:00Z');
-        INSERT INTO embedding_metadata VALUES (2, 'source', 'repository');
-    """)
-    connection.commit(); connection.close()
 
     class LiveCollection:
         def count(self):
@@ -186,10 +155,45 @@ def test_memory_store_status_reads_reuse_immutable_metadata_inspector(tmp_path):
         def get(self, **_kwargs):
             raise AssertionError("status reads must not open the live collection")
 
-    store = MemoryVectorStore(chroma_path, tmp_path / "memory", tmp_path / "github")
+    repository_summary = type("RepositorySummary", (), {"repository": "owner/repo"})()
+    github_status = type(
+        "OperationalStatus",
+        (),
+        {
+            "available": True,
+            "safe_record_count": 2,
+            "repositories": (repository_summary,),
+        },
+    )()
+
+    class OperationalReader:
+        def safe_count(self, semantic_id):
+            return {"profile_facts": 1, "github_evidence": 2}[semantic_id]
+
+        def read_collection_status(self, semantic_id, **_kwargs):
+            assert semantic_id == "github_evidence"
+            return github_status
+
+    store = MemoryVectorStore(
+        chroma_path,
+        tmp_path / "memory",
+        tmp_path / "github",
+        operational_reader=OperationalReader(),
+        read_client=MetadataReadClient([
+            ("vector-one", {
+                "repository": "owner/repo",
+                "updated_at": "2026-08-01T00:00:00Z",
+                "source": "commit",
+            }),
+            ("vector-two", {
+                "repository": "owner/repo",
+                "updated_at": "2026-08-02T00:00:00Z",
+                "source": "repository",
+            }),
+        ]),
+    )
     store._github = LiveCollection()
     store._profile = LiveCollection()
-    before = hashlib.sha256(database_path.read_bytes()).hexdigest()
     assert store.profile_count() == 1
     assert store.github_count() == 2
     assert store.list_github_repositories() == [{
@@ -199,7 +203,7 @@ def test_memory_store_status_reads_reuse_immutable_metadata_inspector(tmp_path):
         "available": True,
         "count": 2,
         "repositories": [{
-            "repository": "owner/repo", "updated_at": "2026-08-02T00:00:00Z",
+            "repository": "owner/repo", "updated_at": "",
         }],
     }
     assert store.github_preview_metadata(limit=1) == [{
@@ -208,7 +212,6 @@ def test_memory_store_status_reads_reuse_immutable_metadata_inspector(tmp_path):
         "updated_at": "2026-08-01T00:00:00Z",
         "source": "commit",
     }]
-    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == before
 
 
 def test_identity_categories_and_authoritative_resolution_are_counted():

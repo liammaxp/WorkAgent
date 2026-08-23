@@ -56,9 +56,17 @@ The project is designed for truthful, conservative job-search writing. It helps 
 - Make GitHub evidence persistence concurrency-safe and idempotent: JSONL upserts report `created`, `updated`, or `unchanged`, and a pipeline-run manifest detects when derived records are stale relative to their inputs.
 - Report Project Memory changes from structural JSON comparison rather than trusting model-provided counts; large output previews are paginated with UTF-8-safe boundaries.
 - Provide a default-off GitHub evidence retrieval V2 path with bounded project query planning, keyword/symbol/vector hybrid search, backend-only raw-source/chunk storage, and redacted result shapes; the enabled resume path is readiness-gated and fails closed when local prerequisites are unavailable.
+- Assess project-evidence coverage by mechanism, storage, retrieval/ranking, validation/repair, metrics/impact, and JD-alignment dimensions; prioritize bounded evidence gaps and turn them into validated follow-up retrieval intents without inventing claims.
+- Maintain a strict engineering-story chain: authority-grounded evidence resolution, event-core clustering, conservative reconstruction, separate claim/story sufficiency and opportunity assessment, durable JSON memory, and canonical matching; it preserves authority references, claim boundaries, lifecycle status, ambiguity, and missing human/workflow context while keeping story prose and resume bullets downstream.
+- Maintain a reviewed Chroma access inventory that maps client construction, collection resolution, reads, writes, vector queries, indexing, maintenance, and migration work to explicit owners and migration work items without importing application modules or opening protected storage.
+- Enforce a bounded, WorkAgent-owned Chroma HTTP transport with allowlisted metadata-only responses, bounded query/get/filter sizes, stable error codes, and explicit timeout behavior; the installed Chroma client's generic timeout argument is not treated as sufficient.
+- Keep dedicated local Chroma server lifecycle and persistence ownership explicit: start/health/stop/restart are operator-only, protected `information/chroma` storage is server-owned, embedded production access fails closed, and no request path silently falls back to an embedded client.
+- Provide filesystem-only Chroma backup/recovery and HTTP logical-integrity gates that require verified stopped-server state, accepted protected-file baselines, compatibility checks, stable fingerprints, and isolated restore targets before any later cutover.
+- Read operational Chroma status through a bounded HTTP-only adapter for existing collections; status/count reads do not inspect SQLite or protected files, create collections, expose records, or invoke the legacy embedded constructor.
 - Maintain an authoritative project-to-repository identity layer with bounded candidate detection, conflict handling, explicit user confirmations, and atomic confirmation artifacts. The GitHub Evidence page now includes a repository-association panel; mappings are scoped to projects and do not silently infer ownership.
 - Prepare saved GitHub evidence through explicit readiness checks and an idempotent materialization service. The backend exposes preparation status/run endpoints, writes redacted raw sources, bounded chunks, and a lineage manifest, and reports partial/blocked states without exposing raw content in product responses.
 - Process saved GitHub evidence through a semantic project evidence pipeline that validates bounded inputs, normalizes and deduplicates records, synthesizes conservative evidence facts, scores evidence quality, groups and assesses capability candidates, inherits claim boundaries, and builds authoritative capability facts without inferring unsupported claims. The backend exposes bounded project-evidence status, build, inspect, health, preview, and raw-inspection endpoints; the full processing panel is development-only in the Web UI.
+- Capture a deterministic, privacy-safe pre-migration baseline for protected local Chroma storage without opening the embedded database, starting a server, or reading raw records. The baseline tool validates protected file bytes, logical-inventory boundaries, evidence-artifact hashes, and classified Chroma client call sites.
 - Track applications in a local SQLite database.
 - Provide both a local Web UI and the original CLI workflow.
 - Switch the Web UI between Chinese and English.
@@ -80,12 +88,34 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- project_evidence_*.py         # Evidence normalization, synthesis, scoring, and persistence
 |   |-- project_capability_*.py       # Capability taxonomy, grouping, scoring, boundaries, and fact building
 |   |-- project_capability_memory.py   # Authoritative capability-fact memory model and deterministic persistence
+|   |-- project_evidence_coverage.py / project_evidence_followup_intents.py # Coverage gaps and bounded retrieval goals
+|   |-- engineering_story_models.py / engineering_story_evidence.py # Strict story contracts and authority references
+|   |-- engineering_story_clustering.py / engineering_story_reconstruction.py # Event-core clustering and conservative reconstruction
+|   |-- engineering_story_sufficiency.py / engineering_story_opportunity.py # Claim/story sufficiency and bounded gaps
+|   |-- engineering_story_memory.py / engineering_story_matching.py # Atomic JSON memory and canonical identity matching
 |   |-- project_claim_boundaries.py   # Conservative allowed/forbidden claim boundaries
 |   |-- project_repository_identity.py # Authoritative repository identity and confirmation artifacts
 |   |-- project_repository_mapping_service.py # Bounded repository/project association workflow
 |   |-- github_evidence_materializer.py # Idempotent raw-source/chunk materialization and lineage
 |   |-- github_evidence_preparation_service.py # Preparation preflight, locking, and status/run orchestration
 |   |-- evidence_index_readiness.py # Saved evidence/index/vector readiness inspection
+|   |-- chroma_baseline_models.py # Privacy-safe migration-baseline schemas and validation
+|   |-- chroma_migration_baseline.py # Non-mutating protected Chroma baseline capture/verify CLI
+|   |-- chroma_access_models.py # Access-inventory schema, stable IDs, digest, and privacy validation
+|   |-- chroma_access_manifest.py # Reviewed Chroma access classifications and manifest digest
+|   |-- chroma_access_inventory.py # AST discovery, manifest comparison, and bounded inspect/verify CLI
+|   |-- chroma_config.py       # Fail-closed Chroma deployment configuration
+|   |-- chroma_collection_registry.py # Semantic collection/lifecycle/consumer registry
+|   |-- chroma_http_client_factory.py # Centralized approved HTTP collection access
+|   |-- chroma_collection_literal_guard.py # Static guard for collection-name literals
+|   |-- chroma_http_transport.py # Bounded WorkAgent-owned Chroma HTTP transport
+|   |-- chroma_server_lifecycle.py # Explicit local server lifecycle controller
+|   |-- chroma_persistence_guard.py # Single-owner protected-storage enforcement
+|   |-- chroma_backup_recovery.py # Filesystem-only backup/restore and recovery gate
+|   |-- chroma_logical_fingerprint.py # HTTP logical-integrity fingerprints and gates
+|   |-- chroma_operational_reader.py # HTTP-only status/count adapter
+|   |-- chroma_read_client.py / chroma_write_client.py # Lazy semantic HTTP read/write boundaries
+|   |-- chroma_read_models.py / chroma_write_models.py # Bounded immutable read/write contracts
 |   |-- capability_extractor.py
 |   |-- tech_ontology.py     # Compact technology taxonomy and safe-claim helpers
 |   |-- data/
@@ -97,6 +127,8 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- package.json         # Frontend scripts and dependencies
 |   `-- vite.config.js       # Vite dev server and /api proxy
 |-- information/             # Local private working files, Chroma vectors, and SQLite database
+|-- docs/
+|   `-- chroma_local_server_architecture.md # Protected Chroma baseline and migration boundary
 |-- background/              # Prompts and background notes
 |-- logs/                    # Development/runtime logs
 |-- outputs/
@@ -120,10 +152,72 @@ The system has seven main layers:
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
 4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, `backend/evidence_*.py`, `backend/github_raw_storage.py`, `backend/github_evidence_chunks.py`, `backend/evidence_chunk_search.py`, `backend/github_evidence_materializer.py`, and `backend/evidence_index_readiness.py`: GitHub evidence raw-source storage plus concurrency-safe/idempotent JSONL upserts, lineage-aware materialization, bounded chunking/search, readiness diagnostics, and redacted backend result shapes for saved GitHub context.
 5. `backend/project_change_memory.py` and `backend/project_change_pipeline.py`: project-change extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
-6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, and atomic project-evidence-memory persistence. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory persistence remains a Python-internal boundary.
-7. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, `backend/project_claim_boundaries.py`, `backend/project_evidence_coverage.py`, and `backend/project_evidence_followup_intents.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, atomic project-evidence-memory persistence, coverage-gap prioritization, and bounded follow-up retrieval intents. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory, coverage, and follow-up persistence remain Python-internal boundaries.
+7. `backend/engineering_story_models.py`, `backend/engineering_story_evidence.py`, `backend/engineering_story_clustering.py`, `backend/engineering_story_reconstruction.py`, `backend/engineering_story_sufficiency.py`, `backend/engineering_story_opportunity.py`, `backend/engineering_story_memory.py`, and `backend/engineering_story_matching.py`: strict, persistence-ready story contracts, authority resolution, event-core clustering, conservative reconstruction, separate claim/story sufficiency, bounded opportunity detection, atomic canonical-JSON memory, and deterministic identity matching. These modules preserve evidence references and claim boundaries; they do not generate resume prose, infer ownership, or use JD/company context during clustering.
+8. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 The current retrieval V2 work also includes `backend/project_query_planner.py`, `backend/project_retrieval_v2.py`, `backend/evidence_hybrid_retrieval.py`, and `backend/chroma_http_vector_search.py`. The planner builds deterministic, project-scoped, bounded query groups from project facts and JD targets while filtering raw, secret, and boilerplate content. `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` is default-off; when explicitly enabled, resume evidence callers require repository authority, ready materialized/indexed evidence, and the local Chroma HTTP vector backend before routing through bounded hybrid retrieval. It does not enable capability memory, read raw content through the API, or add a frontend retrieval control.
+
+## Chroma Migration Baseline
+
+`backend/chroma_migration_baseline.py` and `backend/chroma_baseline_models.py` provide a non-mutating baseline before any local Chroma client or collection migration. The default capture walks `information/chroma/` with ordinary filesystem reads only, rejects symlinks/junctions/reparse points, detects changes during reads, records deterministic SHA-256 inventories, and statically classifies `PersistentClient`/`HttpClient` call sites. Logical collection metadata is unavailable by default because embedded inspection may mutate database internals; an already-running approved local HTTP boundary can be opted in without starting or stopping a server.
+
+The baseline contains only repository-relative paths, sizes, hashes, bounded schema markers, aggregate counts, and privacy declarations. It excludes documents, embeddings, patches, raw metadata, secrets, environment values, and absolute paths. Captures are written atomically under the ignored `information/chroma_migration_baselines/` directory; verification never rewrites an accepted baseline.
+
+```powershell
+python -m backend.chroma_migration_baseline capture
+python -m backend.chroma_migration_baseline capture --approved-http
+python -m backend.chroma_migration_baseline verify
+python -m backend.chroma_migration_baseline verify --compare-protected --compare-artifacts
+```
+
+This is a migration safety gate, not a Chroma server lifecycle tool or a replacement for logical integrity checks. Backup/restore and centralized HTTP ownership are implemented as separate internal gates; production cutover, legacy-client removal, and data migration remain outside the current implementation. See `docs/chroma_local_server_architecture.md` for the operational boundary.
+
+## Chroma Access Inventory
+
+`backend/chroma_access_inventory.py` adds the authoritative, reviewed map of current Chroma access paths. It performs an AST scan of backend Python source without importing application modules, constructing clients, connecting to a server, or reading protected storage. The reviewed `chroma_access_inventory.v1` manifest currently fixes 47 access records with stable semantic IDs and a SHA-256 digest, then compares discovery against the manifest to detect new, stale, or reclassified call sites.
+
+Each record classifies runtime (`production`, `maintenance_only`, `migration_only`, or `test_only`), client type (`persistent_embedded`, `http`, `fake_http`, or `ephemeral_embedded`), lifecycle (`read`, `vector_query`, `write`, `index`, `migration`, `maintenance`, or `test_only`), access mode, collection resolution, current owner, storage-internal mutation risk, and a later migration work item. Strict bounded schema/privacy validation rejects absolute paths, credentials, source bodies, diffs, documents, embeddings, and unknown classifications. The inventory is classification evidence, not authorization to migrate a call site; the existing embedded client and narrow HTTP bridge remain unchanged.
+
+```powershell
+python -m backend.chroma_access_inventory inspect
+python -m backend.chroma_access_inventory verify
+python -m pytest -q tests\test_chroma_access_inventory.py tests\test_chroma_migration_baseline.py
+```
+
+The focused inventory and baseline regression suite most recently passed 73 tests. The inventory and migration baseline remain uncommitted, read-only pre-migration safeguards; they do not add HTTP routes, frontend controls, Chroma server lifecycle management, or retrieval V2 production integration.
+
+## Chroma Controlled HTTP Access
+
+The worktree also contains a fail-closed access-control layer for the approved local Chroma HTTP boundary. `backend/chroma_config.py` accepts only explicit deployment modes (`disabled`, loopback `local_http`, validated `remote_http`, and test-owned `ephemeral_test`), rejects contradictory or unsafe settings, and bounds ports and request timeouts. `backend/chroma_collection_registry.py` is the semantic authority for collection names, schema versions, lifecycles, approved consumers, legacy migration consumers, metadata allowlists, and the rule that production code may not create collections automatically.
+
+`backend/chroma_http_client_factory.py` is the central lazy factory for existing collections. It requires a registered semantic collection, approved consumer/lifecycle, explicit HTTP enablement, and bounded transport handling; it never exposes raw transport errors or silently falls back to embedded Chroma. `backend/chroma_collection_literal_guard.py` statically scans Python syntax to reject unregistered or duplicated production collection-name literals. The factory and registry remain backend-internal: they do not add a public API route, server lifecycle manager, automatic migration, or frontend control.
+
+The latest recorded Chroma-focused backend run, excluding the long-running server integration command, passed 694 tests with 1 skipped. It includes endpoint-owned local HTTP fixtures and timeout-capability checks, and validates configuration fail-closed behavior, collection/consumer synchronization with the reviewed inventory, no-create semantics, bounded error mapping, isolated ephemeral test endpoints, semantic read/write boundaries, production-access policy, and absence of protected-storage/raw-document leakage. The broader Chroma integration command previously timed out and is not counted as a full-suite pass.
+
+## Chroma Operations and Migration Gates
+
+`backend/chroma_http_transport.py` is the WorkAgent-owned bounded HTTP boundary. It uses the public Chroma v2 endpoints through `httpx`, caps request/response sizes, permits only safe metadata/count/vector-distance fields, rejects unsafe filters and response shapes, and maps failures to stable bounded codes. Transport timeouts are enforced by WorkAgent even though the installed public Chroma client does not expose the required generic timeout contract.
+
+`backend/chroma_server_lifecycle.py` and `windows/chroma_server.ps1` provide the explicit operator CLI (`start`, `health`, `stop`, `restart`) for a dedicated loopback server. Lifecycle state uses `chroma_server_runtime_state.v1`, verifies process/endpoint ownership before adoption or termination, keeps runtime state outside `information/chroma`, and never starts Chroma from application import, request, or frontend paths. `local_http` is the only locally owned production mode; remote and test modes have separate ownership boundaries.
+
+`backend/chroma_persistence_guard.py` makes `information/chroma` server-owned. The known legacy embedded constructor is guarded before directory creation/client construction and fails closed in production; only disposable, explicitly test-owned storage may use an embedded client. Maintenance and migration labels do not grant an implicit bypass, and HTTP failures never fall back to embedded Chroma.
+
+`backend/chroma_backup_recovery.py` is a filesystem-only backup, isolated restore, and recovery gate. It requires verified stopped-server state, a free endpoint, absent runtime state, and an accepted protected-file baseline; it uses A/B source consistency checks, immutable manifests, atomic publication, compatibility policy checks, and rejects absolute paths, secrets, documents, embeddings, and raw metadata. `backend/chroma_logical_fingerprint.py` adds registry-gated HTTP collection fingerprints and baseline/gate comparisons without reading persistence files, documents, or embeddings. Neither path is wired to production routes or automatic cutover.
+
+`backend/chroma_operational_reader.py` is the narrow read-only adapter for existing collection readiness, existence, safe counts, and bounded repository summaries. `MemoryVectorStore.profile_count`, `github_count`, and `github_metadata_status` use this HTTP-only path; unavailable, disabled, malformed, or timed-out reads return safe unavailable/empty results without opening `information/chroma` or invoking the legacy constructor. Retrieval and recovery remain separate migration-gate work; business reads, writes, and vector access use the semantic clients below.
+
+`backend/chroma_read_client.py` and `backend/chroma_write_client.py` now provide the lazy semantic boundaries for business reads, vector queries, upserts, and deletes. They validate registered collections, approved consumers/lifecycles, project authority, request bounds, metadata projections, and existing-only collection policy before delegating to the central factory and bounded transport. `MemoryVectorStore` uses these clients for profile/GitHub reads and writes; imports and client construction perform no I/O, production embedded access fails closed, and HTTP failures never fall back to embedded Chroma. The semantic clients are backend-internal and do not authorize production cutover or historical import.
+
+The production-access policy regression suite also enforces that production code has no direct `PersistentClient`, `chromadb.HttpClient`, or independent Chroma HTTP access, while disposable test-only embedded access remains allowed. Read/write operations are bounded and fail closed, but multi-request replacement or cleanup is not claimed to be transactionally atomic.
+
+```powershell
+python -m backend.chroma_server_lifecycle health --json
+python -m backend.chroma_server_lifecycle start --json
+python -m backend.chroma_server_lifecycle stop --json
+```
+
+The lifecycle, persistence-guard, backup/recovery, logical-fingerprint, transport, and operational-reader suites are migration-gate tests only. A narrower recorded run passed 214 tests with 2 integration tests skipped; the broader Chroma-focused run is recorded above. They use fake transports, disposable temporary storage, dynamic non-production ports, or an ephemeral server; they never open or mutate the protected production Chroma database during verification.
 
 ## Model Providers
 
@@ -392,13 +486,17 @@ Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persi
 
 Project capability memory is defined by `project_capability_memory.v1` and persists to `information/project_capability_memory.json` through Python-internal builders, validators, loaders, and atomic persistence helpers. It accepts only already-built authoritative capability facts, derives deterministic project summaries and diagnostics, stores a canonical content hash, rejects malformed or conflicting identities, forbids raw/sensitive artifact content, and protects the upstream project-evidence artifact path from overwrite. This persistence layer has no dedicated HTTP route or production frontend trigger yet.
 
+Project evidence coverage is also available as a bounded internal analysis. `project_evidence_coverage.py` evaluates evidence across implementation mechanisms, storage, retrieval/ranking, validation/repair, metrics/impact, and JD alignment; `project_evidence_followup_intents.py` prioritizes gaps and converts them into limited retrieval goals, evidence types, requirement IDs, and reference evidence. The planner and retrieval V2 validate these intents for project scope, enums, counts, and lengths, then fail closed on invalid input. This analysis adds no new business HTTP route or frontend control and does not turn a gap into a claim.
+
+Engineering-story support is kept as a separate evidence-grounded contract layer. `engineering_story_models.py` and `engineering_story_evidence.py` require bounded authority references, evidence states, claim boundaries, and lifecycle/revalidation status. `engineering_story_clustering.py` groups evidence by explicit change/event-core relationships, preserves ambiguous or weak lineage as such, and avoids using JD/company context or generating prose. `engineering_story_reconstruction.py` rebuilds only the minimum supported story, while `engineering_story_sufficiency.py` separates technical-claim support from causal-story sufficiency and `engineering_story_opportunity.py` reports structured information gaps without generating JD advice. `engineering_story_memory.py` persists strict, hashed canonical JSON with atomic replacement; `engineering_story_matching.py` derives stable canonical IDs from project and founding structural seeds, not mutable wording or scores. These modules do not infer ownership, outcomes, or resume bullets.
+
 GitHub evidence retrieval V2 is controlled by `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` and is currently default-off. Its bounded planner/search/storage modules preserve project scope, query/result limits, stable ordering, and redacted metadata; raw source text remains outside safe search results. When explicitly enabled, the resume evidence path now requires ready repository authority, materialized chunks, index readiness, and the local Chroma HTTP vector backend, then merges keyword/symbol/vector hits through deterministic hybrid ranking; any missing prerequisite or controlled failure returns an empty result without legacy fallback or writes. The worktree also includes retrieval quality evaluation helpers that compare legacy/V2 safety, determinism, provenance coverage, and bounded context metrics without claiming real-world recall.
 
 Repository identity and evidence preparation are separate from retrieval V2. The repository-mapping endpoints expose unresolved aliases and known projects, then require an explicit `project_id` + canonical `owner/repository` confirmation before writing `information/project_repository_confirmations.json`. Preparation reads saved GitHub context and project memory, validates identity and index readiness, and materializes `information/github_raw_sources.jsonl`, `information/github_evidence_chunks.jsonl`, and `information/github_evidence_materialization.json` under bounded, redacted, idempotent rules. `GET /api/github/evidence-preparation` is a read-only preflight; `POST /api/github/evidence-preparation/run` requires explicit confirmation and reports `ready_to_prepare`, `prepared`, `partial`, `blocked`, or `error` states. The repository association UI is available in the GitHub Evidence page, while retrieval V2 remains backend-only.
 
 The preparation layer also supports readiness checks and bounded vector/lexical/hybrid search inputs. It validates project/repository/path scope, chunk mappings, vector metadata, materialization manifests, and lineage before exposing search candidates; search results contain only bounded metadata, summaries, hashes, labels, and hit reasons, never raw source bodies.
 
-中文说明：仓库身份与 evidence preparation 独立于 retrieval V2。系统会先展示未解决别名和已知项目，只有显式确认 `project_id` 与 canonical `owner/repository` 后才写入确认 artifact；preparation 会校验身份和索引就绪状态，并以有界、脱敏、幂等规则物化 raw source、chunks 与 lineage manifest。状态接口只读，执行接口需要显式确认；仓库关联面板已接入 GitHub Evidence 页面，而 retrieval V2 仍是后端占位脚手架。
+中文说明：仓库身份与 evidence preparation 独立于 retrieval V2。系统会先展示未解决别名和已知项目，只有显式确认 `project_id` 与 canonical `owner/repository` 后才写入确认 artifact；preparation 会校验身份和索引就绪状态，并以有界、脱敏、幂等规则物化 raw source、chunks 与 lineage manifest。状态接口只读，执行接口需要显式确认；仓库关联面板已接入 GitHub Evidence 页面，而 retrieval V2 仍是默认关闭、仅后端可用且由 readiness gate 保护的路径。
 
 ## Local Files And Privacy
 
@@ -422,6 +520,10 @@ WorkAgent intentionally uses local files as working state. These files can conta
 - `information/github_evidence_chunks.jsonl`
 - `information/github_evidence_materialization.json`
 - `information/project_capability_memory.json`
+- `information/chroma_migration_baselines/`
+- `information/backups/chroma/`
+- `information/chroma_logical_fingerprints/`
+- `information/runtime/chroma/`
 - `information/chroma/`
 - `information/github_accounts.txt`
 - `information/applications.sqlite3`
@@ -651,6 +753,30 @@ Repository privacy-policy regression test:
 python -m pytest tests\test_repository_privacy_policy.py -q
 ```
 
+Chroma migration-baseline regression tests:
+
+```powershell
+python -m pytest tests\test_chroma_migration_baseline.py -q
+```
+
+Chroma access-inventory and migration-baseline regression tests:
+
+```powershell
+python -m pytest -q tests\test_chroma_access_inventory.py tests\test_chroma_migration_baseline.py
+```
+
+The latest focused run passed 73 tests. It covers AST discovery, reviewed-manifest synchronization, stable inventory digests, privacy/schema fail-closed checks, and the read-only migration baseline.
+
+The latest baseline-focused run passed 30 tests. It verifies deterministic protected-file hashing, fail-closed path handling, privacy-safe schema validation, classified Chroma call sites, atomic capture, and non-rewriting verification.
+
+Chroma controlled-access and HTTP integration regression tests:
+
+```powershell
+python -m pytest -q tests\test_chroma_config.py tests\test_chroma_collection_registry.py tests\test_chroma_http_client_factory.py tests\test_chroma_http_integration.py tests\test_chroma_http_timeout_capability.py tests\test_chroma_access_inventory.py tests\test_chroma_migration_baseline.py
+```
+
+The latest recorded Chroma-focused backend run passed 694 tests with 1 skipped. It covers deployment-mode validation, semantic collection and consumer policy, static collection-literal guarding, centralized lazy HTTP access, timeout behavior, endpoint-owned integration fixtures, access-inventory synchronization, migration-baseline privacy checks, semantic read/write clients, MemoryVectorStore HTTP routing, coverage/follow-up intent validation, and production-access policy. The broader Chroma integration command previously timed out, so this result is not a claim that the full integration suite passed.
+
 Evidence hardening regression tests:
 
 ```powershell
@@ -694,8 +820,13 @@ Production frontend output is written to `outputs/frontend/`.
 - GitHub evidence currently focuses on status summaries, bounded previews, and pipeline results rather than a fully polished visual explorer for all GitHub evidence and project change memory records.
 - Evidence lineage and persistence diagnostics are available through backend status/health responses, but the Web UI does not yet expose all created/updated/unchanged counts or manifest details.
 - Retrieval V2 is an internal, default-off backend path: it has no production HTTP route or frontend control, and its enabled resume path requires ready local artifacts plus Chroma HTTP vector access; it fails closed to an empty result when prerequisites are absent.
+- The Chroma migration baseline is intentionally read-only and does not migrate clients, collections, or data; logical inventory remains unavailable unless an already-running approved HTTP boundary is explicitly enabled.
+- Chroma HTTP access is still an internal, opt-in boundary: configuration is fail-closed, collection creation is forbidden for production consumers, legacy embedded consumers remain migration work, and no public route or frontend control exposes this layer.
+- Chroma server lifecycle, persistence ownership, backup/recovery, logical fingerprints, and operational status reads are explicit internal migration gates; they do not perform production cutover, migrate existing consumers, rebuild data, or expose a public API/frontend control.
+- Semantic Chroma read/write clients now cover the approved internal business access path, but production cutover, historical import, legacy embedded-client removal, and multi-request transactionality are not complete.
 - Evidence preparation, materialization, readiness, vector/lexical/hybrid search, quality evaluation, and repository mapping are covered by bounded backend modules and focused tests. The frontend can manage repository association and preparation, but does not yet expose retrieval controls or search results.
 - Project evidence memory is persisted and inspectable through bounded FastAPI endpoints, while the full project-evidence explorer is not rendered in the GitHub Evidence page. The development-only evidence pipeline panel is hidden from production builds.
+- Engineering-story contracts, event-core clustering, reconstruction, sufficiency/opportunity analysis, memory, matching, coverage gaps, and follow-up intents are backend-internal evidence constraints and retrieval-planning helpers; they have no dedicated HTTP route, production frontend page, or automatic resume-prose generation path.
 - Resume and cover letter editing has no built-in document preview or DOCX export; tailored resumes can be exported to PDF when a LaTeX toolchain is installed.
 - The app is local-first and single-user; it has no login, multi-user isolation, or cloud deployment model.
 
@@ -761,7 +892,14 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 - 从简历和向量记忆中扫描 GitHub 仓库链接，并在确认后读取 README、语言、提交记录、文件变更和 diff 信号。
 - 保守使用 GitHub 证据支持项目描述，避免夸大个人贡献。
 - 提供默认关闭的 GitHub evidence retrieval V2 路径：包含有界 project query planner、chunk keyword/symbol/vector hybrid search、仅后端 raw-source/chunk 存储和脱敏结果；显式开启后要求仓库 authority、物化/索引就绪和本地 Chroma HTTP 向量后端，条件不足时 fail-closed。
+- 按 implementation mechanism、storage、retrieval/ranking、validation/repair、metrics/impact 和 JD alignment 维度评估 project evidence coverage，优先处理有界 evidence gaps，并将缺口转换为经过校验的 follow-up retrieval intents，不把缺口直接变成声明。
+- 提供严格的 engineering-story contract 和 evidence clustering，保留 authority references、claim boundaries、生命周期、event-core identity、歧义和缺失的人类/工作流上下文；story prose 与 resume bullet 仍属于下游能力，不由 clustering 生成。
 - 通过 semantic project evidence pipeline 处理已保存的 GitHub 证据：校验有界输入、规范化和去重记录、合成保守 evidence facts、评分证据质量、分组和评估 capability candidates、继承 claim boundaries，并在不推断 unsupported claim 的前提下构建权威 capability facts。后端提供有界的 `/api/project-evidence/*` 状态、构建、检查、健康、预览和 raw inspect 接口；完整处理面板仅在开发环境显示。
+- 在迁移本地 Chroma 前生成确定性、隐私安全的只读基线：不打开 embedded database、不启动 server、不读取 raw records，并校验受保护文件字节、逻辑 inventory 边界、证据 artifact 哈希和 Chroma client 调用点分类。
+- 提供有界、由 WorkAgent 控制的 Chroma HTTP transport：限制 metadata-only 响应、query/get/filter 大小和错误形状，并明确执行请求超时；不把已安装 Chroma client 的通用 timeout 参数当作可靠边界。
+- 明确 dedicated local Chroma server 的生命周期和持久化 ownership：`start/health/stop/restart` 仅由操作员调用，受保护的 `information/chroma` 由 server 持有，生产 embedded 访问 fail-closed，request 路径不会静默回退 embedded client。
+- 提供只读文件式 Chroma backup/recovery 和 HTTP logical-integrity gate：要求 server 已验证停止、受保护文件基线已接受、兼容性检查和稳定 fingerprint，通过后才允许未来 cutover。
+- 通过有界、仅 HTTP 的 operational reader 读取现有 collection 的状态、存在性、安全计数和仓库摘要；状态/计数读取不检查 SQLite 或受保护文件、不创建 collection、不暴露 records，也不调用旧 embedded constructor。
 - 使用本地 SQLite 数据库追踪求职申请。
 - 同时提供本地 Web UI 和原始 CLI 流程。
 - 在 Web UI 中切换中文和英文。
@@ -780,11 +918,24 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- github_evidence_materializer.py / github_evidence_preparation_service.py # 证据物化与准备编排
 |   |-- evidence_index_readiness.py / evidence_vector_search.py # 索引就绪检查和有界向量结果适配
 |   |-- evidence_chunk_search.py / evidence_hybrid_retrieval.py # 词法/混合检索辅助模块
+|   |-- chroma_baseline_models.py # 隐私安全的迁移基线 schema 和校验
+|   |-- chroma_migration_baseline.py # 非变更式 Chroma 基线 capture/verify CLI
+|   |-- chroma_http_transport.py # 有界的 WorkAgent Chroma HTTP transport
+|   |-- chroma_server_lifecycle.py / chroma_persistence_guard.py # server 生命周期和持久化 ownership
+|   |-- chroma_backup_recovery.py / chroma_logical_fingerprint.py # backup/recovery 与逻辑完整性 gate
+|   |-- chroma_operational_reader.py # 仅 HTTP 的状态/计数 reader
+|   |-- chroma_read_client.py / chroma_write_client.py # lazy semantic HTTP 读写边界
+|   |-- chroma_read_models.py / chroma_write_models.py # 有界不可变读写 contract
 |   |-- project_query_planner.py # 项目范围内的检索查询规划
 |   |-- project_repository_identity.py / project_repository_mapping_service.py # 项目与仓库权威映射
 |   |-- project_change_memory.py # project change memory schema、提取和持久化
 |   |-- project_change_pipeline.py    # project change memory pipeline、inspect 和 health 辅助逻辑
 |   |-- project_evidence_*.py         # project evidence 模型、pipeline、评分、合成和持久化
+|   |-- project_evidence_coverage.py / project_evidence_followup_intents.py # coverage 缺口和有界检索目标
+|   |-- engineering_story_models.py / engineering_story_evidence.py # 严格 story contract 和 authority 引用
+|   |-- engineering_story_clustering.py / engineering_story_reconstruction.py # event-core 聚类和保守 story 重建
+|   |-- engineering_story_sufficiency.py / engineering_story_opportunity.py # claim/story 充分性与有界缺口
+|   |-- engineering_story_memory.py / engineering_story_matching.py # 原子 JSON memory 与 canonical identity matching
 |   |-- project_capability_*.py       # capability taxonomy、分组、评分、boundary 和 fact 构建
 |   |-- project_capability_memory.py  # 权威 capability fact memory 模型和确定性持久化
 |   |-- project_claim_boundaries.py   # 保守的 claim boundary
@@ -799,6 +950,8 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- package.json         # 前端脚本和依赖
 |   `-- vite.config.js       # Vite 开发服务器和 /api 代理
 |-- information/             # 本地私有工作文件、Chroma 向量和 SQLite 数据库
+|-- docs/
+|   `-- chroma_local_server_architecture.md # 受保护 Chroma 基线和迁移边界
 |-- background/              # Prompt 和背景说明
 |-- logs/                    # 开发和运行日志
 |-- outputs/
@@ -821,10 +974,62 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
 4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 GitHub evidence raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
 5. `backend/project_change_memory.py` 和 `backend/project_change_pipeline.py`：从已保存的 GitHub compare/file patch 提取 project change memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
-6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py` 和 `backend/project_claim_boundaries.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建，以及原子 project evidence memory 持久化。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；该能力记忆持久化仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
-7. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。GitHub Evidence 页面已加入未解决仓库的关联确认和 evidence preparation 流程，但尚未接入 retrieval 控制或搜索结果展示。
+6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py`、`backend/project_claim_boundaries.py`、`backend/project_evidence_coverage.py` 和 `backend/project_evidence_followup_intents.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建、原子 project evidence memory 持久化、coverage 缺口优先级和有界 follow-up retrieval intents。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；能力记忆、coverage 和 follow-up 持久化仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
+7. `backend/engineering_story_models.py`、`backend/engineering_story_evidence.py`、`backend/engineering_story_clustering.py`、`backend/engineering_story_reconstruction.py`、`backend/engineering_story_sufficiency.py`、`backend/engineering_story_opportunity.py`、`backend/engineering_story_memory.py` 和 `backend/engineering_story_matching.py`：提供严格 story contract、authority resolution、event-core 聚类、保守重建、claim/story 充分性、结构化机会缺口、原子 canonical JSON memory 和确定性 identity matching。它们保留 evidence 引用和 claim boundaries，不生成 resume prose、不推断 ownership，clustering 也不读取 JD/company context。
+8. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。GitHub Evidence 页面已加入未解决仓库的关联确认和 evidence preparation 流程，但尚未接入 retrieval 控制或搜索结果展示。
 
-当前 retrieval V2 工作还包括 `backend/project_query_planner.py` 和 `backend/project_retrieval_v2.py`。planner 从项目事实和 JD targets 构建确定性、项目范围内且有界的查询分组，并过滤 raw、secret 和 boilerplate 内容。`USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 默认关闭；显式开启后，简历证据调用会路由到安全的列表占位结果，后续步骤再实现实际检索。它不会启用 capability memory、通过 API 读取 raw 内容，也没有前端触发入口。
+当前 retrieval V2 工作还包括 `backend/project_query_planner.py`、`backend/project_retrieval_v2.py`、`backend/evidence_hybrid_retrieval.py` 和 `backend/chroma_http_vector_search.py`。planner 从项目事实和 JD targets 构建确定性、项目范围内且有界的查询分组，并过滤 raw、secret 和 boilerplate 内容。`USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 默认关闭；显式开启后，简历证据调用要求 repository authority、materialized/indexed evidence readiness 和本地 Chroma HTTP 向量后端，再进入有界 hybrid retrieval；条件不足或受控失败时 fail-closed 返回空结果。它不会启用 capability memory、通过 API 读取 raw 内容，也没有前端 retrieval 控件。
+
+## Chroma 迁移基线
+
+`backend/chroma_migration_baseline.py` 和 `backend/chroma_baseline_models.py` 用于本地 Chroma client 或 collection 迁移前的非变更式基线。默认 capture 只用普通文件读取遍历 `information/chroma/`，拒绝 symlink/junction/reparse point，检测读取期间的变化，记录确定性的 SHA-256 inventory，并静态分类 `PersistentClient`/`HttpClient` 调用点。由于 embedded inspection 可能修改数据库内部状态，逻辑 collection metadata 默认标记为 unavailable；只有已经运行的、明确批准的本地 HTTP 边界可以 opt in，工具不会启动或停止 server。
+
+基线只包含仓库相对路径、大小、哈希、有界 schema marker、聚合计数和隐私声明，不包含 documents、embeddings、patches、raw metadata、secrets、environment values 或绝对路径。capture 原子写入被 `.gitignore` 忽略的 `information/chroma_migration_baselines/`；verify 不会重写已接受的基线。
+
+```powershell
+python -m backend.chroma_migration_baseline capture
+python -m backend.chroma_migration_baseline capture --approved-http
+python -m backend.chroma_migration_baseline verify
+python -m backend.chroma_migration_baseline verify --compare-protected --compare-artifacts
+```
+
+这是迁移安全门槛，不是 Chroma server 生命周期工具，也不替代逻辑完整性检查。backup/restore 和集中式 HTTP ownership 已作为独立内部门禁实现；production cutover、旧 client 移除和数据迁移仍未完成。操作边界见 `docs/chroma_local_server_architecture.md`。
+
+## Chroma 访问盘点
+
+`backend/chroma_access_inventory.py` 提供当前 Chroma 访问路径的权威 reviewed manifest。它通过 AST 静态扫描后端 Python 源码，不会 import 应用模块、创建 client、连接 server 或读取受保护存储。当前 `chroma_access_inventory.v1` manifest 固定 47 条 access records，使用稳定语义 ID 和 SHA-256 digest，并检查发现结果与 manifest 是否同步。
+
+每条记录包含 runtime、client type、lifecycle、access mode、collection resolution、current owner、storage-internal mutation risk 和迁移工作项，支持 `read`、`vector_query`、`write`、`index`、`migration`、`maintenance` 和 `test_only` 分类。严格 schema 和隐私校验会拒绝绝对路径、密钥、源文本、diff、documents 和 embeddings；这只是分类证据，不会授权自动迁移调用点。
+
+```powershell
+python -m backend.chroma_access_inventory inspect
+python -m backend.chroma_access_inventory verify
+python -m pytest -q tests\test_chroma_access_inventory.py tests\test_chroma_migration_baseline.py
+```
+
+最近测试结果为 73 passed。盘点与迁移基线仍是未提交、只读的迁移前保护能力，不新增 HTTP route、前端控件、Chroma server 生命周期管理或 retrieval V2 生产接入。
+
+## Chroma 受控 HTTP 访问
+
+当前工作区还包含一个 fail-closed 的本地 Chroma HTTP 访问控制层。`backend/chroma_config.py` 只接受明确的部署模式（`disabled`、回环地址 `local_http`、经过校验的 `remote_http` 和测试所有的 `ephemeral_test`），拒绝矛盾或不安全配置，并限制端口和请求超时。`backend/chroma_collection_registry.py` 是 collection 名称、schema 版本、生命周期、批准 consumer、旧 embedded 迁移 consumer、metadata allowlist 的语义权威；生产代码禁止自动创建 collection。
+
+`backend/chroma_http_client_factory.py` 是访问既有 collection 的集中式 lazy factory。它要求已注册的 semantic collection、批准的 consumer/lifecycle 和显式启用 HTTP，并对 transport 错误做有界处理；不会暴露原始 transport 错误，也不会静默回退到 embedded Chroma。`backend/chroma_collection_literal_guard.py` 通过静态扫描 Python 语法，拒绝未注册或重复的生产 collection-name literal。该 factory 和 registry 仍是后端内部能力，不新增公开 API、server 生命周期管理、自动迁移或前端控件。
+
+`backend/chroma_read_client.py` 和 `backend/chroma_write_client.py` 现在提供业务读取、向量查询、upsert 与 delete 的 lazy semantic 边界。它们在委托给集中式 factory 和有界 transport 前，校验已注册 collection、批准的 consumer/lifecycle、项目 authority、请求上限、metadata projection 和 existing-only policy。`MemoryVectorStore` 的画像/GitHub 读写已经使用这些 client；import 和 client 构造不执行 I/O，生产 embedded 访问 fail-closed，HTTP 失败不会回退到 embedded Chroma。semantic client 仍是后端内部能力，不授权 production cutover 或历史导入。
+
+最近记录的 Chroma 后端专项测试（排除长时间运行的 server integration 命令）通过 694 个测试、跳过 1 个测试。它包含 endpoint-owned 本地 HTTP fixture 和 timeout capability 检查，覆盖 fail-closed 配置、collection/consumer 与 reviewed inventory 同步、禁止自动创建、有界错误映射、隔离的 ephemeral 测试 endpoint、semantic read/write 边界、coverage/follow-up intent 校验、production-access policy，以及不泄露受保护存储/raw document。更广泛的 Chroma integration 命令此前超时，因此不将其记为全量通过。
+
+```powershell
+python -m pytest -q tests\test_chroma_config.py tests\test_chroma_collection_registry.py tests\test_chroma_http_client_factory.py tests\test_chroma_http_integration.py tests\test_chroma_http_timeout_capability.py tests\test_chroma_access_inventory.py tests\test_chroma_migration_baseline.py
+```
+
+Chroma 运行与迁移门禁专项测试：
+
+```powershell
+python -m pytest -q tests\test_chroma_http_transport.py tests\test_chroma_server_lifecycle.py tests\test_chroma_server_lifecycle_integration.py tests\test_chroma_persistence_guard.py tests\test_chroma_persistence_guard_integration.py tests\test_chroma_backup_recovery.py tests\test_chroma_backup_recovery_integration.py tests\test_chroma_logical_fingerprint.py tests\test_chroma_logical_fingerprint_integration.py tests\test_chroma_operational_reader.py tests\test_chroma_operational_reader_integration.py
+```
+
+这些测试是内部迁移门禁；较窄的一次记录通过 214 个测试、跳过 2 个集成测试，上面的 694 个测试是更广的 Chroma 后端专项结果。它们使用 fake transport、临时目录、动态非生产端口或 ephemeral server，不会在验证期间打开或变更生产 Chroma 数据库，也不代表已完成 production cutover。另有 `test_chroma_production_access_policy.py`、semantic read/write client 及 MemoryVectorStore HTTP 读写专项，继续约束生产访问路径和 fail-closed 行为。
 
 ## 模型配置
 
@@ -1092,6 +1297,10 @@ Evidence preparation 是独立于 retrieval V2 的后端准备流程。`GET /api
 
 Project capability memory 按 `project_capability_memory.v1` schema 持久化到 `information/project_capability_memory.json`，由 Python 内部 builder、validator、loader 和 atomic persistence helper 使用。它只接受已经构建的权威 capability facts，生成确定性的项目摘要、diagnostics 和 content hash，拒绝格式错误、冲突 identity、raw/敏感 artifact 内容，并保护上游 project evidence artifact 不被覆盖；目前没有独立 HTTP 接口或生产版前端触发入口。
 
+Project evidence coverage 也是有界的 Python 内部分析：`project_evidence_coverage.py` 按 implementation mechanism、storage、retrieval/ranking、validation/repair、metrics/impact 和 JD alignment 评估证据状态；`project_evidence_followup_intents.py` 对缺口排序，并生成受限的 retrieval goals、evidence types、requirement ids 和参考证据。query planner 与 retrieval V2 会继续校验 project scope、枚举、数量和长度，非法输入 fail-closed；该分析不新增业务 HTTP route 或前端控件，也不会把缺口变成 claim。
+
+Engineering-story 支持是独立的 evidence-grounded contract 层。`engineering_story_models.py` 和 `engineering_story_evidence.py` 要求有界 authority 引用、evidence state、claim boundary 和 lifecycle/revalidation 状态；`engineering_story_clustering.py` 按明确的 change/event-core 关系聚类，保留弱 lineage 和歧义，不读取 JD/company context，也不生成 prose。`engineering_story_reconstruction.py` 仍是有界的下游重建边界，不推断 ownership、outcome 或 resume bullet。
+
 GitHub evidence retrieval V2 由 `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 控制，目前默认关闭。其 planner/search/storage 模块保持项目范围、查询/结果上限和稳定排序，并只返回脱敏 metadata；raw source 文本不会进入安全搜索结果。显式开启后，简历证据链会要求仓库 authority、物化 chunks、index readiness 和本地 Chroma HTTP 向量后端均就绪，再以确定性规则合并 keyword/symbol/vector 命中；任一前置条件缺失或受控失败都会 fail-closed 返回空结果，不回退 legacy，也不写入文件。当前工作区还包含 retrieval quality evaluation，用于比较 legacy/V2 的安全性、确定性、provenance 覆盖和有界上下文指标，但不宣称真实世界 recall。
 
 ## 本地文件与隐私
@@ -1320,6 +1529,30 @@ Project capability memory 持久化测试：
 python -m pytest tests\test_project_capability_persistence.py -q
 ```
 
+Engineering-story、coverage 和 follow-up intent 回归测试：
+
+```powershell
+python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_matching.py tests\test_project_evidence_coverage.py tests\test_project_evidence_followup_intents.py tests\test_project_evidence_gap_prioritization.py tests\test_project_query_planner.py tests\test_project_retrieval_v2_integration.py tests\test_resume_retrieval_intent_contract.py
+```
+
+本轮专项运行通过 459 个测试（22.72 秒），覆盖严格 authority 引用、claim-boundary/lifecycle 校验、确定性 event-core 聚类、保守重建、claim/story 充分性、有界 opportunity、原子 story memory、canonical matching、coverage 缺口优先级、有界 follow-up intents 和 fail-closed retrieval-intent 路由。
+
+Engineering-story, coverage, and follow-up intent regression tests:
+
+```powershell
+python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_matching.py tests\test_project_evidence_coverage.py tests\test_project_evidence_followup_intents.py tests\test_project_evidence_gap_prioritization.py tests\test_project_query_planner.py tests\test_project_retrieval_v2_integration.py tests\test_resume_retrieval_intent_contract.py
+```
+
+The latest focused run passed 459 tests in 22.72 seconds. It covers strict authority references, claim-boundary/lifecycle validation, deterministic event-core clustering, conservative reconstruction, claim/story sufficiency, bounded opportunity detection, atomic story memory, canonical matching, coverage-gap prioritization, bounded follow-up intents, and fail-closed retrieval-intent routing.
+
+Chroma 迁移基线回归测试：
+
+```powershell
+python -m pytest tests\test_chroma_migration_baseline.py -q
+```
+
+最新基线专项测试通过 30 个测试，覆盖受保护文件确定性哈希、fail-closed 路径处理、隐私安全 schema 校验、Chroma 调用点分类、原子 capture 和不重写 verify。
+
 仓库隐私策略回归测试：
 
 ```powershell
@@ -1369,8 +1602,10 @@ npm run build
 - GitHub 证据目前主要以 JSON 展示，还没有完整的结构化可视化报告。
 - evidence lineage 和持久化诊断可通过后端 status/health 响应查看，但 Web UI 尚未展示全部 created/updated/unchanged 计数或 manifest 详情。
 - Retrieval V2 仍是内部、默认关闭的后端路径：没有生产 HTTP 接口或前端控件；开启后的简历链路要求本地 artifact 和 Chroma HTTP 向量访问就绪，前置条件不足时安全返回空结果。
+- Chroma 迁移基线有意保持只读，不迁移 client、collection 或数据；逻辑 inventory 只有在明确启用已经运行的批准 HTTP 边界后才可获取。
 - Evidence preparation、物化、readiness、向量/词法/混合检索、质量评估和仓库映射已具备有界后端模块与专项测试。前端可以管理仓库关联和 preparation，但尚未暴露 retrieval 控制或搜索结果。
 - Project evidence memory 已可通过有界 FastAPI 接口持久化和检查，但 GitHub Evidence 页面尚未渲染完整的 project-evidence explorer；证据处理面板仅在开发构建中显示。
+- Engineering-story contract、event-core clustering、reconstruction、sufficiency/opportunity、memory、matching、coverage gap 和 follow-up intent 目前是后端内部的证据约束与检索规划能力，没有独立 HTTP route、生产前端页面或自动生成 resume prose 的入口。
 - 简历和求职信没有内置文档预览或 DOCX 导出；安装 LaTeX 工具链后可以把定制简历导出为 PDF。
 - 项目是本地优先、单用户设计，没有登录、多用户隔离或云端部署模型。
 

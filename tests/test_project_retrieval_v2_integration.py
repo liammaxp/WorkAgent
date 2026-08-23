@@ -7,6 +7,16 @@ import pytest
 
 from backend import project_retrieval_v2 as retrieval_v2
 from backend.github_evidence_chunks import build_github_evidence_chunk_record
+from backend.project_evidence_coverage import (
+    CoverageCategory,
+    CoverageGap,
+    CoverageReasonCode,
+    CoverageState,
+    GapPriority,
+    GapPriorityReasonCode,
+    PrioritizedCoverageGap,
+)
+from backend.project_evidence_followup_intents import build_followup_retrieval_intents
 from backend.project_repository_identity import build_project_repository_identity_authority
 
 
@@ -25,6 +35,24 @@ PROJECT_B = {
     "tech_stack": ["Python", "React"],
     "workflows": ["retrieval validation API database"],
 }
+
+
+def followup_intent(project_id=PROJECT_A["project_id"], *, requirement_ids=()):
+    prioritized = PrioritizedCoverageGap(
+        gap=CoverageGap(
+            category=CoverageCategory.JD_MUST_HAVE if requirement_ids else CoverageCategory.VALIDATION_REPAIR,
+            state=CoverageState.MISSING,
+            reason_code=CoverageReasonCode.UNSUPPORTED,
+            related_requirement_ids=tuple(requirement_ids),
+        ),
+        priority=GapPriority.HIGH,
+        searchable=True,
+        reason_code=GapPriorityReasonCode.JD_MUST_HAVE_GAP,
+    )
+    return build_followup_retrieval_intents(
+        project_id=project_id,
+        prioritized_gaps=(prioritized,),
+    )[0]
 
 
 def authority(*projects):
@@ -252,6 +280,124 @@ def test_query_plan_inputs_are_structured_and_project_identity_is_preserved():
     assert captured["project_memory"] == {"projects": [PROJECT_A]}
     assert captured["jd_targets"] == {"technologies": ["PostgreSQL"]}
     assert "Kubernetes" not in json.dumps(captured)
+
+
+@pytest.mark.parametrize("argument", ("omitted", None, ()))
+def test_none_and_empty_intents_do_not_change_the_strict_old_planner_contract(argument):
+    calls = []
+
+    def strict_planner(*, project_id, project_memory, compact_facts, jd_targets, known_symbols):
+        calls.append({
+            "project_id": project_id,
+            "project_memory": project_memory,
+            "compact_facts": compact_facts,
+            "jd_targets": jd_targets,
+            "known_symbols": known_symbols,
+        })
+        return {
+            "project_id": project_id,
+            "project_identity": [f"{project_id} evidence"],
+            "jd_alignment": [],
+            "mechanisms": [],
+            "symbols": [],
+            "validation_repair": [],
+            "metrics_impact": [],
+        }
+
+    kwargs = {
+        "query_plan_builder": strict_planner,
+        "hybrid_retriever": lambda **_kwargs: {
+            "status": "ready", "hits": [safe_hybrid_hit()], "warnings": [], "errors": []
+        },
+        **base_dependencies(),
+    }
+    if argument != "omitted":
+        kwargs["retrieval_intents"] = argument
+
+    result = retrieval_v2.retrieve_evidence_for_project_v2(PROJECT_A, **kwargs)
+
+    assert result
+    assert len(calls) == 1
+    assert set(calls[0]) == {
+        "project_id", "project_memory", "compact_facts", "jd_targets", "known_symbols",
+    }
+
+
+def test_valid_intents_are_forwarded_only_to_the_existing_planner_and_never_become_evidence():
+    supplied = (followup_intent(requirement_ids=("req-python",)),)
+    captured = {}
+
+    def planner(**kwargs):
+        captured.update(kwargs)
+        return {
+            "project_id": PROJECT_A["project_id"],
+            "project_identity": ["ProjectA evidence"],
+            "jd_alignment": ["ProjectA req-python evidence"],
+            "mechanisms": [],
+            "symbols": [],
+            "validation_repair": [],
+            "metrics_impact": [],
+        }
+
+    result = retrieval_v2.retrieve_evidence_for_project_v2(
+        PROJECT_A,
+        retrieval_intents=supplied,
+        query_plan_builder=planner,
+        hybrid_retriever=lambda **_kwargs: {
+            "status": "ready", "hits": [safe_hybrid_hit()], "warnings": [], "errors": []
+        },
+        **base_dependencies(),
+    )
+
+    assert result
+    assert captured["retrieval_intents"] == supplied
+    serialized = json.dumps(result, sort_keys=True)
+    assert "req-python" not in serialized
+    assert "jd_requirement_evidence" not in serialized
+
+
+def test_valid_intent_reaches_the_actual_planner_and_existing_hybrid_boundary_once():
+    captured = {}
+
+    def hybrid(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "ready", "hits": [safe_hybrid_hit()], "warnings": [], "errors": []
+        }
+
+    result = retrieval_v2.retrieve_evidence_for_project_v2(
+        PROJECT_A,
+        retrieval_intents=(followup_intent(),),
+        hybrid_retriever=hybrid,
+        **base_dependencies(),
+    )
+
+    assert result
+    assert captured["project_id"] == PROJECT_A["project_id"]
+    assert "validation" in " ".join(
+        captured["query_plan"]["validation_repair"]
+    ).casefold()
+    assert list(captured["query_plan"]) == [
+        "project_id", *retrieval_v2.QUERY_GROUPS,
+    ]
+
+
+def test_direct_v2_foreign_intent_fails_before_backend_or_readiness_io():
+    calls = []
+
+    result = retrieval_v2.retrieve_evidence_for_project_v2(
+        PROJECT_A,
+        retrieval_intents=(followup_intent(PROJECT_B["project_id"]),),
+        vector_backend_enabled=lambda: calls.append("backend"),
+        authority_loader=lambda _path: calls.append("authority"),
+        vector_metadata_reader=lambda: calls.append("metadata"),
+        readiness_inspector=lambda **_kwargs: calls.append("readiness"),
+        chunk_loader=lambda _path: calls.append("chunks"),
+        query_plan_builder=lambda **_kwargs: calls.append("planner"),
+    )
+
+    assert result == []
+    assert calls == []
 
 
 def test_project_isolation_discards_cross_project_chunks_vectors_and_repository_guessing():

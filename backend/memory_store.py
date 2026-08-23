@@ -1,4 +1,4 @@
-"""Chroma-backed vector storage for durable profile memory and GitHub evidence."""
+"""Centralized Chroma storage facade for profile memory and GitHub evidence."""
 
 from __future__ import annotations
 
@@ -6,29 +6,73 @@ import hashlib
 import json
 import math
 import re
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 try:
-    import chromadb
-except ImportError as error:  # pragma: no cover - exercised when dependencies are missing
-    chromadb = None
-    CHROMA_IMPORT_ERROR = error
-else:
-    CHROMA_IMPORT_ERROR = None
-
+    from backend.chroma_http_client_factory import ChromaAccessLifecycle
+    from backend.chroma_http_transport import ChromaCollectionMissing
+    from backend.chroma_operational_reader import ChromaOperationalReader
+    from backend.chroma_read_client import ChromaReadClient
+    from backend.chroma_write_client import ChromaWriteClient, ChromaWriteAuthorityViolation
+    from backend.chroma_write_models import ChromaWriteRecord
+    from backend.project_repository_identity import (
+        authority_to_repository_mapping,
+        load_project_repository_identity_authority,
+        normalize_project_id,
+        normalize_repository_identity,
+    )
+except ModuleNotFoundError:  # pragma: no cover - legacy backend-directory launch
+    from chroma_http_client_factory import ChromaAccessLifecycle
+    from chroma_http_transport import ChromaCollectionMissing
+    from chroma_operational_reader import ChromaOperationalReader
+    from chroma_read_client import ChromaReadClient
+    from chroma_write_client import ChromaWriteClient, ChromaWriteAuthorityViolation
+    from chroma_write_models import ChromaWriteRecord
+    from project_repository_identity import (
+        authority_to_repository_mapping,
+        load_project_repository_identity_authority,
+        normalize_project_id,
+        normalize_repository_identity,
+    )
 
 EMBEDDING_DIMENSIONS = 384
 PROFILE_COLLECTION = "profile_facts"
 GITHUB_COLLECTION = "github_evidence"
-PROFILE_MIGRATION_MARKER = ".legacy_profile_migrated"
 TOKEN_PATTERN = re.compile(r"[\w.+#-]+", re.UNICODE)
 GITHUB_URL_PATTERN = re.compile(
     r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"
 )
 GITHUB_REPOSITORY_PATTERN = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$")
+MAX_PROFILE_READ_RECORDS = 1_000
+MAX_GITHUB_CONTEXT_READ_RECORDS = 1_000
+MAX_GITHUB_METADATA_READ_RECORDS = 10_000
+PROFILE_READ_METADATA_FIELDS = ("index", "is_list", "section")
+GITHUB_READ_METADATA_FIELDS = (
+    "github_repository",
+    "project_id",
+    "project_name",
+    "repo",
+    "repository",
+    "repository_project_id",
+    "repository_url",
+    "source",
+    "updated_at",
+)
+GITHUB_MUTATION_METADATA_FIELDS = tuple(
+    sorted(
+        set(GITHUB_READ_METADATA_FIELDS)
+        | {
+            "chunk_type",
+            "commit_sha",
+            "path",
+            "run_id",
+            "source_id",
+            "source_type",
+        }
+    )
+)
 
 
 def normalized_json(value: Any) -> str:
@@ -83,68 +127,31 @@ class LocalHashEmbedding:
 
 
 class MemoryVectorStore:
-    def __init__(self, persist_directory: Path, legacy_memory_path: Path, legacy_github_dir: Path):
+    def __init__(
+        self,
+        persist_directory: Path,
+        legacy_memory_path: Path,
+        legacy_github_dir: Path,
+        *,
+        operational_reader: Any | None = None,
+        read_client: Any | None = None,
+        write_client: Any | None = None,
+        repository_authority_provider: Any | None = None,
+    ):
         self.persist_directory = persist_directory
         self.legacy_memory_path = legacy_memory_path
         self.legacy_github_dir = legacy_github_dir
+        self.operational_reader = operational_reader if operational_reader is not None else ChromaOperationalReader()
+        self.read_client = read_client if read_client is not None else ChromaReadClient()
+        self.write_client = write_client if write_client is not None else ChromaWriteClient()
+        self.repository_authority_provider = (
+            repository_authority_provider
+            if repository_authority_provider is not None
+            else load_project_repository_identity_authority
+        )
+        if not callable(self.repository_authority_provider):
+            raise TypeError("invalid_repository_authority_provider")
         self.embedder = LocalHashEmbedding()
-        self._client = None
-        self._profile = None
-        self._github = None
-
-    def _ensure_client(self, migrate: bool = True) -> None:
-        if self._client is not None:
-            return
-        if chromadb is None:
-            raise RuntimeError(
-                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
-            ) from CHROMA_IMPORT_ERROR
-
-        self.persist_directory.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=str(self.persist_directory))
-        self._profile = self._client.get_or_create_collection(
-            PROFILE_COLLECTION,
-            metadata={"description": "Durable user profile facts", "hnsw:space": "cosine"},
-        )
-        self._github = self._client.get_or_create_collection(
-            GITHUB_COLLECTION,
-            metadata={"description": "Approved GitHub repository and commit evidence", "hnsw:space": "cosine"},
-        )
-        if migrate:
-            self._migrate_legacy_profile()
-            self._migrate_legacy_github()
-
-    def _migrate_legacy_profile(self) -> None:
-        marker_path = self.persist_directory / PROFILE_MIGRATION_MARKER
-        if marker_path.exists():
-            return
-        if not self._profile.count() and self.legacy_memory_path.exists():
-            content = self.legacy_memory_path.read_text(encoding="utf-8").strip()
-            if content:
-                try:
-                    memory = json.loads(content)
-                except json.JSONDecodeError:
-                    memory = {"notes": content}
-                if isinstance(memory, dict):
-                    self._replace_profile(memory, source="legacy-memory-json")
-        marker_path.touch()
-
-    def _migrate_legacy_github(self) -> None:
-        if self._github.count() or not self.legacy_github_dir.exists():
-            return
-        files = sorted(
-            self.legacy_github_dir.glob("github_context_*.json"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        if not files:
-            return
-        try:
-            contexts = json.loads(files[0].read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if isinstance(contexts, list):
-            self._store_github_contexts(contexts, source="legacy-github-json")
 
     @staticmethod
     def _record_id(prefix: str, key: str) -> str:
@@ -189,46 +196,119 @@ class MemoryVectorStore:
                 )
         return records
 
-    def _upsert_with_similarity(self, collection, records: list[dict[str, Any]]) -> dict[str, int]:
+    def _repository_authority(self) -> tuple[Any, dict[str, Any]]:
+        authority = self.repository_authority_provider()
+        mapping = authority_to_repository_mapping(authority)
+        if not mapping.get("mapping_count") or mapping.get("conflicts"):
+            raise ChromaWriteAuthorityViolation("github_write_authority_unavailable")
+        return authority, mapping
+
+    @staticmethod
+    def _github_authority_metadata(
+        repository: Any,
+        *,
+        authority_mapping: dict[str, Any],
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        canonical = normalize_repository_identity(repository)
+        project_id = authority_mapping.get("repository_to_project", {}).get(canonical)
+        if not canonical or not isinstance(project_id, str) or not project_id:
+            raise ChromaWriteAuthorityViolation("github_write_authority_violation")
+        for field in ("project_id", "repository_project_id"):
+            explicit = normalize_project_id((context or {}).get(field))
+            if (context or {}).get(field) is not None and explicit != project_id:
+                raise ChromaWriteAuthorityViolation("github_write_authority_violation")
+        return {
+            "project_id": project_id,
+            "repository": canonical,
+            "repository_project_id": project_id,
+        }
+
+    def _upsert_with_similarity(
+        self,
+        semantic_collection_id: str,
+        records: list[dict[str, Any]],
+        *,
+        read_consumer_id: str,
+        vector_consumer_id: str,
+        index_consumer_id: str,
+        repository_authority: Any = None,
+        authority_mapping: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
         inserted = 0
         updated = 0
         unchanged = 0
         deduplicated = 0
         for record in records:
             embedding = self.embedder.embed(record["document"])
-            existing = collection.get(ids=[record["id"]], include=["documents"])
-            previous = existing.get("documents", [])
+            existing = self.read_client.read_records(
+                semantic_collection_id,
+                consumer_id=read_consumer_id,
+                ids=[record["id"]],
+                include_documents=True,
+                metadata_fields=(),
+                max_records=1,
+            )
+            previous = [item.document for item in existing.records if item.document is not None]
             if previous and previous[0] == record["document"]:
                 unchanged += 1
                 continue
 
-            # Query before write so additions can be compared with semantically related facts.
-            if collection.count():
-                similar = collection.query(
-                    query_embeddings=[embedding],
-                    n_results=min(3, collection.count()),
-                    include=["documents", "distances", "metadatas"],
+            similar = self.read_client.vector_query(
+                semantic_collection_id,
+                consumer_id=vector_consumer_id,
+                query_embedding=embedding,
+                n_results=3,
+                include_documents=True,
+                metadata_fields=("repository", "section"),
+                include_distances=True,
+            )
+            for hit in similar.hits:
+                if hit.record_id == record["id"] or hit.distance is None or hit.distance > 0.12:
+                    continue
+                same_section = hit.metadata.get("section") == record["metadata"].get("section")
+                same_repository = hit.metadata.get("repository") == record["metadata"].get(
+                    "repository"
                 )
-                similar_ids = similar.get("ids", [[]])[0]
-                similar_distances = similar.get("distances", [[]])[0]
-                similar_metadatas = similar.get("metadatas", [[]])[0]
-                for similar_id, distance, metadata in zip(
-                    similar_ids, similar_distances, similar_metadatas
-                ):
-                    if similar_id == record["id"] or distance > 0.12:
-                        continue
-                    same_section = metadata.get("section") == record["metadata"].get("section")
-                    same_repository = metadata.get("repository") == record["metadata"].get("repository")
-                    if same_section or same_repository:
-                        collection.delete(ids=[similar_id])
-                        deduplicated += 1
-                        break
+                if not (same_section or same_repository):
+                    continue
+                delete_authority = None
+                if semantic_collection_id == GITHUB_COLLECTION:
+                    if authority_mapping is None:
+                        raise ChromaWriteAuthorityViolation("github_write_authority_unavailable")
+                    delete_authority = [
+                        self._github_authority_metadata(
+                            hit.metadata.get("repository"),
+                            authority_mapping=authority_mapping,
+                        )
+                    ]
+                self.write_client.delete_records(
+                    semantic_collection_id,
+                    consumer_id=index_consumer_id,
+                    ids=[hit.record_id],
+                    lifecycle=ChromaAccessLifecycle.INDEX,
+                    authority_metadata=delete_authority,
+                    repository_authority=repository_authority,
+                )
+                deduplicated += 1
+                break
 
-            collection.upsert(
-                ids=[record["id"]],
-                embeddings=[embedding],
-                documents=[record["document"]],
-                metadatas=[record["metadata"]],
+            upsert_authority = None
+            if semantic_collection_id == GITHUB_COLLECTION:
+                upsert_authority = [record["authority_metadata"]]
+            self.write_client.upsert_records(
+                semantic_collection_id,
+                consumer_id=index_consumer_id,
+                records=[
+                    ChromaWriteRecord(
+                        record_id=record["id"],
+                        document=record["document"],
+                        metadata=record["metadata"],
+                        embedding=embedding,
+                    )
+                ],
+                authority_metadata=upsert_authority,
+                repository_authority=repository_authority,
             )
             if previous:
                 updated += 1
@@ -244,70 +324,66 @@ class MemoryVectorStore:
     def _replace_profile(self, memory: dict[str, Any], source: str) -> dict[str, int]:
         records = self._profile_records(memory, source)
         expected_ids = {record["id"] for record in records}
-        existing_ids = set(self._profile.get().get("ids", []))
-        stale_ids = sorted(existing_ids - expected_ids)
+        existing = self.read_client.read_records(
+            PROFILE_COLLECTION,
+            consumer_id="profile_memory_reader",
+            include_documents=False,
+            metadata_fields=(),
+            max_records=MAX_PROFILE_READ_RECORDS,
+        )
+        stale_ids = sorted({record.record_id for record in existing.records} - expected_ids)
         if stale_ids:
-            self._profile.delete(ids=stale_ids)
-        result = self._upsert_with_similarity(self._profile, records)
+            self.write_client.delete_records(
+                PROFILE_COLLECTION,
+                consumer_id="profile_memory_writer",
+                ids=stale_ids,
+                lifecycle=ChromaAccessLifecycle.WRITE,
+            )
+        result = self._upsert_with_similarity(
+            PROFILE_COLLECTION,
+            records,
+            read_consumer_id="profile_memory_reader",
+            vector_consumer_id="profile_memory_vector_reader",
+            index_consumer_id="profile_memory_indexer",
+        )
         result["deleted"] = len(stale_ids)
         return result
 
     def replace_profile(self, memory: dict[str, Any], source: str = "profile-update") -> dict[str, int]:
-        self._ensure_client()
         return self._replace_profile(memory, source)
 
-    def _collection_count_read_only(self, collection_name: str, live_collection: Any) -> int:
-        database_path = (self.persist_directory / "chroma.sqlite3").resolve()
-        if database_path.is_file():
-            try:
-                connection = sqlite3.connect(
-                    f"file:{database_path.as_posix()}?mode=ro&immutable=1", uri=True,
-                )
-                try:
-                    row = connection.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM embeddings
-                        WHERE segment_id = (
-                            SELECT segments.id
-                            FROM segments
-                            JOIN collections ON collections.id = segments.collection
-                            WHERE collections.name = ? AND segments.scope = 'METADATA'
-                            LIMIT 1
-                        )
-                        """,
-                        (collection_name,),
-                    ).fetchone()
-                finally:
-                    connection.close()
-            except (OSError, sqlite3.Error):
-                return 0
-            return int(row[0]) if row and isinstance(row[0], int) and row[0] > 0 else 0
-        if live_collection is None:
-            return 0
+    def profile_count(self) -> int:
         try:
-            count = live_collection.count()
+            return self.operational_reader.safe_count(PROFILE_COLLECTION)
         except Exception:
             return 0
-        return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
-
-    def profile_count(self) -> int:
-        return self._collection_count_read_only(PROFILE_COLLECTION, self._profile)
 
     def read_profile(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
-        self._ensure_client()
-        if not self._profile.count():
+        try:
+            if query:
+                result = self.read_client.vector_query(
+                    PROFILE_COLLECTION,
+                    consumer_id="profile_memory_vector_reader",
+                    query_embedding=self.embedder.embed(query),
+                    n_results=limit or 6,
+                    include_documents=False,
+                    metadata_fields=PROFILE_READ_METADATA_FIELDS,
+                    include_distances=False,
+                )
+                metadatas = [hit.metadata for hit in result.hits]
+            else:
+                result = self.read_client.read_records(
+                    PROFILE_COLLECTION,
+                    consumer_id="profile_memory_reader",
+                    include_documents=False,
+                    metadata_fields=PROFILE_READ_METADATA_FIELDS,
+                    max_records=MAX_PROFILE_READ_RECORDS,
+                )
+                metadatas = [record.metadata for record in result.records]
+        except ChromaCollectionMissing:
             return {}
-
-        if query:
-            result = self._profile.query(
-                query_embeddings=[self.embedder.embed(query)],
-                n_results=min(limit or 6, self._profile.count()),
-                include=["documents", "metadatas"],
-            )
-            metadatas = result.get("metadatas", [[]])[0]
-        else:
-            metadatas = self._profile.get(include=["metadatas"]).get("metadatas", [])
+        if not metadatas:
+            return {}
 
         memory: dict[str, Any] = {}
         list_sections: dict[str, list[tuple[int, Any]]] = {}
@@ -315,23 +391,33 @@ class MemoryVectorStore:
             section = metadata["section"]
             document_id = self._record_id("profile", section)
             if metadata.get("is_list"):
-                candidates = self._profile.get(
+                candidates = self.read_client.read_records(
+                    PROFILE_COLLECTION,
+                    consumer_id="profile_memory_reader",
                     where={"section": section},
-                    include=["documents", "metadatas"],
+                    include_documents=True,
+                    metadata_fields=PROFILE_READ_METADATA_FIELDS,
+                    max_records=MAX_PROFILE_READ_RECORDS,
                 )
                 items = []
-                for item_metadata, document in zip(
-                    candidates.get("metadatas", []), candidates.get("documents", [])
-                ):
+                for candidate in candidates.records:
+                    item_metadata = candidate.metadata
+                    document = candidate.document or ""
                     payload = json.loads(document.split("\n", 1)[1])
                     items.append((int(item_metadata["index"]), payload))
                 list_sections[section] = items
                 continue
 
-            result = self._profile.get(ids=[document_id], include=["documents"])
-            documents = result.get("documents", [])
-            if documents:
-                memory[section] = json.loads(documents[0].split("\n", 1)[1])
+            selected = self.read_client.read_records(
+                PROFILE_COLLECTION,
+                consumer_id="profile_memory_reader",
+                ids=[document_id],
+                include_documents=True,
+                metadata_fields=(),
+                max_records=1,
+            )
+            if selected.records and selected.records[0].document is not None:
+                memory[section] = json.loads(selected.records[0].document.split("\n", 1)[1])
 
         for section, items in list_sections.items():
             memory[section] = [value for _, value in sorted(items)]
@@ -343,7 +429,6 @@ class MemoryVectorStore:
         item_index: int | None = None,
         delete_section: bool = False,
     ) -> dict[str, Any]:
-        self._ensure_client()
         section = section.strip()
         if not section:
             raise ValueError("Memory section is required.")
@@ -355,24 +440,32 @@ class MemoryVectorStore:
                 "to delete the whole memory section."
             )
 
-        candidates = self._profile.get(
+        candidates = self.read_client.read_records(
+            PROFILE_COLLECTION,
+            consumer_id="profile_memory_reader",
             where={"section": section},
-            include=["documents", "metadatas"],
+            include_documents=True,
+            metadata_fields=PROFILE_READ_METADATA_FIELDS,
+            max_records=MAX_PROFILE_READ_RECORDS,
         )
         deleted_ids = []
         deleted_values = []
-        for record_id, document, metadata in zip(
-            candidates.get("ids", []),
-            candidates.get("documents", []),
-            candidates.get("metadatas", []),
-        ):
+        for record in candidates.records:
+            record_id = record.record_id
+            document = record.document or ""
+            metadata = record.metadata
             is_target_item = metadata.get("is_list") and int(metadata["index"]) == item_index
             if delete_section or is_target_item:
                 deleted_ids.append(record_id)
                 deleted_values.append(json.loads(document.split("\n", 1)[1]))
 
         if deleted_ids:
-            self._profile.delete(ids=deleted_ids)
+            self.write_client.delete_records(
+                PROFILE_COLLECTION,
+                consumer_id="profile_memory_writer",
+                ids=deleted_ids,
+                lifecycle=ChromaAccessLifecycle.WRITE,
+            )
         return {
             "deleted": len(deleted_ids),
             "section": section,
@@ -388,11 +481,21 @@ class MemoryVectorStore:
         key = canonical_github_repository(context.get("url"))
         return key or f"repo-{index}"
 
-    def _store_github_contexts(self, contexts: list[dict[str, Any]], source: str) -> dict[str, Any]:
+    def _store_github_contexts(
+        self, contexts: list[dict[str, Any]], source: str
+    ) -> dict[str, Any]:
+        authority, authority_mapping = self._repository_authority()
         run_id = timestamp_slug()
         records = []
         for index, context in enumerate(contexts):
+            if not isinstance(context, dict):
+                raise ChromaWriteAuthorityViolation("github_write_authority_violation")
             key = self._repo_key(context, index)
+            authority_metadata = self._github_authority_metadata(
+                key,
+                authority_mapping=authority_mapping,
+                context=context,
+            )
             records.append(
                 {
                     "id": self._record_id("github", key),
@@ -403,32 +506,58 @@ class MemoryVectorStore:
                         "source": source,
                         "updated_at": run_id,
                     },
+                    "authority_metadata": authority_metadata,
                 }
             )
-        result = self._upsert_with_similarity(self._github, records)
+        if len({record["authority_metadata"]["project_id"] for record in records}) > 1:
+            raise ChromaWriteAuthorityViolation("github_cross_project_batch_rejected")
+        result = self._upsert_with_similarity(
+            GITHUB_COLLECTION,
+            records,
+            read_consumer_id="github_evidence_metadata_reader",
+            vector_consumer_id="github_evidence_vector_reader",
+            index_consumer_id="github_evidence_materializer",
+            repository_authority=authority,
+            authority_mapping=authority_mapping,
+        )
         result["run_id"] = run_id
-        result["cleanup"] = self.cleanup_github_repositories()
+        result["cleanup"] = self.cleanup_github_repositories(
+            repository_authority=authority,
+            authority_mapping=authority_mapping,
+        )
         return result
 
     def store_github_contexts(
         self, contexts: list[dict[str, Any]], source: str = "github-fetch"
     ) -> dict[str, Any]:
-        self._ensure_client()
         return self._store_github_contexts(contexts, source)
 
     def read_github_contexts(self, query: str = "", limit: int | None = None) -> list[dict[str, Any]]:
-        self._ensure_client()
-        if not self._github.count():
+        try:
+            if query:
+                result = self.read_client.vector_query(
+                    GITHUB_COLLECTION,
+                    consumer_id="github_evidence_vector_reader",
+                    query_embedding=self.embedder.embed(query),
+                    n_results=limit or 8,
+                    include_documents=True,
+                    metadata_fields=(),
+                    include_distances=False,
+                )
+                documents = [hit.document for hit in result.hits if hit.document is not None]
+            else:
+                result = self.read_client.read_records(
+                    GITHUB_COLLECTION,
+                    consumer_id="github_evidence_metadata_reader",
+                    include_documents=True,
+                    metadata_fields=(),
+                    max_records=MAX_GITHUB_CONTEXT_READ_RECORDS,
+                )
+                documents = [
+                    record.document for record in result.records if record.document is not None
+                ]
+        except ChromaCollectionMissing:
             return []
-        if query:
-            result = self._github.query(
-                query_embeddings=[self.embedder.embed(query)],
-                n_results=min(limit or 8, self._github.count()),
-                include=["documents"],
-            )
-            documents = result.get("documents", [[]])[0]
-        else:
-            documents = self._github.get(include=["documents"]).get("documents", [])
         return [json.loads(document.split("\n", 1)[1]) for document in documents]
 
     def search_github_vector_records(
@@ -465,79 +594,19 @@ class MemoryVectorStore:
 
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             return []
-        database_path = (self.persist_directory / "chroma.sqlite3").resolve()
-        if database_path.is_file():
-            try:
-                connection = sqlite3.connect(
-                    f"file:{database_path.as_posix()}?mode=ro&immutable=1", uri=True,
-                )
-                try:
-                    collection_row = connection.execute(
-                        "SELECT id FROM collections WHERE name = ? LIMIT 1", (GITHUB_COLLECTION,),
-                    ).fetchone()
-                    if not collection_row:
-                        return []
-                    segment_row = connection.execute(
-                        "SELECT id FROM segments WHERE collection = ? AND scope = 'METADATA' LIMIT 1",
-                        (collection_row[0],),
-                    ).fetchone()
-                    if not segment_row:
-                        return []
-                    safe_keys = (
-                        "github_repository", "project_id", "project_name", "repo",
-                        "repository", "repository_url", "source", "updated_at",
-                    )
-                    placeholders = ",".join("?" for _ in safe_keys)
-                    rows = connection.execute(
-                        f"""
-                        SELECT selected.id, selected.embedding_id, metadata.key, metadata.string_value
-                        FROM (
-                            SELECT id, embedding_id FROM embeddings
-                            WHERE segment_id = ? ORDER BY id LIMIT ?
-                        ) AS selected
-                        LEFT JOIN embedding_metadata AS metadata
-                          ON metadata.id = selected.id AND metadata.key IN ({placeholders})
-                        ORDER BY selected.id, metadata.key
-                        """,
-                        (segment_row[0], min(limit, 10000), *safe_keys),
-                    ).fetchall()
-                finally:
-                    connection.close()
-            except (OSError, sqlite3.Error):
-                return []
-            records: dict[int, dict[str, Any]] = {}
-            for internal_id, record_id, key, string_value in rows:
-                record = records.setdefault(internal_id, {
-                    "vector_record_id": str(record_id), "metadata": {},
-                })
-                if isinstance(key, str) and isinstance(string_value, str):
-                    record["metadata"][key.lower()] = string_value
-            return list(records.values())
-        collection = self._github
-        if collection is None:
+        try:
+            result = self.read_client.read_records(
+                GITHUB_COLLECTION,
+                consumer_id="github_evidence_metadata_reader",
+                include_documents=False,
+                metadata_fields=GITHUB_READ_METADATA_FIELDS,
+                max_records=min(limit, MAX_GITHUB_METADATA_READ_RECORDS),
+            )
+        except Exception:
             return []
-        count = collection.count()
-        if not count:
-            return []
-        result = collection.get(limit=min(limit, count), include=["metadatas"])
-        ids = result.get("ids", [])
-        metadatas = result.get("metadatas", [])
-        safe_keys = {
-            "github_repository", "project_id", "project_name", "repo", "repository",
-            "repository_url", "source", "updated_at",
-        }
         return [
-            {
-                "vector_record_id": str(record_id),
-                "metadata": {
-                    str(key).lower(): value
-                    for key, value in metadata.items()
-                    if isinstance(metadata, dict)
-                    and str(key).lower() in safe_keys
-                    and isinstance(value, str)
-                } if isinstance(metadata, dict) else {},
-            }
-            for record_id, metadata in zip(ids, metadatas)
+            {"vector_record_id": record.record_id, "metadata": dict(record.metadata)}
+            for record in result.records
         ]
 
     def list_github_repositories(self) -> list[dict[str, str]]:
@@ -557,12 +626,25 @@ class MemoryVectorStore:
         return sorted(repositories, key=lambda item: item["updated_at"], reverse=True)
 
     def github_metadata_status(self) -> dict[str, Any]:
-        if not self.persist_directory.exists() and self._github is None:
+        try:
+            status = self.operational_reader.read_collection_status(
+                GITHUB_COLLECTION,
+                include_repository_inventory=True,
+            )
+        except Exception:
             return {"available": False, "count": 0, "repositories": []}
+        repositories = [
+            {
+                "repository": item.repository,
+                "updated_at": getattr(item, "updated_at", None) or "",
+            }
+            for item in status.repositories
+        ]
+        repositories.sort(key=lambda item: item["updated_at"], reverse=True)
         return {
-            "available": True,
-            "count": self.github_count(),
-            "repositories": self.list_github_repositories(),
+            "available": status.available,
+            "count": status.safe_record_count if status.available else 0,
+            "repositories": repositories,
         }
 
     def github_preview_metadata(self, limit: int = 5) -> list[dict[str, Any]]:
@@ -585,70 +667,127 @@ class MemoryVectorStore:
         return records
 
     def read_github_document(self, record_id: str) -> dict[str, Any] | None:
-        if chromadb is None:
-            raise RuntimeError(
-                "Chroma is not installed. Run: python -m pip install -r backend/requirements.txt"
-            ) from CHROMA_IMPORT_ERROR
-        if not self.persist_directory.exists():
+        if not isinstance(record_id, str) or not record_id:
             return None
-
-        self._ensure_client(migrate=False)
-        result = self._github.get(ids=[record_id], include=["documents", "metadatas"])
-        ids = result.get("ids", [])
-        documents = result.get("documents", [])
-        metadatas = result.get("metadatas", [])
-        if not ids:
+        try:
+            result = self.read_client.read_records(
+                GITHUB_COLLECTION,
+                consumer_id="github_evidence_metadata_reader",
+                ids=[record_id],
+                include_documents=True,
+                metadata_fields=GITHUB_READ_METADATA_FIELDS,
+                max_records=1,
+            )
+        except ChromaCollectionMissing:
             return None
-        metadata = metadatas[0] if metadatas else {}
+        if not result.records:
+            return None
+        record = result.records[0]
         return {
-            "id": str(ids[0]),
-            "document": documents[0] if documents else "",
-            "metadata": metadata if isinstance(metadata, dict) else {},
+            "id": record.record_id,
+            "document": record.document or "",
+            "metadata": dict(record.metadata),
         }
 
-    def cleanup_github_repositories(self) -> dict[str, int]:
-        self._ensure_client()
-        if not self._github.count():
+    def cleanup_github_repositories(
+        self,
+        *,
+        repository_authority: Any = None,
+        authority_mapping: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        if repository_authority is None or authority_mapping is None:
+            repository_authority, authority_mapping = self._repository_authority()
+        existing = self.read_client.read_records(
+            GITHUB_COLLECTION,
+            consumer_id="github_evidence_metadata_reader",
+            include_documents=True,
+            metadata_fields=GITHUB_MUTATION_METADATA_FIELDS,
+            max_records=MAX_GITHUB_CONTEXT_READ_RECORDS,
+        )
+        if not existing.records:
             return {"canonicalized": 0, "deleted": 0}
 
-        existing = self._github.get(include=["documents", "metadatas"])
         groups: dict[str, list[dict[str, Any]]] = {}
-        for record_id, document, metadata in zip(
-            existing.get("ids", []),
-            existing.get("documents", []),
-            existing.get("metadatas", []),
-        ):
-            repository = canonical_github_repository(metadata.get("repository"))
+        for item in existing.records:
+            repository = canonical_github_repository(item.metadata.get("repository"))
             if not repository:
                 continue
             groups.setdefault(repository, []).append(
-                {"id": record_id, "document": document, "metadata": metadata}
+                {
+                    "id": item.record_id,
+                    "document": item.document or "",
+                    "metadata": dict(item.metadata),
+                }
             )
 
-        canonicalized = 0
-        deleted_ids = []
+        plans = []
         for repository, records in groups.items():
-            records.sort(key=lambda record: str(record["metadata"].get("updated_at", "")), reverse=True)
+            authority_metadata = self._github_authority_metadata(
+                repository,
+                authority_mapping=authority_mapping,
+            )
+            records.sort(
+                key=lambda record: str(record["metadata"].get("updated_at", "")),
+                reverse=True,
+            )
             keep = records[0]
             canonical_id = self._record_id("github", repository)
+            canonical_record = None
             if keep["id"] != canonical_id or keep["metadata"].get("repository") != repository:
                 payload = json.loads(keep["document"].split("\n", 1)[1])
                 document = f"Approved GitHub evidence for {repository}\n{normalized_json(payload)}"
-                metadata = {**keep["metadata"], "repository": repository}
-                self._github.upsert(
-                    ids=[canonical_id],
-                    embeddings=[self.embedder.embed(document)],
-                    documents=[document],
-                    metadatas=[metadata],
+                canonical_record = ChromaWriteRecord(
+                    record_id=canonical_id,
+                    document=document,
+                    metadata={**keep["metadata"], "repository": repository},
+                    embedding=self.embedder.embed(document),
+                )
+            delete_ids = sorted(
+                {record["id"] for record in records if record["id"] != canonical_id}
+            )
+            plans.append(
+                {
+                    "authority": authority_metadata,
+                    "canonical_record": canonical_record,
+                    "delete_ids": delete_ids,
+                }
+            )
+
+        canonicalized = 0
+        delete_groups: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        for plan in plans:
+            if plan["canonical_record"] is not None:
+                self.write_client.upsert_records(
+                    GITHUB_COLLECTION,
+                    consumer_id="github_evidence_materializer",
+                    records=[plan["canonical_record"]],
+                    authority_metadata=[plan["authority"]],
+                    repository_authority=repository_authority,
                 )
                 canonicalized += 1
-            for record in records:
-                if record["id"] != canonical_id:
-                    deleted_ids.append(record["id"])
+            project_id = plan["authority"]["project_id"]
+            delete_groups.setdefault(project_id, []).extend(
+                (record_id, plan["authority"]) for record_id in plan["delete_ids"]
+            )
 
-        if deleted_ids:
-            self._github.delete(ids=sorted(set(deleted_ids)))
-        return {"canonicalized": canonicalized, "deleted": len(set(deleted_ids))}
+        deleted = 0
+        for items in delete_groups.values():
+            if not items:
+                continue
+            ids = [record_id for record_id, _ in items]
+            self.write_client.delete_records(
+                GITHUB_COLLECTION,
+                consumer_id="github_evidence_materializer",
+                ids=ids,
+                lifecycle=ChromaAccessLifecycle.INDEX,
+                authority_metadata=[metadata for _, metadata in items],
+                repository_authority=repository_authority,
+            )
+            deleted += len(ids)
+        return {"canonicalized": canonicalized, "deleted": deleted}
 
     def github_count(self) -> int:
-        return self._collection_count_read_only(GITHUB_COLLECTION, self._github)
+        try:
+            return self.operational_reader.safe_count(GITHUB_COLLECTION)
+        except Exception:
+            return 0
