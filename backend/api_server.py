@@ -51,7 +51,6 @@ import evidence_pipeline
 import main as agent
 import project_change_pipeline
 from backend import project_retrieval_v2
-from backend import project_evidence_followup_intents
 from backend import project_repository_mapping_service
 from backend import github_evidence_preparation_service
 from backend.github_evidence_chunks import DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH
@@ -7287,30 +7286,13 @@ def retrieve_evidence_for_project_for_resume(
     *,
     jd_targets: Any = None,
     retrieval_mode: Any = None,
-    retrieval_intents: Any = None,
 ) -> list[dict[str, Any]]:
-    validated_intents = ()
-    if retrieval_intents is not None:
-        try:
-            validated_intents = project_evidence_followup_intents.validate_followup_retrieval_intents(
-                project_id=project.get("project_id") if isinstance(project, dict) else None,
-                retrieval_intents=retrieval_intents,
-            )
-        except (TypeError, ValueError):
-            return []
     mode = (
         resolve_resume_evidence_retrieval_mode()
         if retrieval_mode is None
         else normalize_resume_evidence_retrieval_mode(retrieval_mode)
     )
     if mode == RESUME_EVIDENCE_RETRIEVAL_MODE_V2:
-        if validated_intents:
-            return project_retrieval_v2.retrieve_evidence_for_project_v2(
-                project,
-                jd_targets=jd_targets,
-                retrieval_intents=validated_intents,
-                limit=RESUME_PROJECT_EVIDENCE_LIMIT,
-            )
         return project_retrieval_v2.retrieve_evidence_for_project_v2(
             project,
             jd_targets=jd_targets,
@@ -13352,10 +13334,7 @@ def merged_confidence(current: str, incoming: str) -> str:
 
 
 def read_user_memory_for_skills() -> dict[str, Any]:
-    try:
-        raw = agent.read_memory()
-    except Exception:
-        return {}
+    raw = agent.read_memory()
     if isinstance(raw, dict):
         return raw
     text = str(raw or "").strip()

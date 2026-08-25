@@ -88,11 +88,13 @@ The project is designed for truthful, conservative job-search writing. It helps 
 |   |-- project_evidence_*.py         # Evidence normalization, synthesis, scoring, and persistence
 |   |-- project_capability_*.py       # Capability taxonomy, grouping, scoring, boundaries, and fact building
 |   |-- project_capability_memory.py   # Authoritative capability-fact memory model and deterministic persistence
-|   |-- project_evidence_coverage.py / project_evidence_followup_intents.py # Coverage gaps and bounded retrieval goals
+|   |-- hiring_context_models.py / hiring_context_intelligence.py # Strict hiring-context contracts and role/signal intelligence
+|   |-- hiring_context_organization.py # Organization/team context normalization and resolution
 |   |-- engineering_story_models.py / engineering_story_evidence.py # Strict story contracts and authority references
 |   |-- engineering_story_clustering.py / engineering_story_reconstruction.py # Event-core clustering and conservative reconstruction
 |   |-- engineering_story_sufficiency.py / engineering_story_opportunity.py # Claim/story sufficiency and bounded gaps
-|   |-- engineering_story_memory.py / engineering_story_matching.py # Atomic JSON memory and canonical identity matching
+|   |-- engineering_story_memory.py / engineering_story_memory_service.py / engineering_story_lifecycle.py # Atomic memory, service, and lifecycle gates
+|   |-- engineering_story_matching.py # Canonical identity matching
 |   |-- project_claim_boundaries.py   # Conservative allowed/forbidden claim boundaries
 |   |-- project_repository_identity.py # Authoritative repository identity and confirmation artifacts
 |   |-- project_repository_mapping_service.py # Bounded repository/project association workflow
@@ -152,9 +154,10 @@ The system has seven main layers:
 3. `backend/tech_ontology.py` and `backend/data/tech_ontology.jsonl`: local technology-term matching, alias mapping, safe wording hints, and unsupported-claim guardrails for JD analysis, skills selection, and resume bullet validation.
 4. `backend/evidence_memory.py`, `backend/evidence_pipeline.py`, `backend/evidence_*.py`, `backend/github_raw_storage.py`, `backend/github_evidence_chunks.py`, `backend/evidence_chunk_search.py`, `backend/github_evidence_materializer.py`, and `backend/evidence_index_readiness.py`: GitHub evidence raw-source storage plus concurrency-safe/idempotent JSONL upserts, lineage-aware materialization, bounded chunking/search, readiness diagnostics, and redacted backend result shapes for saved GitHub context.
 5. `backend/project_change_memory.py` and `backend/project_change_pipeline.py`: project-change extraction from saved GitHub compare/file patches, with deterministic summaries, qualified evidence cards, capability facts, inspect views, and health checks.
-6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, `backend/project_claim_boundaries.py`, `backend/project_evidence_coverage.py`, and `backend/project_evidence_followup_intents.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, atomic project-evidence-memory persistence, coverage-gap prioritization, and bounded follow-up retrieval intents. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory, coverage, and follow-up persistence remain Python-internal boundaries.
-7. `backend/engineering_story_models.py`, `backend/engineering_story_evidence.py`, `backend/engineering_story_clustering.py`, `backend/engineering_story_reconstruction.py`, `backend/engineering_story_sufficiency.py`, `backend/engineering_story_opportunity.py`, `backend/engineering_story_memory.py`, and `backend/engineering_story_matching.py`: strict, persistence-ready story contracts, authority resolution, event-core clustering, conservative reconstruction, separate claim/story sufficiency, bounded opportunity detection, atomic canonical-JSON memory, and deterministic identity matching. These modules preserve evidence references and claim boundaries; they do not generate resume prose, infer ownership, or use JD/company context during clustering.
-8. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
+6. `backend/project_evidence_models.py`, `backend/project_evidence_input.py`, `backend/project_evidence_*.py`, `backend/project_capability_*.py`, `backend/project_capability_memory.py`, and `backend/project_claim_boundaries.py`: bounded project-evidence models, read-only adapters, deterministic normalization/deduplication, conservative fact synthesis, quality scoring, canonical capability taxonomy and signal extraction, candidate grouping, support assessment, claim-boundary inheritance, authoritative capability-fact building, and atomic project-evidence-memory persistence. `project_capability_memory.py` separately validates and persists only authoritative capability facts as `project_capability_memory.v1`, with deterministic content hashes, strict lineage checks, and bounded safe diagnostics. This layer consumes GitHub evidence, optional project-change memory, and project facts; its bounded orchestration is exposed through `/api/project-evidence/*`, while capability-memory persistence remains a Python-internal boundary.
+7. `backend/hiring_context_models.py`, `backend/hiring_context_intelligence.py`, and `backend/hiring_context_organization.py`: strict hiring-context contracts, canonical role-family classification, explicit/inferred hiring-signal extraction, provenance-aware scoring, and organization/team context resolution. This is a backend-only, fail-closed Python layer with no REST schema or frontend client; it does not turn ambiguous language into confirmed facts.
+8. `backend/engineering_story_models.py`, `backend/engineering_story_evidence.py`, `backend/engineering_story_clustering.py`, `backend/engineering_story_reconstruction.py`, `backend/engineering_story_sufficiency.py`, `backend/engineering_story_opportunity.py`, `backend/engineering_story_memory.py`, `backend/engineering_story_memory_service.py`, `backend/engineering_story_lifecycle.py`, and `backend/engineering_story_matching.py`: strict, persistence-ready story contracts, authority resolution, event-core clustering, conservative reconstruction, separate claim/story sufficiency, bounded opportunity detection, atomic canonical-JSON memory, lifecycle gates, and deterministic identity matching. These modules preserve evidence references and claim boundaries; they do not generate resume prose, infer ownership, or use JD/company context during clustering.
+9. `backend/api_server.py` and `frontend/`: FastAPI plus the React + Vite Web UI for dashboard, job description, resume, cover letter, applications, interview prep, GitHub evidence, prompt settings, and chat pages.
 
 The current retrieval V2 work also includes `backend/project_query_planner.py`, `backend/project_retrieval_v2.py`, `backend/evidence_hybrid_retrieval.py`, and `backend/chroma_http_vector_search.py`. The planner builds deterministic, project-scoped, bounded query groups from project facts and JD targets while filtering raw, secret, and boilerplate content. `USE_GITHUB_EVIDENCE_RETRIEVAL_V2` is default-off; when explicitly enabled, resume evidence callers require repository authority, ready materialized/indexed evidence, and the local Chroma HTTP vector backend before routing through bounded hybrid retrieval. It does not enable capability memory, read raw content through the API, or add a frontend retrieval control.
 
@@ -486,7 +489,9 @@ Project evidence memory is controlled by `USE_PROJECT_EVIDENCE_MEMORY` and persi
 
 Project capability memory is defined by `project_capability_memory.v1` and persists to `information/project_capability_memory.json` through Python-internal builders, validators, loaders, and atomic persistence helpers. It accepts only already-built authoritative capability facts, derives deterministic project summaries and diagnostics, stores a canonical content hash, rejects malformed or conflicting identities, forbids raw/sensitive artifact content, and protects the upstream project-evidence artifact path from overwrite. This persistence layer has no dedicated HTTP route or production frontend trigger yet.
 
-Project evidence coverage is also available as a bounded internal analysis. `project_evidence_coverage.py` evaluates evidence across implementation mechanisms, storage, retrieval/ranking, validation/repair, metrics/impact, and JD alignment; `project_evidence_followup_intents.py` prioritizes gaps and converts them into limited retrieval goals, evidence types, requirement IDs, and reference evidence. The planner and retrieval V2 validate these intents for project scope, enums, counts, and lengths, then fail closed on invalid input. This analysis adds no new business HTTP route or frontend control and does not turn a gap into a claim.
+The former project-evidence coverage/follow-up-intent analysis has been removed from the active backend contract. `project_query_planner.py` and retrieval V2 now retain only their bounded project-query and evidence-routing responsibilities; the removed `retrieval_intents` parameter is no longer forwarded through resume retrieval. This cleanup adds no new business HTTP route or frontend control.
+
+Hiring-context intelligence is a separate backend-only layer. `hiring_context_models.py` defines strict serializable contracts; `hiring_context_intelligence.py` normalizes terms, classifies role families, extracts explicit versus inferred signals, and preserves provenance with deterministic scoring; `hiring_context_organization.py` resolves organization/team context through bounded registries and parent normalization. Inputs are fail-closed and ambiguous language is not promoted to confirmed fact. No REST schema, frontend client, or hiring-context UI exists yet.
 
 Engineering-story support is kept as a separate evidence-grounded contract layer. `engineering_story_models.py` and `engineering_story_evidence.py` require bounded authority references, evidence states, claim boundaries, and lifecycle/revalidation status. `engineering_story_clustering.py` groups evidence by explicit change/event-core relationships, preserves ambiguous or weak lineage as such, and avoids using JD/company context or generating prose. `engineering_story_reconstruction.py` rebuilds only the minimum supported story, while `engineering_story_sufficiency.py` separates technical-claim support from causal-story sufficiency and `engineering_story_opportunity.py` reports structured information gaps without generating JD advice. `engineering_story_memory.py` persists strict, hashed canonical JSON with atomic replacement; `engineering_story_matching.py` derives stable canonical IDs from project and founding structural seeds, not mutable wording or scores. These modules do not infer ownership, outcomes, or resume bullets.
 
@@ -931,11 +936,13 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 |   |-- project_change_memory.py # project change memory schema、提取和持久化
 |   |-- project_change_pipeline.py    # project change memory pipeline、inspect 和 health 辅助逻辑
 |   |-- project_evidence_*.py         # project evidence 模型、pipeline、评分、合成和持久化
-|   |-- project_evidence_coverage.py / project_evidence_followup_intents.py # coverage 缺口和有界检索目标
+|   |-- hiring_context_models.py / hiring_context_intelligence.py # 严格 hiring-context contract 与 role/signal intelligence
+|   |-- hiring_context_organization.py # 组织/团队上下文规范化与解析
 |   |-- engineering_story_models.py / engineering_story_evidence.py # 严格 story contract 和 authority 引用
 |   |-- engineering_story_clustering.py / engineering_story_reconstruction.py # event-core 聚类和保守 story 重建
 |   |-- engineering_story_sufficiency.py / engineering_story_opportunity.py # claim/story 充分性与有界缺口
-|   |-- engineering_story_memory.py / engineering_story_matching.py # 原子 JSON memory 与 canonical identity matching
+|   |-- engineering_story_memory.py / engineering_story_memory_service.py / engineering_story_lifecycle.py # 原子 memory、service 与 lifecycle gate
+|   |-- engineering_story_matching.py # canonical identity matching
 |   |-- project_capability_*.py       # capability taxonomy、分组、评分、boundary 和 fact 构建
 |   |-- project_capability_memory.py  # 权威 capability fact memory 模型和确定性持久化
 |   |-- project_claim_boundaries.py   # 保守的 claim boundary
@@ -974,9 +981,10 @@ WorkAgent 是一个本地运行、面向单用户的 AI 求职工作台。它把
 3. `backend/tech_ontology.py` 和 `backend/data/tech_ontology.jsonl`：本地技术术语匹配、别名映射、安全措辞提示，以及 JD 分析、技能选择和 resume bullet 校验中的 unsupported claim 防护。
 4. `backend/evidence_memory.py`、`backend/evidence_pipeline.py` 和 `backend/evidence_*.py`：保存 GitHub evidence raw source，并把已保存的 GitHub context 继续处理成 chunks、change summaries、evidence cards 和 capability facts。
 5. `backend/project_change_memory.py` 和 `backend/project_change_pipeline.py`：从已保存的 GitHub compare/file patch 提取 project change memory，生成确定性的变更摘要、合格证据卡片、能力事实，以及 inspect 和 health 结果。
-6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py`、`backend/project_claim_boundaries.py`、`backend/project_evidence_coverage.py` 和 `backend/project_evidence_followup_intents.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建、原子 project evidence memory 持久化、coverage 缺口优先级和有界 follow-up retrieval intents。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；能力记忆、coverage 和 follow-up 持久化仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
-7. `backend/engineering_story_models.py`、`backend/engineering_story_evidence.py`、`backend/engineering_story_clustering.py`、`backend/engineering_story_reconstruction.py`、`backend/engineering_story_sufficiency.py`、`backend/engineering_story_opportunity.py`、`backend/engineering_story_memory.py` 和 `backend/engineering_story_matching.py`：提供严格 story contract、authority resolution、event-core 聚类、保守重建、claim/story 充分性、结构化机会缺口、原子 canonical JSON memory 和确定性 identity matching。它们保留 evidence 引用和 claim boundaries，不生成 resume prose、不推断 ownership，clustering 也不读取 JD/company context。
-8. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。GitHub Evidence 页面已加入未解决仓库的关联确认和 evidence preparation 流程，但尚未接入 retrieval 控制或搜索结果展示。
+6. `backend/project_evidence_models.py`、`backend/project_evidence_input.py`、`backend/project_evidence_*.py`、`backend/project_capability_*.py`、`backend/project_capability_memory.py` 和 `backend/project_claim_boundaries.py`：提供有界 project evidence 模型、只读输入适配、确定性规范化/去重、保守事实合成、质量评分、canonical capability taxonomy 和 signal extraction、候选分组、支持度评估、claim boundary 继承、权威 capability fact 构建和原子 project evidence memory 持久化。`project_capability_memory.py` 另行把已构建的权威 capability facts 按 `project_capability_memory.v1` 做严格校验、确定性哈希和原子持久化；能力记忆仍是 Python 内部边界，通过 `/api/project-evidence/*` 暴露的是项目证据编排接口。
+7. `backend/hiring_context_models.py`、`backend/hiring_context_intelligence.py` 和 `backend/hiring_context_organization.py`：提供严格 hiring-context contract、canonical role-family 分类、显式/推断 hiring signal、provenance-aware 规则评分，以及组织/团队上下文解析。该层仅有 fail-closed 的后端 Python 入口，没有 REST schema 或前端 client，不会把模糊词直接升级为确定结论。
+8. `backend/engineering_story_models.py`、`backend/engineering_story_evidence.py`、`backend/engineering_story_clustering.py`、`backend/engineering_story_reconstruction.py`、`backend/engineering_story_sufficiency.py`、`backend/engineering_story_opportunity.py`、`backend/engineering_story_memory.py`、`backend/engineering_story_memory_service.py`、`backend/engineering_story_lifecycle.py` 和 `backend/engineering_story_matching.py`：提供严格 story contract、authority resolution、event-core 聚类、保守重建、claim/story 充分性、结构化机会缺口、原子 canonical JSON memory、lifecycle gate 和确定性 identity matching。它们保留 evidence 引用和 claim boundaries，不生成 resume prose、不推断 ownership，clustering 也不读取 JD/company context。
+9. `backend/api_server.py` 和 `frontend/`：提供 Web UI 使用的 FastAPI 接口，以及包含仪表盘、职位描述、简历、求职信、投递记录、面试准备、GitHub 证据、Prompt 设置和聊天页面的 React + Vite 前端。GitHub Evidence 页面已加入未解决仓库的关联确认和 evidence preparation 流程，但尚未接入 retrieval 控制或搜索结果展示。
 
 当前 retrieval V2 工作还包括 `backend/project_query_planner.py`、`backend/project_retrieval_v2.py`、`backend/evidence_hybrid_retrieval.py` 和 `backend/chroma_http_vector_search.py`。planner 从项目事实和 JD targets 构建确定性、项目范围内且有界的查询分组，并过滤 raw、secret 和 boilerplate 内容。`USE_GITHUB_EVIDENCE_RETRIEVAL_V2` 默认关闭；显式开启后，简历证据调用要求 repository authority、materialized/indexed evidence readiness 和本地 Chroma HTTP 向量后端，再进入有界 hybrid retrieval；条件不足或受控失败时 fail-closed 返回空结果。它不会启用 capability memory、通过 API 读取 raw 内容，也没有前端 retrieval 控件。
 
@@ -1297,7 +1305,9 @@ Evidence preparation 是独立于 retrieval V2 的后端准备流程。`GET /api
 
 Project capability memory 按 `project_capability_memory.v1` schema 持久化到 `information/project_capability_memory.json`，由 Python 内部 builder、validator、loader 和 atomic persistence helper 使用。它只接受已经构建的权威 capability facts，生成确定性的项目摘要、diagnostics 和 content hash，拒绝格式错误、冲突 identity、raw/敏感 artifact 内容，并保护上游 project evidence artifact 不被覆盖；目前没有独立 HTTP 接口或生产版前端触发入口。
 
-Project evidence coverage 也是有界的 Python 内部分析：`project_evidence_coverage.py` 按 implementation mechanism、storage、retrieval/ranking、validation/repair、metrics/impact 和 JD alignment 评估证据状态；`project_evidence_followup_intents.py` 对缺口排序，并生成受限的 retrieval goals、evidence types、requirement ids 和参考证据。query planner 与 retrieval V2 会继续校验 project scope、枚举、数量和长度，非法输入 fail-closed；该分析不新增业务 HTTP route 或前端控件，也不会把缺口变成 claim。
+此前的 project-evidence coverage/follow-up-intent 分析已经从当前后端 contract 移除。`project_query_planner.py` 和 retrieval V2 保留有界的项目查询与证据路由职责；resume retrieval 不再转发已删除的 `retrieval_intents` 参数。本次清理没有新增业务 HTTP route 或前端控件。
+
+Hiring-context intelligence 是独立的后端 Python 层：`hiring_context_models.py` 定义严格可序列化 contract；`hiring_context_intelligence.py` 负责术语规范化、role family 分类、显式/推断 signal 提取、provenance 和确定性评分；`hiring_context_organization.py` 通过有界 registry 与 parent normalization 解析组织/团队上下文。输入采用 fail-closed，模糊语言不会升级为确定事实；目前没有 REST schema、前端 client 或招聘上下文 UI。
 
 Engineering-story 支持是独立的 evidence-grounded contract 层。`engineering_story_models.py` 和 `engineering_story_evidence.py` 要求有界 authority 引用、evidence state、claim boundary 和 lifecycle/revalidation 状态；`engineering_story_clustering.py` 按明确的 change/event-core 关系聚类，保留弱 lineage 和歧义，不读取 JD/company context，也不生成 prose。`engineering_story_reconstruction.py` 仍是有界的下游重建边界，不推断 ownership、outcome 或 resume bullet。
 
@@ -1529,21 +1539,27 @@ Project capability memory 持久化测试：
 python -m pytest tests\test_project_capability_persistence.py -q
 ```
 
-Engineering-story、coverage 和 follow-up intent 回归测试：
+Engineering-story 回归测试：
 
 ```powershell
-python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_matching.py tests\test_project_evidence_coverage.py tests\test_project_evidence_followup_intents.py tests\test_project_evidence_gap_prioritization.py tests\test_project_query_planner.py tests\test_project_retrieval_v2_integration.py tests\test_resume_retrieval_intent_contract.py
+python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_memory_service.py tests\test_engineering_story_lifecycle.py tests\test_engineering_story_matching.py
 ```
 
-本轮专项运行通过 459 个测试（22.72 秒），覆盖严格 authority 引用、claim-boundary/lifecycle 校验、确定性 event-core 聚类、保守重建、claim/story 充分性、有界 opportunity、原子 story memory、canonical matching、coverage 缺口优先级、有界 follow-up intents 和 fail-closed retrieval-intent 路由。
-
-Engineering-story, coverage, and follow-up intent regression tests:
+招聘上下文专项测试：
 
 ```powershell
-python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_matching.py tests\test_project_evidence_coverage.py tests\test_project_evidence_followup_intents.py tests\test_project_evidence_gap_prioritization.py tests\test_project_query_planner.py tests\test_project_retrieval_v2_integration.py tests\test_resume_retrieval_intent_contract.py
+python -m pytest -o addopts= -q tests\test_hiring_context_models.py tests\test_hiring_context_intelligence.py tests\test_hiring_context_organization_intelligence.py
 ```
 
-The latest focused run passed 459 tests in 22.72 seconds. It covers strict authority references, claim-boundary/lifecycle validation, deterministic event-core clustering, conservative reconstruction, claim/story sufficiency, bounded opportunity detection, atomic story memory, canonical matching, coverage-gap prioritization, bounded follow-up intents, and fail-closed retrieval-intent routing.
+最近一次专项运行通过 272 个测试（1.21 秒），覆盖严格 contract、role-family 分类、显式/推断 hiring signal、provenance、组织/团队上下文解析、规范化、稳定排序和 fail-closed 边界。该结果不代表后端全量、前端或端到端验证。
+
+Engineering-story regression tests:
+
+```powershell
+python -m pytest -q tests\test_engineering_story_models.py tests\test_engineering_story_evidence.py tests\test_engineering_story_clustering.py tests\test_engineering_story_reconstruction.py tests\test_engineering_story_sufficiency.py tests\test_engineering_story_opportunity.py tests\test_engineering_story_memory.py tests\test_engineering_story_memory_service.py tests\test_engineering_story_lifecycle.py tests\test_engineering_story_matching.py
+```
+
+The previously recorded 459-test engineering-story/coverage run is stale because the coverage/follow-up-intent modules and their tests were removed. The engineering-story command above now targets the remaining story contract, evidence, lifecycle, memory-service, and matching modules. The latest current-worktree focused result is the separate hiring-context run: 272 tests passed in 1.21 seconds; it is not a full-suite, frontend, or end-to-end result.
 
 Chroma 迁移基线回归测试：
 

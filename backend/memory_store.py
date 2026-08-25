@@ -6,13 +6,20 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 try:
-    from backend.chroma_http_client_factory import ChromaAccessLifecycle
-    from backend.chroma_http_transport import ChromaCollectionMissing
+    from backend.chroma_http_client_factory import ChromaAccessLifecycle, ChromaFactoryDisabled
+    from backend.chroma_http_transport import (
+        ChromaCollectionMissing,
+        ChromaTransportTimeout,
+        ChromaTransportUnavailable,
+    )
     from backend.chroma_operational_reader import ChromaOperationalReader
     from backend.chroma_read_client import ChromaReadClient
     from backend.chroma_write_client import ChromaWriteClient, ChromaWriteAuthorityViolation
@@ -24,8 +31,12 @@ try:
         normalize_repository_identity,
     )
 except ModuleNotFoundError:  # pragma: no cover - legacy backend-directory launch
-    from chroma_http_client_factory import ChromaAccessLifecycle
-    from chroma_http_transport import ChromaCollectionMissing
+    from chroma_http_client_factory import ChromaAccessLifecycle, ChromaFactoryDisabled
+    from chroma_http_transport import (
+        ChromaCollectionMissing,
+        ChromaTransportTimeout,
+        ChromaTransportUnavailable,
+    )
     from chroma_operational_reader import ChromaOperationalReader
     from chroma_read_client import ChromaReadClient
     from chroma_write_client import ChromaWriteClient, ChromaWriteAuthorityViolation
@@ -73,6 +84,58 @@ GITHUB_MUTATION_METADATA_FIELDS = tuple(
         }
     )
 )
+MEMORY_READ_STATES = frozenset({"ready", "empty", "unavailable"})
+MEMORY_UNAVAILABLE_REASONS = frozenset(
+    {
+        "chroma_disabled",
+        "chroma_unavailable",
+        "chroma_timeout",
+        "chroma_collection_missing",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class MemoryReadResult:
+    """Semantic optional profile-memory result without low-level exception details."""
+
+    state: str
+    reason: str | None
+    memory: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if self.state not in MEMORY_READ_STATES or not isinstance(self.memory, Mapping):
+            raise ValueError("invalid_memory_read_result")
+        copied = dict(self.memory)
+        if self.state == "ready" and (not copied or self.reason is not None):
+            raise ValueError("invalid_memory_read_result")
+        if self.state == "empty" and (copied or self.reason is not None):
+            raise ValueError("invalid_memory_read_result")
+        if self.state == "unavailable" and (
+            copied or self.reason not in MEMORY_UNAVAILABLE_REASONS
+        ):
+            raise ValueError("invalid_memory_read_result")
+        object.__setattr__(self, "memory", MappingProxyType(copied))
+
+    @property
+    def available(self) -> bool:
+        return self.state != "unavailable"
+
+    def safe_summary(self) -> dict[str, str | int | None]:
+        return {
+            "state": self.state,
+            "reason": self.reason,
+            "field_count": len(self.memory),
+        }
+
+    def __repr__(self) -> str:
+        summary = self.safe_summary()
+        return (
+            "MemoryReadResult("
+            f"state={summary['state']!r}, "
+            f"reason={summary['reason']!r}, "
+            f"field_count={summary['field_count']!r})"
+        )
 
 
 def normalized_json(value: Any) -> str:
@@ -358,30 +421,27 @@ class MemoryVectorStore:
         except Exception:
             return 0
 
-    def read_profile(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
-        try:
-            if query:
-                result = self.read_client.vector_query(
-                    PROFILE_COLLECTION,
-                    consumer_id="profile_memory_vector_reader",
-                    query_embedding=self.embedder.embed(query),
-                    n_results=limit or 6,
-                    include_documents=False,
-                    metadata_fields=PROFILE_READ_METADATA_FIELDS,
-                    include_distances=False,
-                )
-                metadatas = [hit.metadata for hit in result.hits]
-            else:
-                result = self.read_client.read_records(
-                    PROFILE_COLLECTION,
-                    consumer_id="profile_memory_reader",
-                    include_documents=False,
-                    metadata_fields=PROFILE_READ_METADATA_FIELDS,
-                    max_records=MAX_PROFILE_READ_RECORDS,
-                )
-                metadatas = [record.metadata for record in result.records]
-        except ChromaCollectionMissing:
-            return {}
+    def _read_profile(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
+        if query:
+            result = self.read_client.vector_query(
+                PROFILE_COLLECTION,
+                consumer_id="profile_memory_vector_reader",
+                query_embedding=self.embedder.embed(query),
+                n_results=limit or 6,
+                include_documents=False,
+                metadata_fields=PROFILE_READ_METADATA_FIELDS,
+                include_distances=False,
+            )
+            metadatas = [hit.metadata for hit in result.hits]
+        else:
+            result = self.read_client.read_records(
+                PROFILE_COLLECTION,
+                consumer_id="profile_memory_reader",
+                include_documents=False,
+                metadata_fields=PROFILE_READ_METADATA_FIELDS,
+                max_records=MAX_PROFILE_READ_RECORDS,
+            )
+            metadatas = [record.metadata for record in result.records]
         if not metadatas:
             return {}
 
@@ -422,6 +482,33 @@ class MemoryVectorStore:
         for section, items in list_sections.items():
             memory[section] = [value for _, value in sorted(items)]
         return memory
+
+    def read_profile(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
+        """Read profile memory strictly, preserving the existing missing-as-empty contract."""
+
+        try:
+            return self._read_profile(query=query, limit=limit)
+        except ChromaCollectionMissing:
+            return {}
+
+    def read_profile_optional(
+        self,
+        query: str = "",
+        limit: int | None = None,
+    ) -> MemoryReadResult:
+        """Adapt expected Chroma availability failures for optional memory enrichment."""
+
+        try:
+            memory = self._read_profile(query=query, limit=limit)
+        except ChromaFactoryDisabled:
+            return MemoryReadResult("unavailable", "chroma_disabled", {})
+        except ChromaTransportUnavailable:
+            return MemoryReadResult("unavailable", "chroma_unavailable", {})
+        except ChromaTransportTimeout:
+            return MemoryReadResult("unavailable", "chroma_timeout", {})
+        except ChromaCollectionMissing:
+            return MemoryReadResult("unavailable", "chroma_collection_missing", {})
+        return MemoryReadResult("ready" if memory else "empty", None, memory)
 
     def delete_profile(
         self,
