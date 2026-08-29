@@ -53,6 +53,7 @@ import project_change_pipeline
 from backend import project_retrieval_v2
 from backend import project_repository_mapping_service
 from backend import github_evidence_preparation_service
+from backend.chroma_write_client import ChromaWriteAuthorityViolation
 from backend.github_evidence_chunks import DEFAULT_GITHUB_EVIDENCE_CHUNKS_PATH
 from backend.github_evidence_materializer import DEFAULT_MATERIALIZATION_MANIFEST_PATH
 from backend.github_raw_storage import DEFAULT_GITHUB_RAW_SOURCES_PATH
@@ -128,6 +129,7 @@ GITHUB_CONTEXT_RAW_MIN_CHARS = 500
 GITHUB_CONTEXT_RAW_MAX_CHARS = 30_000
 PROJECT_REPOSITORY_CONFIRMATIONS_PATH = agent.INFORMATION_DIR / "project_repository_confirmations.json"
 PROJECT_REPOSITORY_IDENTITY_PATH = agent.INFORMATION_DIR / "project_repository_identity.json"
+GITHUB_CONTEXT_PERSISTENCE_RESULT_LIMIT = 500
 logger = logging.getLogger(__name__)
 
 FILE_MAP = {
@@ -17732,6 +17734,164 @@ def fetch_github_remote_state(repo_info: dict[str, Any], previous: dict[str, Any
         return remote_state
 
 
+def _github_context_repository_identity(context: dict[str, Any]) -> tuple[str, str]:
+    raw_identity = context.get("repository") or context.get("url")
+    canonical = project_repository_mapping_service.normalize_repository_identity(raw_identity)
+    if canonical:
+        return canonical, canonical
+    if not isinstance(raw_identity, str):
+        return "", "invalid_repository_identity"
+    alias = raw_identity.strip().casefold()
+    if not re.fullmatch(r"[a-z0-9_.-]{1,160}", alias):
+        return "", "invalid_repository_identity"
+    return alias, ""
+
+
+def group_github_contexts_by_authoritative_project(
+    repo_contexts: list[dict[str, Any]],
+    *,
+    identity_authority: Any,
+) -> dict[str, Any]:
+    """Resolve contexts through accepted authority and return deterministic project groups."""
+
+    authority_mapping = project_repository_mapping_service.authority_to_repository_mapping(
+        identity_authority
+    )
+    repository_to_project = authority_mapping["repository_to_project"]
+    alias_to_repository = authority_mapping["alias_to_repository"]
+    conflicting_identities = {value.casefold() for value in authority_mapping["conflicts"]}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    unresolved_repositories: set[str] = set()
+    conflicting_repositories: set[str] = set()
+
+    for context in repo_contexts:
+        if not isinstance(context, dict):
+            continue
+        resolution_key, canonical_input = _github_context_repository_identity(context)
+        if not resolution_key:
+            if canonical_input:
+                unresolved_repositories.add(canonical_input)
+            continue
+        if resolution_key in conflicting_identities:
+            conflicting_repositories.add(canonical_input or resolution_key)
+            continue
+
+        authoritative_repository = (
+            resolution_key
+            if resolution_key in repository_to_project
+            else alias_to_repository.get(resolution_key, "")
+        )
+        if not authoritative_repository or authoritative_repository in conflicting_identities:
+            target = canonical_input or resolution_key
+            if target in conflicting_identities:
+                conflicting_repositories.add(target)
+            else:
+                unresolved_repositories.add(target)
+            continue
+
+        authoritative_project_id = repository_to_project.get(authoritative_repository, "")
+        context_project_id = project_repository_mapping_service.normalize_project_id(
+            context.get("project_id")
+        )
+        if not authoritative_project_id or (
+            context_project_id and context_project_id != authoritative_project_id
+        ):
+            conflicting_repositories.add(authoritative_repository)
+            continue
+
+        resolved_context = dict(context)
+        resolved_context["repository"] = authoritative_repository
+        resolved_context["project_id"] = authoritative_project_id
+        groups.setdefault(authoritative_project_id, []).append(resolved_context)
+
+    ordered_groups = []
+    for project_id in sorted(groups):
+        ordered_contexts = sorted(
+            groups[project_id],
+            key=lambda context: (
+                str(context.get("repository") or "").casefold(),
+                json.dumps(
+                    context,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            ),
+        )
+        ordered_groups.append((project_id, ordered_contexts))
+
+    return {
+        "groups": ordered_groups,
+        "unresolved_repository_identities": sorted(unresolved_repositories)[
+            :GITHUB_CONTEXT_PERSISTENCE_RESULT_LIMIT
+        ],
+        "conflicting_repository_identities": sorted(conflicting_repositories)[
+            :GITHUB_CONTEXT_PERSISTENCE_RESULT_LIMIT
+        ],
+    }
+
+
+def persist_github_contexts_by_project(
+    repo_contexts: list[dict[str, Any]],
+    *,
+    identity_authority: Any = None,
+) -> dict[str, Any]:
+    """Persist each authoritative project group independently and return safe diagnostics."""
+
+    if identity_authority is None:
+        identity_authority = (
+            project_repository_mapping_service.load_project_repository_identity_authority(
+                PROJECT_REPOSITORY_IDENTITY_PATH
+            )
+        )
+    partition = group_github_contexts_by_authoritative_project(
+        repo_contexts,
+        identity_authority=identity_authority,
+    )
+    persisted_project_ids: list[str] = []
+    failed_project_ids: list[str] = []
+    for project_id, project_contexts in partition["groups"]:
+        assert_agent_task_not_cancelled()
+        try:
+            agent.save_github_context_output(project_contexts)
+            persisted_project_ids.append(project_id)
+        except ChromaWriteAuthorityViolation:
+            raise
+        except Exception:
+            failed_project_ids.append(project_id)
+            logger.warning(
+                "GitHub context persistence failed for authoritative project %s",
+                project_id,
+            )
+
+    has_identity_failures = bool(
+        partition["unresolved_repository_identities"]
+        or partition["conflicting_repository_identities"]
+    )
+    has_failures = has_identity_failures or bool(failed_project_ids)
+    if persisted_project_ids:
+        status = "partial" if has_failures else "ready"
+    elif has_failures:
+        status = "blocked"
+    else:
+        status = "empty"
+    return {
+        "status": status,
+        "project_group_count": len(partition["groups"]),
+        "persisted_project_ids": persisted_project_ids[
+            :GITHUB_CONTEXT_PERSISTENCE_RESULT_LIMIT
+        ],
+        "failed_project_ids": failed_project_ids[:GITHUB_CONTEXT_PERSISTENCE_RESULT_LIMIT],
+        "unresolved_repository_identities": partition[
+            "unresolved_repository_identities"
+        ],
+        "conflicting_repository_identities": partition[
+            "conflicting_repository_identities"
+        ],
+    }
+
+
 def fetch_github_context_api(
     approved: bool,
     resume_source: str = "resume",
@@ -17883,14 +18043,32 @@ def fetch_github_context_api(
                 pass
 
     path = agent.CHROMA_DB_PATH
-    if fetched_contexts:
-        path = agent.save_github_context_output(fetched_contexts)
+    identity_authority = (
+        project_repository_mapping_service.load_project_repository_identity_authority(
+            PROJECT_REPOSITORY_IDENTITY_PATH
+        )
+    )
+    github_context_persistence = persist_github_contexts_by_project(
+        fetched_contexts,
+        identity_authority=identity_authority,
+    )
 
     github_evidence_raw_persistence_result = None
     if is_github_evidence_enabled():
         try:
-            github_evidence_raw_persistence_result = persist_github_evidence_raw_sources(
+            resolved_repo_context_partition = group_github_contexts_by_authoritative_project(
                 repo_contexts,
+                identity_authority=identity_authority,
+            )
+            resolved_repo_contexts = [
+                context
+                for _resolved_project_id, project_contexts in resolved_repo_context_partition[
+                    "groups"
+                ]
+                for context in project_contexts
+            ]
+            github_evidence_raw_persistence_result = persist_github_evidence_raw_sources(
+                resolved_repo_contexts,
                 project_id=project_id,
                 project_name=project_name,
             )
@@ -17949,6 +18127,7 @@ def fetch_github_context_api(
         "project_memory_update": project_memory_update,
         "project_memory_status": project_memory_status,
         "scan_results": scan_results,
+        "github_context_persistence": github_context_persistence,
         "fetched_repository_count": len(fetched_contexts),
         "reused_repository_count": sum(1 for result in scan_results if result["cache_status"] == "reused"),
         "scan_state_path": str(agent.GITHUB_REPO_SCAN_STATE_PATH),
@@ -19450,6 +19629,17 @@ def delete_application(record_id: int):
     if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="Application record not found.")
     return result
+
+
+from backend.hiring_context_ranking_review_api import (
+    create_hiring_context_ranking_review_router,
+)
+
+app.include_router(create_hiring_context_ranking_review_router(
+    read_job_description=agent.read_job_description,
+    normalize_job_context=jd_requirements_for_prompt,
+    read_project_memory=agent.read_project_memory,
+))
 
 
 if __name__ == "__main__":

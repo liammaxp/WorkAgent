@@ -256,6 +256,16 @@ export const api = {
       }),
       signal: options.signal,
     }),
+  getHiringContextRankingReviewAvailability: (options = {}) =>
+    request("/hiring-context/review/availability", {
+      signal: options.signal,
+    }),
+  reviewHiringContext: (payload, options = {}) =>
+    request("/hiring-context/review", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    }),
   tailorResume: (
     use_github_context = true,
     allow_project_selection = true,
