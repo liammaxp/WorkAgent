@@ -1555,6 +1555,27 @@ def get_engineering_story_split_relationships(
     )
 
 
+def validate_authoritative_story_memory_generation(
+    memory: AuthoritativeEngineeringStoryMemory,
+    readiness: EngineeringStoryMemoryReadiness,
+) -> None:
+    """Bind an already-loaded immutable artifact to its observed read generation.
+
+    Readiness/fallback decisions belong to the consumer. This check also applies
+    to coherent empty artifacts and never reloads, repairs, or ranks Story truth.
+    """
+    if (not isinstance(memory, AuthoritativeEngineeringStoryMemory)
+            or not isinstance(readiness, EngineeringStoryMemoryReadiness)):
+        raise EngineeringStoryMemoryServiceError(
+            StoryMemoryServiceStage.INTEGRITY, StoryMemoryServiceErrorCode.INTEGRITY_FAILED,
+        )
+    replace(memory)
+    if readiness.logical_fingerprint != memory.logical_fingerprint:
+        raise EngineeringStoryMemoryServiceError(
+            StoryMemoryServiceStage.INTEGRITY, StoryMemoryServiceErrorCode.INTEGRITY_FAILED,
+        )
+
+
 def inspect_authoritative_engineering_story_memory_readiness(
     *,
     path: str | Path | None = None,
@@ -1713,5 +1734,6 @@ __all__ = [
     "resolve_engineering_story_id",
     "serialize_authoritative_engineering_story_memory",
     "validate_authoritative_engineering_story_memory",
+    "validate_authoritative_story_memory_generation",
     "write_authoritative_engineering_story_memory",
 ]
