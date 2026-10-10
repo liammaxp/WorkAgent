@@ -13,6 +13,7 @@ settings.local.*
 !**/.env.example
 !**/.env.sample
 !**/.env.template
+AGENTS.md
 
 # Credentials, authentication state, and cryptographic material
 credentials.json

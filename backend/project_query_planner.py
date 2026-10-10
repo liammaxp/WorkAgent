@@ -5,14 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence, TypedDict
 
-from backend.project_evidence_coverage import CoverageCategory, GapPriority
-from backend.project_evidence_followup_intents import (
-    FollowupEvidenceGoal,
-    FollowupRetrievalIntent,
-    validate_followup_retrieval_intents,
-)
-from backend.project_evidence_models import EvidenceType
-
 
 MAX_QUERY_CHARS = 180
 MAX_QUERIES_PER_GROUP = 3
@@ -102,96 +94,6 @@ _METRIC_TERMS = (
     ("recall", "recall"),
     ("cost", "cost"),
 )
-_FOLLOWUP_PRIORITY = {
-    GapPriority.HIGH: 0,
-    GapPriority.MEDIUM: 1,
-    GapPriority.LOW: 2,
-}
-_FOLLOWUP_GOAL_TARGETS: dict[FollowupEvidenceGoal, tuple[str, str]] = {
-    FollowupEvidenceGoal.CONCRETE_IMPLEMENTATION_MECHANISM: (
-        "mechanisms", "concrete implementation mechanism",
-    ),
-    FollowupEvidenceGoal.TECHNICAL_WORKFLOW: ("mechanisms", "technical workflow"),
-    FollowupEvidenceGoal.ALGORITHM_OR_PROCESSING_STEP: (
-        "mechanisms", "algorithm processing step",
-    ),
-    FollowupEvidenceGoal.SYSTEM_COMPONENTS: ("mechanisms", "system architecture components"),
-    FollowupEvidenceGoal.COMPONENT_RELATIONSHIPS: (
-        "mechanisms", "component relationships",
-    ),
-    FollowupEvidenceGoal.DATA_OR_CONTROL_FLOW: ("mechanisms", "data control flow"),
-    FollowupEvidenceGoal.SERVICE_BOUNDARIES: ("mechanisms", "service boundaries"),
-    FollowupEvidenceGoal.PERSISTENCE_MECHANISM: ("mechanisms", "persistence mechanism"),
-    FollowupEvidenceGoal.DATABASE_OR_CACHE_MECHANISM: (
-        "mechanisms", "database cache mechanism",
-    ),
-    FollowupEvidenceGoal.STORAGE_LIFECYCLE: ("mechanisms", "storage lifecycle"),
-    FollowupEvidenceGoal.RETRIEVAL_MECHANISM: ("mechanisms", "retrieval mechanism"),
-    FollowupEvidenceGoal.INDEXING_MECHANISM: ("mechanisms", "indexing mechanism"),
-    FollowupEvidenceGoal.RANKING_OR_RERANKING_MECHANISM: (
-        "mechanisms", "ranking reranking mechanism",
-    ),
-    FollowupEvidenceGoal.EVIDENCE_SELECTION_MECHANISM: (
-        "mechanisms", "evidence selection mechanism",
-    ),
-    FollowupEvidenceGoal.VALIDATION_MECHANISM: (
-        "validation_repair", "validation mechanism",
-    ),
-    FollowupEvidenceGoal.REPAIR_MECHANISM: ("validation_repair", "repair mechanism"),
-    FollowupEvidenceGoal.RETRY_OR_FALLBACK_BEHAVIOR: (
-        "validation_repair", "retry fallback behavior",
-    ),
-    FollowupEvidenceGoal.FAILURE_HANDLING: ("validation_repair", "failure handling"),
-    FollowupEvidenceGoal.DETERMINISTIC_VERIFICATION: (
-        "validation_repair", "deterministic verification",
-    ),
-    FollowupEvidenceGoal.OUTPUT_VALIDATION: ("validation_repair", "output validation"),
-    FollowupEvidenceGoal.QUALITY_GATE: ("validation_repair", "quality gate"),
-    FollowupEvidenceGoal.SCHEMA_VALIDATION: ("validation_repair", "schema validation"),
-    FollowupEvidenceGoal.CONSISTENCY_ENFORCEMENT: (
-        "validation_repair", "consistency enforcement",
-    ),
-    FollowupEvidenceGoal.EVIDENCE_GROUNDING: ("mechanisms", "evidence grounding"),
-    FollowupEvidenceGoal.CONFIDENCE_HANDLING: ("mechanisms", "confidence handling"),
-    FollowupEvidenceGoal.CLAIM_VALIDATION: ("validation_repair", "claim validation"),
-    FollowupEvidenceGoal.SOURCE_ENFORCEMENT: ("mechanisms", "source citation enforcement"),
-    FollowupEvidenceGoal.FACTUALITY_EVALUATION: (
-        "validation_repair", "factuality validation",
-    ),
-    FollowupEvidenceGoal.METRIC_OR_IMPACT_EVIDENCE: (
-        "metrics_impact", "metric impact evidence",
-    ),
-    FollowupEvidenceGoal.JD_REQUIREMENT_EVIDENCE: (
-        "jd_alignment", "requirement evidence",
-    ),
-}
-_FOLLOWUP_EVIDENCE_TYPE_TERMS = {
-    EvidenceType.FEATURE: "feature implementation",
-    EvidenceType.BUG_FIX: "bug fix",
-    EvidenceType.ARCHITECTURE: "architecture",
-    EvidenceType.WORKFLOW: "workflow",
-    EvidenceType.VALIDATION: "validation",
-    EvidenceType.FAILURE_RECOVERY: "failure recovery",
-    EvidenceType.DATA_PERSISTENCE: "data persistence",
-    EvidenceType.RETRIEVAL: "retrieval",
-    EvidenceType.OPTIMIZATION: "optimization",
-    EvidenceType.INTEGRATION: "integration",
-    EvidenceType.TESTING: "testing",
-    EvidenceType.CONFIGURATION: "configuration",
-    EvidenceType.DOCUMENTATION: "documentation",
-}
-_FOLLOWUP_GROUP_PURPOSE = {
-    "jd_alignment": "JD target",
-    "mechanisms": "mechanism",
-    "validation_repair": "validation repair",
-    "metrics_impact": "metric evidence search",
-}
-_SYMBOL_RELEVANT_CATEGORIES = frozenset({
-    CoverageCategory.IMPLEMENTATION_MECHANISM,
-    CoverageCategory.DATA_STORAGE,
-    CoverageCategory.RETRIEVAL_RANKING,
-    CoverageCategory.VALIDATION_REPAIR,
-})
 
 
 class ProjectQueryPlan(TypedDict):
@@ -357,55 +259,6 @@ def _symbol_queries(symbols: Sequence[str]) -> list[str]:
     return queries
 
 
-def _dedupe_queries(values: Sequence[str]) -> list[str]:
-    result: dict[str, str] = {}
-    for value in values:
-        key = value.casefold()
-        if key not in result:
-            result[key] = value
-    return list(result.values())
-
-
-def _followup_query_candidates(
-    *,
-    identity: Sequence[str],
-    retrieval_intents: Sequence[FollowupRetrievalIntent],
-    symbols_available: bool,
-) -> tuple[dict[str, list[str]], dict[str, int]]:
-    candidates = {group: [] for group in QUERY_GROUPS}
-    group_priorities: dict[str, int] = {}
-    for intent in retrieval_intents:
-        priority = _FOLLOWUP_PRIORITY[intent.priority]
-        terms_by_group: dict[str, list[str]] = {}
-        for goal in intent.evidence_goals:
-            group, phrase = _FOLLOWUP_GOAL_TARGETS[goal]
-            terms_by_group.setdefault(group, []).append(phrase)
-        if "jd_alignment" in terms_by_group:
-            terms_by_group["jd_alignment"].extend(intent.requirement_ids)
-        type_terms = [
-            _FOLLOWUP_EVIDENCE_TYPE_TERMS[evidence_type]
-            for evidence_type in intent.preferred_evidence_types
-            if evidence_type in _FOLLOWUP_EVIDENCE_TYPE_TERMS
-        ]
-        for group, terms in terms_by_group.items():
-            queries = _make_queries(
-                identity,
-                [*terms, *type_terms],
-                _FOLLOWUP_GROUP_PURPOSE[group],
-            )
-            candidates[group] = _dedupe_queries([*candidates[group], *queries])
-            group_priorities[group] = min(priority, group_priorities.get(group, priority))
-        if symbols_available and any(
-            category in _SYMBOL_RELEVANT_CATEGORIES
-            for category in intent.target_categories
-        ):
-            group_priorities["symbols"] = min(
-                priority,
-                group_priorities.get("symbols", priority),
-            )
-    return candidates, group_priorities
-
-
 def build_project_query_plan(
     *,
     project_id: Any,
@@ -413,14 +266,9 @@ def build_project_query_plan(
     compact_facts: Any = None,
     jd_targets: Any = None,
     known_symbols: Any = None,
-    retrieval_intents: Any = None,
 ) -> ProjectQueryPlan:
     """Build a side-effect-free query plan without treating targets as evidence."""
 
-    validated_intents = validate_followup_retrieval_intents(
-        project_id=project_id,
-        retrieval_intents=retrieval_intents,
-    )
     project_id_value = _safe_string(project_id)[:120]
     project = _select_project(project_id_value, project_memory) if project_id_value else {}
     scoped_facts = _select_project_scoped(compact_facts, project_id_value)
@@ -451,56 +299,6 @@ def build_project_query_plan(
         "validation_repair": _make_queries(identity, validation_terms, "validation repair"),
         "metrics_impact": _make_queries(identity, metric_terms, "metric evidence search"),
     }
-    if validated_intents:
-        followup, followup_priorities = _followup_query_candidates(
-            identity=[
-                project_id_value,
-                *(item for item in identity if item.casefold() != project_id_value.casefold()),
-            ],
-            retrieval_intents=validated_intents,
-            symbols_available=bool(groups["symbols"]),
-        )
-        for group in QUERY_GROUPS:
-            if not followup[group]:
-                continue
-            if group == "jd_alignment" and groups[group]:
-                groups[group] = _dedupe_queries([
-                    groups[group][0],
-                    *followup[group],
-                    *groups[group][1:],
-                ])[:MAX_QUERIES_PER_GROUP]
-            else:
-                groups[group] = _dedupe_queries([
-                    *followup[group],
-                    *groups[group],
-                ])[:MAX_QUERIES_PER_GROUP]
-        touched_groups = sorted(
-            (
-                group
-                for group in followup_priorities
-                if group not in {"project_identity", "jd_alignment"}
-            ),
-            key=lambda group: (followup_priorities[group], QUERY_GROUPS.index(group)),
-        )
-        allocation_order = [
-            "project_identity",
-            "jd_alignment",
-            *touched_groups,
-            *(
-                group
-                for group in QUERY_GROUPS
-                if group not in {"project_identity", "jd_alignment", *touched_groups}
-            ),
-        ]
-        remaining = MAX_TOTAL_QUERIES
-        allocated = {group: [] for group in QUERY_GROUPS}
-        for group in allocation_order:
-            allocated[group] = groups[group][:remaining]
-            remaining -= len(allocated[group])
-        return ProjectQueryPlan(
-            project_id=project_id_value,
-            **{group: allocated[group] for group in QUERY_GROUPS},
-        )
     remaining = MAX_TOTAL_QUERIES
     bounded: dict[str, list[str]] = {}
     for group in QUERY_GROUPS:

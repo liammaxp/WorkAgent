@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAgentProgress } from "../agentProgress/AgentProgressContext.jsx";
 import { fileChangedSinceAppOpened, readStoredBoolean, writeStoredBoolean } from "../session.js";
+import HiringContextRankingReview from "../components/hiringContext/HiringContextRankingReview.jsx";
 import {
   Alert,
   ConfirmDialog,
@@ -559,6 +560,7 @@ export default function Resume() {
           <button type="button" className="btn btn-primary" onClick={generate} disabled={loading || agentActive}>
             {activeAction === "generate" ? copy.generating : copy.generate}
           </button>
+          <HiringContextRankingReview />
         </div>
 
       </section>
