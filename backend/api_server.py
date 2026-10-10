@@ -4809,6 +4809,7 @@ def compact_value_for_prompt(value: Any, max_string_chars: int = 1200, max_list_
         return compacted
     if isinstance(value, dict):
         skipped_keys = {
+            "ranking_generation_id",
             "patch",
             "readme",
             "source_facts",
@@ -7886,6 +7887,8 @@ def project_ranking_entry_for_project(project_ranking: dict[str, Any] | None, pr
             continue
         if project_id and str(entry.get("project_id") or "") == project_id:
             return entry
+        if "story_ranking" in entry:
+            continue
         if project_labels_match(entry.get("project_name"), project_name):
             return entry
     return {}
@@ -7915,6 +7918,8 @@ def attach_candidate_claims_to_project_ranking(
     ranking = json.loads(json.dumps(project_ranking or {}, ensure_ascii=False))
     for entry in ranking.get("selected_projects", []) if isinstance(ranking.get("selected_projects"), list) else []:
         for candidate in project_candidates:
+            if "story_ranking" in entry and entry.get("project_id") != candidate.get("project_id"):
+                continue
             if (
                 str(entry.get("project_id") or "") and str(entry.get("project_id")) == str(candidate.get("project_id") or "")
             ) or project_labels_match(entry.get("project_name"), candidate.get("project_name") or candidate.get("source_name")):
@@ -8009,6 +8014,11 @@ def mechanism_group_hits(block: str, groups: list[tuple[str, list[str]]]) -> tup
     return hits, missing
 
 
+def exact_project_layout_heading_matches(project_name: Any, heading: Any) -> bool:
+    name = str(project_name or "").strip()
+    return bool(name) and latex_escape_text(name).casefold() == str(heading or "").strip().casefold()
+
+
 def validate_project_section_allocation(
     projects_section: dict | str,
     project_ranking: dict,
@@ -8030,6 +8040,8 @@ def validate_project_section_allocation(
         entry for entry in project_ranking.get("omitted_projects", [])
         if isinstance(entry, dict)
     ] if isinstance(project_ranking, dict) else []
+    story_aware = bool(selected) and all("story_ranking" in entry for entry in selected)
+    labels_match = exact_project_layout_heading_matches if story_aware else project_labels_match
     issues = []
     suggested_fixes = []
     project_count = len(blocks)
@@ -8054,23 +8066,31 @@ def validate_project_section_allocation(
     selected_present = []
     for heading in headings:
         for entry in selected:
-            if project_labels_match(entry.get("project_name"), heading):
+            if labels_match(entry.get("project_name"), heading):
                 selected_present.append(entry)
                 break
     expected_names = [entry.get("project_name") for entry in selected_present]
     actual_names = headings[: len(selected_present)]
     for expected, actual in zip(expected_names, actual_names):
-        if not project_labels_match(expected, actual):
+        if not labels_match(expected, actual):
             heading_order_matches = False
             break
-    if selected_present and not heading_order_matches:
+    if story_aware:
+        ordered = sorted(selected, key=lambda entry: int(entry.get("rank") or 99))
+        heading_order_matches = len(headings) == len(ordered) and all(
+            labels_match(entry.get("project_name"), heading)
+            for entry, heading in zip(ordered, headings)
+        )
+    if (selected_present or story_aware) and not heading_order_matches:
         issues.append("Project order does not follow the ranking.")
         suggested_fixes.append("Reorder Projects entries to match selected_projects rank order.")
 
     omitted_readded = []
     for omitted_entry in omitted:
         for heading in headings:
-            if project_labels_match(omitted_entry.get("project_name"), heading):
+            if story_aware and any(labels_match(entry.get("project_name"), heading) for entry in selected):
+                continue
+            if labels_match(omitted_entry.get("project_name"), heading):
                 append_unique(omitted_readded, omitted_entry.get("project_name"), 12)
     if omitted_readded:
         issues.append("Omitted projects were re-added: " + ", ".join(omitted_readded))
@@ -8082,7 +8102,7 @@ def validate_project_section_allocation(
     block_by_heading = dict(zip(headings, blocks))
     for entry in selected:
         for heading in headings:
-            if project_labels_match(entry.get("project_name"), heading):
+            if labels_match(entry.get("project_name"), heading):
                 budget_by_heading[heading] = int(entry.get("bullet_budget") or 0)
                 rank_by_heading[heading] = int(entry.get("rank") or 0)
                 score_by_heading[heading] = int(entry.get("total_score") or entry.get("relevance_score") or 0)
@@ -8105,7 +8125,7 @@ def validate_project_section_allocation(
     top_has_strongest_detail = True
     if selected:
         top_entry = selected[0]
-        top_heading = next((heading for heading in headings if project_labels_match(top_entry.get("project_name"), heading)), "")
+        top_heading = next((heading for heading in headings if labels_match(top_entry.get("project_name"), heading)), "")
         if top_heading:
             top_count = bullet_counts.get(top_heading, 0)
             top_length = len(block_by_heading.get(top_heading, ""))
@@ -8123,7 +8143,7 @@ def validate_project_section_allocation(
 
     value_preservation: dict[str, Any] = {}
     for entry in selected:
-        heading = next((name for name in headings if project_labels_match(entry.get("project_name"), name)), "")
+        heading = next((name for name in headings if labels_match(entry.get("project_name"), name)), "")
         if not heading:
             continue
         block = block_by_heading.get(heading, "")
@@ -8158,7 +8178,7 @@ def validate_project_section_allocation(
         if not forbidden_claims:
             continue
         for heading, block in block_by_heading.items():
-            if project_labels_match(entry.get("project_name"), heading):
+            if labels_match(entry.get("project_name"), heading):
                 for claim in unsupported_claims_in_project_block(block, forbidden_claims):
                     append_unique(unsupported_claims, f"{heading}: {claim}", 20)
     if unsupported_claims:
@@ -8647,10 +8667,15 @@ def project_candidate_matches_entry(candidate: dict[str, Any], entry: dict[str, 
     entry_id = str(entry.get("project_id") or "")
     if entry_id and entry_id == str(candidate.get("project_id") or ""):
         return True
+    if "story_ranking" in entry:
+        return False
     return project_labels_match(entry.get("project_name"), candidate.get("project_name") or candidate.get("source_name"))
 
 
 def find_project_candidate_for_entry(project_candidates: list[dict[str, Any]], entry: dict[str, Any]) -> dict[str, Any] | None:
+    if "story_ranking" in entry:
+        matches = [candidate for candidate in project_candidates if project_candidate_matches_entry(candidate, entry)]
+        return matches[0] if len(matches) == 1 else None
     for candidate in project_candidates:
         if project_candidate_matches_entry(candidate, entry):
             return candidate
@@ -8700,6 +8725,53 @@ def trim_project_block_to_budget(block: str, budget: int) -> str:
     return "".join(pieces)
 
 
+def validate_resume_candidate_generation(
+    project_ranking: dict[str, Any] | None, candidates: list[dict[str, Any]],
+) -> None:
+    """Reject mixed or incomplete candidate sets before downstream realization."""
+    selected = (project_ranking or {}).get("selected_projects", [])
+    if not any("story_ranking" in entry for entry in selected):
+        return
+    generation = (project_ranking or {}).get("ranking_generation_id")
+    selected_ids = [entry.get("project_id") for entry in selected]
+    candidate_ids = [candidate.get("project_id") for candidate in candidates]
+    if (not isinstance(generation, str) or not generation
+            or not all("story_ranking" in entry for entry in selected)
+            or len(set(selected_ids)) != len(selected_ids)
+            or len(candidate_ids) != len(selected_ids) or set(candidate_ids) != set(selected_ids)
+            or any(candidate.get("ranking_generation_id") != generation for candidate in candidates)):
+        raise HTTPException(status_code=409, detail="Project candidates need ranking revalidation.")
+
+
+def bind_story_ranked_project_candidate(
+    project: dict[str, Any], candidate: dict[str, Any], entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach project-owned presentation after generation, using exact selection identity."""
+    project_id = str(entry.get("project_id") or "")
+    if not project_id or project_id != str(project.get("project_id") or ""):
+        raise HTTPException(status_code=409, detail="Selected project identity needs revalidation.")
+    technologies = []
+    for key in ("tech_stack", "tools", "technologies"):
+        for value in listish(project.get(key, [])):
+            append_resume_output_unique(technologies, value, 6)
+    url = str(project.get("project_url") or project.get("github_url") or project.get("url") or "").strip()
+    if not re.match(r"^https?://[^\s{}\\]+$", url, re.IGNORECASE):
+        url = ""
+    return {
+        **candidate,
+        "project_id": project_id,
+        "project_name": str(entry.get("project_name") or project_display_name(project)),
+        "project_rank": entry["rank"],
+        "story_ranking": entry["story_ranking"],
+        "project_presentation": {
+            "project_id": project_id,
+            "display_name": str(entry.get("project_name") or project_display_name(project)),
+            "technologies": technologies,
+            "url": url,
+        },
+    }
+
+
 def build_project_block_from_candidate(
     entry: dict[str, Any],
     candidate: dict[str, Any] | None,
@@ -8710,15 +8782,26 @@ def build_project_block_from_candidate(
     project_name = str(entry.get("project_name") or (candidate or {}).get("project_name") or "Project").strip()
     evidence_card = (candidate or {}).get("evidence_card") if isinstance((candidate or {}).get("evidence_card"), dict) else {}
     technologies = []
-    for item in (candidate or {}).get("skills_to_emphasize", []) if isinstance((candidate or {}).get("skills_to_emphasize"), list) else []:
-        append_resume_output_unique(technologies, item, 6)
-    for item in evidence_card.get("technologies", []) if isinstance(evidence_card.get("technologies"), list) else []:
-        append_resume_output_unique(technologies, item, 6)
+    link = ""
+    if "story_ranking" in entry:
+        presentation = (candidate or {}).get("project_presentation") or {}
+        if presentation and presentation.get("project_id") != entry.get("project_id"):
+            raise HTTPException(status_code=409, detail="Project presentation identity needs revalidation.")
+        for item in listish(presentation.get("technologies", [])):
+            append_resume_output_unique(technologies, item, 6)
+        url = str(presentation.get("url") or "")
+        if re.match(r"^https?://[^\s{}\\]+$", url, re.IGNORECASE):
+            link = f"\\href{{{latex_escape_text(url)}}}{{Code}}"
+    else:
+        for item in (candidate or {}).get("skills_to_emphasize", []) if isinstance((candidate or {}).get("skills_to_emphasize"), list) else []:
+            append_resume_output_unique(technologies, item, 6)
+        for item in evidence_card.get("technologies", []) if isinstance(evidence_card.get("technologies"), list) else []:
+            append_resume_output_unique(technologies, item, 6)
     tech_suffix = f" $|$ \\emph{{{latex_escape_text(', '.join(technologies[:5]))}}}" if technologies else ""
     bullets = candidate_bullet_texts_for_budget(candidate, budget, rank=rank, total_projects=total_projects)
     return (
         "\\resumeProjectHeading\n"
-        f"  {{\\textbf{{{latex_escape_text(project_name)}}}{tech_suffix}}}{{}}\n"
+        f"  {{\\textbf{{{latex_escape_text(project_name)}}}{tech_suffix}}}{{{link}}}\n"
         "\\resumeItemListStart\n"
         + latex_resume_items_from_bullets(bullets)
         + "\n\\resumeItemListEnd"
@@ -8764,11 +8847,16 @@ def enforce_project_section_allocation(
         if rank > 1 and total_selected > 1:
             budget = min(budget, max(1, project_bullet_budget(1, total_selected) - 1))
         existing_block = ""
-        for heading, block in block_by_heading.items():
-            if project_labels_match(entry.get("project_name"), heading):
-                existing_block = block
-                break
         candidate = find_project_candidate_for_entry(project_candidates, entry)
+        if "story_ranking" in entry:
+            if candidate is None:
+                raise HTTPException(status_code=409, detail="Selected project candidate is missing before layout.")
+            # Final merge owns prose only; title, technologies and link are rebuilt by exact ID.
+        else:
+            for heading, block in block_by_heading.items():
+                if project_labels_match(entry.get("project_name"), heading):
+                    existing_block = block
+                    break
         candidate_bullets = candidate_bullet_texts_for_budget(
             candidate,
             budget,
@@ -9107,6 +9195,27 @@ def select_staged_projects_with_ranking(
     allow_project_selection: bool,
     resume_constraints: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from backend.resume_story_ranking_integration import (
+        ResumeRankingIntegrityError, prepare_resume_ranking, production_selection,
+        story_aware_resume_ranking_enabled,
+    )
+
+    if story_aware_resume_ranking_enabled():
+        try:
+            constraints = default_resume_constraints(resume_constraints)
+            plan_decision = prepare_resume_ranking(
+                normalized_job_context=jd_requirements_for_prompt(job_description),
+                project_cards=project_list_from_memory(project_memory),
+                project_limit=max(1, min(int(constraints.get("maximum_project_count") or MAX_STAGED_PROJECTS), MAX_STAGED_PROJECTS)),
+            )
+            if plan_decision.plan is not None:
+                return production_selection(
+                    plan_decision.plan, project_list_from_memory(project_memory), project_bullet_budget,
+                )
+        except ResumeRankingIntegrityError:
+            raise HTTPException(status_code=409, detail="Project ranking needs revalidation before generation.") from None
+    else:
+        logger.info("resume_ranking mode=legacy_flag_off")
     projects = project_list_from_memory(project_memory)
     if not projects:
         return [], {"selected_projects": [], "omitted_projects": []}
@@ -12300,6 +12409,11 @@ def build_project_resume_candidate(
     source_name = str(project.get("project_name") or project.get("name") or project.get("project_id") or "")
     constraints = default_resume_constraints(resume_constraints)
     rank_entry = project_rank_entry if isinstance(project_rank_entry, dict) else project_ranking_entry_for_project(project_ranking, project)
+    ranking_generation_id = None
+    if "story_ranking" in rank_entry:
+        ranking_generation_id = (project_ranking or {}).get("ranking_generation_id")
+        if not isinstance(ranking_generation_id, str) or not ranking_generation_id:
+            raise HTTPException(status_code=409, detail="Project ranking needs revalidation before generation.")
     bullet_budget = int(rank_entry.get("bullet_budget") or 0) if isinstance(rank_entry, dict) else 0
     ranking_context = {
         "project_ranking": compact_value_for_prompt(project_ranking or {}, 450, 4),
@@ -12307,19 +12421,27 @@ def build_project_resume_candidate(
         "bullet_budget": bullet_budget,
         "resume_length_constraints": constraints,
     }
-    source_hash = stable_hash(
-        {
-            "job_description": job_description,
-            "project": source_facts,
-            "evidence": evidence,
-            "language": language,
-            "progress_guidance": progress_guidance,
-            "ranking_context": ranking_context,
-            "project_angle_strategy": "project_angle_profile_v1",
-        }
-    )
+    if "story_ranking" in rank_entry:
+        # Preserve every revision in cache identity; generic prompt compaction truncates lists.
+        ranking_context["story_ranking"] = rank_entry["story_ranking"]
+    cache_inputs = {
+        "job_description": job_description,
+        "project": source_facts,
+        "evidence": evidence,
+        "language": language,
+        "progress_guidance": progress_guidance,
+        "ranking_context": ranking_context,
+        "project_angle_strategy": "project_angle_profile_v1",
+    }
+    if ranking_generation_id is not None:
+        # Control metadata bypasses all prompt filtering and compaction.
+        cache_inputs["ranking_generation_id"] = ranking_generation_id
+    source_hash = stable_hash(cache_inputs)
     task_id = current_agent_task_id.get("")
     cached_candidate = get_completed_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash)
+    if (cached_candidate and ranking_generation_id is not None
+            and cached_candidate.get("ranking_generation_id") != ranking_generation_id):
+        cached_candidate = None
     if cached_candidate:
         payload = json.loads(json.dumps(cached_candidate, ensure_ascii=False))
         payload["project_id"] = payload.get("project_id") or project.get("project_id") or ""
@@ -12393,6 +12515,8 @@ def build_project_resume_candidate(
             int(rank_entry.get("rank") or 0),
             total_projects,
         )
+    if ranking_generation_id is not None:
+        payload["ranking_generation_id"] = ranking_generation_id
     save_resume_candidate_checkpoint(task_id, project_id, source_name, source_hash, "done", candidate_json=payload)
     return payload
 
@@ -14794,9 +14918,13 @@ def build_compact_summary_input(
 ) -> dict[str, Any]:
     role_core = jd_core_for_prompt(job_description)
     role_profile = classify_role_family(job_description)
+    story_ordered = bool(project_candidates) and all(
+        isinstance(candidate, dict) and "story_ranking" in candidate for candidate in project_candidates
+    )
     sorted_projects = sorted(
         [candidate for candidate in project_candidates if isinstance(candidate, dict)],
-        key=lambda item: (-summary_fit_score(item), str(item.get("project_name") or item.get("source_name") or "")),
+        key=(lambda item: int(item["project_rank"])) if story_ordered else
+            (lambda item: (-summary_fit_score(item), str(item.get("project_name") or item.get("source_name") or ""))),
     )[:max_projects]
     highlights = []
     strongest_evidence = []
@@ -14821,12 +14949,15 @@ def build_compact_summary_input(
         highlights.append(
             {
                 "projectName": project_name,
-                "oneLineSummary": short_signal(candidate.get("fit_reason") or candidate.get("job_alignment") or candidate.get("projectSummary") or project_name, 260),
+                "oneLineSummary": short_signal(
+                    (candidate.get("projectSummary") or project_name) if story_ordered else
+                    (candidate.get("fit_reason") or candidate.get("job_alignment") or candidate.get("projectSummary") or project_name), 260),
                 "keyTechnologies": shortest_evidence_sources(listish(evidence_card.get("technologies", [])) + listish(candidate.get("skills_to_emphasize", [])), 8),
                 "strongestClaims": claims,
                 "metrics": metrics[:4],
                 "evidenceSources": sources,
-                "fitScore": summary_fit_score(candidate),
+                **({"projectId": candidate["project_id"], "projectRank": candidate["project_rank"]}
+                   if story_ordered else {"fitScore": summary_fit_score(candidate)}),
             }
         )
     compact_skills = compact_skills_for_summary(skills_candidate, max_skills)
@@ -14869,6 +15000,12 @@ def build_compact_summary_input(
 
 
 def build_compact_summary_prompt(payload: dict[str, Any]) -> str:
+    highlights = payload.get("topProjectHighlights", [])
+    priority_rule = (
+        "- The projects are already ordered by authoritative relevance. Preserve this priority. "
+        "Prefer higher-ranked evidence when selecting examples. Do not rerank projects or derive another fit score.\n"
+        if highlights and all("projectRank" in item for item in highlights) else ""
+    )
     return f"""
 Generate structured resume Summary/Profile tailoring recommendations from compact summary evidence only.
 
@@ -14888,6 +15025,7 @@ Rules:
 - Prefer concise ATS-friendly language aligned to targetRole and compactJdRequirements.
 - If evidence is thin, use conservative positioning rather than inflated claims.
 - Do not read or infer raw repo context, full project memory, full achievements, code, or chat history.
+{priority_rule}
 
 Compact summary payload:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -14901,7 +15039,11 @@ def reduce_compact_summary_payload_for_limit(payload: dict[str, Any], max_chars:
         return len(build_compact_summary_prompt(reduced))
 
     if isinstance(reduced.get("topProjectHighlights"), list):
-        reduced["topProjectHighlights"].sort(key=lambda item: -int(item.get("fitScore", 0)))
+        highlights = reduced["topProjectHighlights"]
+        if highlights and all("projectRank" in item for item in highlights):
+            highlights.sort(key=lambda item: int(item["projectRank"]))
+        else:
+            highlights.sort(key=lambda item: -int(item.get("fitScore", 0)))
     if isinstance(reduced.get("promptPolicies"), dict):
         reduced["promptPolicies"] = compact_value_for_prompt(reduced["promptPolicies"], 160, 4)
     for project_limit, skill_limit, claim_limit in [(3, 16, 3), (3, 14, 2), (2, 12, 2), (2, 10, 1)]:
@@ -14957,6 +15099,40 @@ class ResumeCompactInputBuilder:
     build_compact_project_input = staticmethod(build_compact_project_input)
     build_compact_experience_input = staticmethod(build_compact_experience_input)
     build_compact_final_merge_input = staticmethod(build_compact_final_merge_input)
+
+
+def enforce_summary_project_priority(
+    payload: dict[str, Any], compact_payload: dict[str, Any], language: str,
+) -> None:
+    """Enforce exact named-reference order, without classifying prose semantics."""
+    projects = compact_payload.get("topProjectHighlights", [])
+    if not projects or not all("projectRank" in project for project in projects):
+        return
+    projects = sorted(projects, key=lambda project: int(project["projectRank"]))
+    names = [str(project["projectName"]).strip() for project in projects]
+    # Duplicate labels cannot prove ownership. Keep their exact ID references separate.
+    unique_names = {name for name in names if names.count(name) == 1 and name}
+    if unique_names:
+        pattern = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(name) for name in sorted(set(names) - {""}, key=len, reverse=True)) + r")(?!\w)")
+        references = []
+        for match in pattern.finditer(str(payload.get("recommended_summary") or "")):
+            if match.group() not in unique_names:
+                continue
+            position = names.index(match.group())
+            if position not in references:
+                references.append(position)
+        if references != sorted(references):
+            ordered_names = [names[position] for position in sorted(references)]
+            prefix = "项目经验包括：" if str(language).lower().startswith("zh") else "Project experience includes "
+            payload["recommended_summary"] = prefix + "; ".join(ordered_names) + "."
+            payload["risks"].append("Summary project references were restored to the accepted priority order.")
+    priorities = {str(project["projectId"]): index for index, project in enumerate(projects)}
+    priorities.update({name: names.index(name) for name in unique_names if name not in priorities})
+    evidence = payload.get("evidence_basis", [])
+    slots = [index for index, value in enumerate(evidence) if isinstance(value, str) and value in priorities]
+    ordered = sorted((evidence[index] for index in slots), key=lambda value: priorities[value])
+    for index, value in zip(slots, ordered):
+        evidence[index] = value
 
 
 def build_summary_resume_candidate(
@@ -15016,9 +15192,10 @@ Staged Experience candidate:
 {progress_guidance}
 """
     compact_payload = None
+    summary_priority_payload = None
 
     def compact_summary_prompt(max_chars: int = PROXY_SAFE_MAX_INPUT_CHARS, **_: Any) -> dict[str, Any]:
-        nonlocal compact_payload
+        nonlocal compact_payload, summary_priority_payload
         compact_payload = build_compact_summary_input(
             job_description=job_description,
             resume=resume,
@@ -15027,7 +15204,9 @@ Staged Experience candidate:
             experience_candidate=experience_candidate,
             language=language,
             progress_guidance=progress_guidance,
+            max_projects=max(4, len(project_candidates)) if story_ordered else 4,
         )
+        summary_priority_payload = compact_payload
         target = min(12000, max_chars)
         compact_prompt = build_compact_summary_prompt(compact_payload)
         if len(compact_prompt) > target:
@@ -15038,6 +15217,11 @@ Staged Experience candidate:
             compact_prompt = build_compact_summary_prompt(compact_payload)
         return {"prompt": compact_prompt, "payload": compact_payload}
 
+    story_ordered = bool(project_candidates) and all(
+        isinstance(candidate, dict) and "story_ranking" in candidate for candidate in project_candidates
+    )
+    if story_ordered:
+        prompt = compact_summary_prompt()["prompt"]
     response = safe_model_call(
         caller="build_summary_resume_candidate",
         prompt=prompt,
@@ -15054,6 +15238,8 @@ Staged Experience candidate:
         payload["recommended_summary"] = cleaned_summary
         if cleaned_summary != original_summary.strip():
             payload["risks"].append("Summary was locally tightened to avoid overlong or boilerplate wording.")
+    if story_ordered and isinstance(summary_priority_payload, dict):
+        enforce_summary_project_priority(payload, summary_priority_payload, language)
     if "compact_payload" in locals() and isinstance(compact_payload, dict):
         supported_skills = {canonical_skill_name(item.get("skill")).lower() for item in compact_payload.get("compactSkills", []) if isinstance(item, dict)}
         if supported_skills:
@@ -15258,6 +15444,23 @@ Prompt policies:
         merge_retry_payload_for_prompt(normal_payload)["target_resume_block"],
         f"Agent did not return valid LaTeX resume code after {section_name} merge step.",
     )
+
+
+def apply_summary_section_candidate(current_resume: str, candidate: dict[str, Any]) -> str:
+    """Render accepted summary prose directly so the final editor cannot reprioritize it."""
+    summary = str(candidate.get("recommended_summary") or "").strip()
+    if not summary:
+        return current_resume
+    target_block = resume_block_for_prompt(current_resume, "Summary/Profile-section")
+    section_name = str(target_block.get("section_name") or "Summary") if target_block["scope"] == "section" else "Summary"
+    replacement = f"\\section{{{section_name}}}\n{latex_escape_text(summary)}\n"
+    if target_block["scope"] == "document":
+        sections = latex_section_spans(current_resume)
+        position = sections[0]["start"] if sections else current_resume.find(r"\end{document}")
+        if position < 0:
+            raise HTTPException(status_code=409, detail="Summary insertion requires a valid resume document.")
+        return current_resume[:position] + replacement + "\n" + current_resume[position:]
+    return replace_resume_block(current_resume, target_block, replacement)
 
 
 def apply_skills_section_candidate(
@@ -15630,6 +15833,7 @@ def merge_staged_resume(
     project_ranking: dict[str, Any] | None = None,
     resume_constraints: dict[str, Any] | None = None,
 ) -> str:
+    validate_resume_candidate_generation(project_ranking, project_candidates)
     current_resume = resume
     current_resume = enforce_project_section_allocation(
         current_resume,
@@ -15650,13 +15854,17 @@ def merge_staged_resume(
         experience_candidate,
         body,
     )
-    current_resume = apply_resume_section_candidate(
-        "Summary/Profile-section",
-        job_description,
-        current_resume,
-        summary_candidate,
-        body,
-    )
+    selected_entries = (project_ranking or {}).get("selected_projects", [])
+    if selected_entries and all("story_ranking" in entry for entry in selected_entries):
+        current_resume = apply_summary_section_candidate(current_resume, summary_candidate)
+    else:
+        current_resume = apply_resume_section_candidate(
+            "Summary/Profile-section",
+            job_description,
+            current_resume,
+            summary_candidate,
+            body,
+        )
     current_resume = enforce_project_section_allocation(
         current_resume,
         project_ranking,
@@ -15714,13 +15922,13 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
 
     candidates = []
     selected_project_memory = {"projects": [compact_project_for_prompt(project) for project in selected_projects]}
-    retrieval_mode = resolve_resume_evidence_retrieval_mode()
+    retrieval_mode = resolve_resume_evidence_retrieval_mode() if body.use_github_context else None
     for project in selected_projects:
         evidence = retrieve_evidence_for_project_for_resume(
             project,
             jd_targets=jd_requirements,
             retrieval_mode=retrieval_mode,
-        )
+        ) if body.use_github_context else []
         candidates.append(build_project_resume_candidate(
             job_description,
             resume,
@@ -15732,6 +15940,12 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
             project_ranking_entry_for_project(project_ranking, project),
             resume_constraints,
         ))
+        rank_entry = project_ranking_entry_for_project(project_ranking, project)
+        if "story_ranking" in rank_entry:
+            if candidates[-1].get("ranking_generation_id") != project_ranking.get("ranking_generation_id"):
+                raise HTTPException(status_code=409, detail="Project candidates need ranking revalidation.")
+            candidates[-1] = bind_story_ranked_project_candidate(project, candidates[-1], rank_entry)
+    validate_resume_candidate_generation(project_ranking, candidates)
     project_ranking = attach_candidate_claims_to_project_ranking(project_ranking, candidates)
 
     skills_candidate = build_skills_resume_candidate(
@@ -15821,8 +16035,11 @@ def tailor_resume_staged(body: TailorBody) -> dict[str, Any]:
         "project_memory_path": str(agent.PROJECT_MEMORY_PATH),
         "staged": True,
         "staged_project_count": len(candidates),
-        "staged_project_candidates": candidates,
-        "project_ranking": project_ranking,
+        "staged_project_candidates": [
+            {key: value for key, value in candidate.items() if key != "ranking_generation_id"}
+            for candidate in candidates
+        ],
+        "project_ranking": {key: value for key, value in project_ranking.items() if key != "ranking_generation_id"},
         "project_section_validation": project_section_validation,
         "quality_gate": {k: v for k, v in quality_gate.items() if k != "content"},
         "staged_skills_candidate": skills_candidate,
@@ -18649,9 +18866,14 @@ def resume_star_fact(body: ResumeStarFactBody):
 
 
 def tailor_resume_task(body: TailorBody):
-    if body.use_github_context:
+    from backend.resume_story_ranking_integration import story_aware_resume_ranking_enabled
+
+    # Ranking authority is independent of the request's optional evidence retrieval.
+    if story_aware_resume_ranking_enabled() or body.use_github_context:
         return tailor_resume_staged(body)
 
+    # Rollout OFF retains the legacy general-agent mode and its existing tool access.
+    # In that mode the request flag controls staged retrieval, not tool permissions.
     project_memory_context = agent.read_project_memory()
     prompt = (
         RESUME_TAILOR_PROMPT

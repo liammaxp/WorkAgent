@@ -13,7 +13,7 @@ from enum import Enum
 import hashlib
 import json
 import math
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from backend.engineering_story_relevance import (
     MAX_STORY_RELEVANCE_BATCH,
@@ -68,6 +68,32 @@ class ProjectRelevanceAggregationError(ValueError):
         super().__init__(message)
 
 
+@runtime_checkable
+class ProjectStoryRelevanceInput(Protocol):
+    """Read-only relevance surface consumed by the unchanged aggregator."""
+
+    project_id: str
+    canonical_story_id: str
+    current_revision_id: str
+    hiring_context_profile_id: str
+    hiring_context_fingerprint: str
+    story_provenance_fingerprint: str
+    lifecycle_status: Any
+    claim_sufficiency: Any
+    story_sufficiency: Any
+    story_opportunity: Any
+    components: StoryRelevanceComponents
+    raw_relevance_score: float
+    evidence_risk_adjustment: float
+    total_relevance_score: float
+    clarification_value_hint: float
+    semantic_features: tuple[Any, ...]
+    reasons: tuple[Any, ...]
+    relevance_id: str
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+
 def _score(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{name} must be a number")
@@ -117,8 +143,8 @@ class ProjectStoryContribution:
             raise ValueError(
                 f"rank_position must be from 1 to {MAX_CONTRIBUTING_STORIES}"
             )
-        if not isinstance(self.story_relevance, StoryHiringRelevance):
-            raise TypeError("story_relevance must be StoryHiringRelevance")
+        if not isinstance(self.story_relevance, ProjectStoryRelevanceInput):
+            raise TypeError("story_relevance must satisfy ProjectStoryRelevanceInput")
         weight = _score(self.positional_weight, "positional_weight")
         normalized_depth = _score(self.normalized_depth, "normalized_depth")
         headroom = _score(self.available_headroom, "available_headroom")
@@ -434,10 +460,10 @@ def _validated_unique_stories(
     context_fingerprint: str | None = None
     revision_owners: dict[str, str] = {}
     for story in story_relevance:
-        if not isinstance(story, StoryHiringRelevance):
+        if not isinstance(story, ProjectStoryRelevanceInput):
             raise ProjectRelevanceAggregationError(
                 ProjectRelevanceAggregationErrorCode.INVALID_INPUT,
-                "story_relevance must contain StoryHiringRelevance values",
+                "story_relevance must contain accepted relevance values",
             )
         if story.lifecycle_status.value != "active":
             raise ProjectRelevanceAggregationError(
@@ -648,6 +674,7 @@ __all__ = [
     "ProjectRelevanceComponents",
     "ProjectRelevanceReason",
     "ProjectStoryContribution",
+    "ProjectStoryRelevanceInput",
     "aggregate_project_story_relevance",
     "rank_projects_from_story_relevance",
 ]

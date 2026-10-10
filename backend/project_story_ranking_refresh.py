@@ -34,6 +34,7 @@ from backend.project_story_ranking import (
     MAX_CONTRIBUTING_STORIES,
     MAX_PROJECT_STORY_INPUTS,
     ProjectHiringRelevance,
+    ProjectStoryRelevanceInput,
     aggregate_project_story_relevance,
 )
 from backend.story_clarification_handoff import (
@@ -164,7 +165,7 @@ def _validate_contract(value: Any, name: str) -> None:
         )
 
 
-def _story_order(story: StoryHiringRelevance) -> tuple[Any, ...]:
+def _story_order(story: ProjectStoryRelevanceInput) -> tuple[Any, ...]:
     return (
         -story.total_relevance_score,
         story.canonical_story_id,
@@ -180,7 +181,7 @@ class ProjectStoryRelevanceSnapshot:
     snapshot_policy_id: str
     source_portfolio_id: str
     project_relevance: ProjectHiringRelevance
-    story_relevance: tuple[StoryHiringRelevance, ...]
+    story_relevance: tuple[ProjectStoryRelevanceInput, ...]
     snapshot_id: str = ""
 
     def __post_init__(self) -> None:
@@ -214,13 +215,13 @@ class ProjectStoryRelevanceSnapshot:
                 "snapshot project Story contribution",
             )
         _validate_contract(project, "snapshot project relevance")
-        unique: dict[str, StoryHiringRelevance] = {}
+        unique: dict[str, ProjectStoryRelevanceInput] = {}
         revision_owners: dict[str, str] = {}
         relevance_owners: dict[str, tuple[str, str]] = {}
         for story in self.story_relevance:
-            if not isinstance(story, StoryHiringRelevance):
+            if not isinstance(story, ProjectStoryRelevanceInput):
                 raise TypeError(
-                    "story_relevance must contain StoryHiringRelevance values"
+                    "story_relevance must contain accepted Story relevance values"
                 )
             _validate_contract(story, "snapshot Story relevance")
             if story.lifecycle_status is not EngineeringStoryStatus.ACTIVE:
