@@ -616,6 +616,198 @@ textarea {
   margin-top: 18px;
 }
 
+.ranking-review-shell {
+  display: contents;
+}
+
+.ranking-review-panel {
+  flex: 1 0 100%;
+  margin-top: 10px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle, #f8fafc);
+}
+
+.ranking-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ranking-review-header h2,
+.ranking-review-context h3,
+.ranking-review-projects h3,
+.ranking-review-correction h3,
+.ranking-review-project h4,
+.ranking-review-story-group h5 {
+  margin: 0;
+}
+
+.ranking-review-header h2 {
+  font-size: 20px;
+}
+
+.ranking-review-context,
+.ranking-review-correction,
+.ranking-review-projects {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.ranking-review-identity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin: 16px 0;
+}
+
+.ranking-review-identity div {
+  min-width: 0;
+}
+
+.ranking-review-identity dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ranking-review-identity dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ranking-review-traits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.ranking-review-trait {
+  display: inline-flex;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ranking-review-project-list,
+.ranking-review-story-list {
+  margin: 14px 0 0;
+  padding-left: 24px;
+}
+
+.ranking-review-project-list > li + li {
+  margin-top: 14px;
+}
+
+.ranking-review-project {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.ranking-review-project h4 {
+  font-size: 16px;
+}
+
+.ranking-review-project-reason {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ranking-review-story-group {
+  margin-top: 16px;
+}
+
+.ranking-review-story-group h5 {
+  font-size: 14px;
+}
+
+.ranking-review-story-list > li + li {
+  margin-top: 12px;
+}
+
+.ranking-review-story-heading {
+  font-weight: 600;
+}
+
+.ranking-review-notice {
+  margin: 7px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--warning, #b45309);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ranking-review-additional {
+  margin-top: 16px;
+}
+
+.ranking-review-additional summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.ranking-review-additional .ranking-review-story-group h5 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.ranking-review-loading,
+.ranking-review-error,
+.ranking-review-panel > .empty-state {
+  margin: 18px 0 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.ranking-review-error {
+  border: 1px solid #fecaca;
+  color: var(--danger);
+}
+
+.ranking-review-error p {
+  margin: 0 0 10px;
+}
+
+.ranking-review-panel :is(button, input, summary):focus-visible,
+#hiring-context-ranking-review-title:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .ranking-review-panel {
+    padding: 16px;
+  }
+
+  .ranking-review-header {
+    display: grid;
+  }
+
+  .ranking-review-identity {
+    grid-template-columns: 1fr;
+  }
+}
+
 .agent-progress-backdrop {
   position: fixed;
   inset: 0;

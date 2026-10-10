@@ -309,7 +309,10 @@ def test_github_cross_project_and_unknown_repository_reject_before_read_or_write
         tmp_path,
         repository_authority=verified,
     )
-    with pytest.raises(ChromaWriteAuthorityViolation, match="cross_project"):
+    with pytest.raises(
+        ChromaWriteAuthorityViolation,
+        match="^github_cross_project_batch_rejected$",
+    ):
         store.store_github_contexts(
             [
                 {"repository": "owner/a", "project_id": "project-a"},

@@ -1103,7 +1103,18 @@ The user pasted a new job description. It has already been saved to job_descript
 
 
 def read_memory(query=""):
-    memory = MEMORY_STORE.read_profile(query=query)
+    result = MEMORY_STORE.read_profile_optional(query=query)
+    if not result.available:
+        return json.dumps(
+            {
+                "state": "unavailable",
+                "reason": result.reason,
+                "note": "Optional profile memory is unavailable; continue without memory enrichment.",
+            },
+            ensure_ascii=False,
+        )
+
+    memory = dict(result.memory)
     if not memory:
         return json.dumps(
             {
