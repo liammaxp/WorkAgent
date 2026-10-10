@@ -37,6 +37,7 @@ function readyPayload() {
         strongest_stories: [
           {
             story_id: "story_beta_2",
+            current_revision_id: "story_beta_2_r1",
             label: "Reliability and validation",
             relevance_reasons: ["Reliability", "Validation and repair"],
             notices: ["Some claims may need confirmation", "More context could strengthen this story"],
@@ -44,6 +45,7 @@ function readyPayload() {
           },
           {
             story_id: "story_beta_1",
+            current_revision_id: "story_beta_1_r1",
             label: "API and system architecture",
             relevance_reasons: ["API and system design"],
             notices: [],
@@ -52,6 +54,7 @@ function readyPayload() {
         additional_stories: [
           {
             story_id: "story_beta_3",
+            current_revision_id: "story_beta_3_r1",
             label: "Operational hardening",
             relevance_reasons: ["Operational hardening"],
             notices: [],
@@ -68,6 +71,12 @@ function readyPayload() {
         additional_stories: [],
       },
     ],
+    preference_binding: {
+      ranking_state_id: "ranking_state_current",
+      ranking_state_fingerprint: "a".repeat(64),
+      hiring_context_profile_id: "hiring_context_current",
+      hiring_context_fingerprint: "b".repeat(64),
+    },
     corrections_persisted: false,
     policy_id: "hidden-policy",
   };
@@ -250,6 +259,30 @@ test("invalid Story array fails closed", () => {
   assert.equal(normalizeReviewResponse(payload), null);
 });
 
+test("project identity is never trimmed or normalized", () => {
+  const payload = readyPayload();
+  payload.projects[0].project_id = " project_beta ";
+  assert.equal(normalizeReviewResponse(payload), null);
+});
+
+test("canonical Story identity is never trimmed or normalized", () => {
+  const payload = readyPayload();
+  payload.projects[0].strongest_stories[0].story_id = " story_beta_2 ";
+  assert.equal(normalizeReviewResponse(payload), null);
+});
+
+test("Story revision identity is required exactly for freshness", () => {
+  const payload = readyPayload();
+  payload.projects[0].strongest_stories[0].current_revision_id = " story_beta_2_r1 ";
+  assert.equal(normalizeReviewResponse(payload), null);
+});
+
+test("preference binding requires exact lowercase SHA-256 fingerprints", () => {
+  const payload = readyPayload();
+  payload.preference_binding.ranking_state_fingerprint = "A".repeat(64);
+  assert.equal(normalizeReviewResponse(payload), null);
+});
+
 test("correction draft is derived only from Hiring Context", () => {
   assert.deepEqual(draftFromReview(normalizeReviewResponse(readyPayload())), {
     company: "The Coalition",
@@ -315,8 +348,8 @@ test("component contains no raw or developer presentation surface", () => {
   }
 });
 
-test("component contains no question or selection controls", () => {
-  for (const token of ["Emphasize more", "Emphasize less", ">Keep<", ">Exclude<", "question composer", "answer box"] ) {
+test("component contains no question controls", () => {
+  for (const token of ["question composer", "answer box"] ) {
     assert.equal(componentSource.includes(token), false, token);
   }
 });

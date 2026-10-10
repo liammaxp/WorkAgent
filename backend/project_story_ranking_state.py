@@ -446,6 +446,23 @@ def build_project_story_ranking_state(
 ) -> ProjectStoryRankingState:
     """Bind one accepted portfolio and all complete project Story snapshots."""
 
+    return _build_project_story_ranking_state(
+        hiring_context=hiring_context,
+        portfolio=portfolio,
+        project_snapshots=project_snapshots,
+        allow_web_adjusted=False,
+    )
+
+
+def _build_project_story_ranking_state(
+    *,
+    hiring_context: HiringContextProfile,
+    portfolio: RankedProjectStoryPortfolio | None,
+    project_snapshots: Sequence[ProjectStoryRelevanceSnapshot],
+    allow_web_adjusted: bool,
+) -> ProjectStoryRankingState:
+    """Build a state after the owning policy has selected its representation."""
+
     if not isinstance(hiring_context, HiringContextProfile):
         raise TypeError("hiring_context must be HiringContextProfile")
     _validate_contract(hiring_context, "Hiring Context")
@@ -459,10 +476,22 @@ def build_project_story_ranking_state(
         Sequence,
     ):
         raise TypeError("project_snapshots must be a sequence")
+    if not isinstance(allow_web_adjusted, bool):
+        raise TypeError("allow_web_adjusted must be bool")
     if len(project_snapshots) > MAX_RANKING_STATE_PROJECTS:
         raise ProjectStoryRankingStateError(
             ProjectStoryRankingStateErrorCode.BOUND_EXCEEDED,
             "project snapshots exceed the ranking-state project bound",
+        )
+    if not allow_web_adjusted and any(
+        getattr(story, "web_context_adjustment", None) is not None
+        for snapshot in project_snapshots
+        if isinstance(snapshot, ProjectStoryRelevanceSnapshot)
+        for story in snapshot.story_relevance
+    ):
+        raise ProjectStoryRankingStateError(
+            ProjectStoryRankingStateErrorCode.INVALID_INPUT,
+            "web-adjusted Story relevance requires a web-aware ranking state",
         )
     return ProjectStoryRankingState(
         state_policy_id=PROJECT_STORY_RANKING_STATE_POLICY_ID,

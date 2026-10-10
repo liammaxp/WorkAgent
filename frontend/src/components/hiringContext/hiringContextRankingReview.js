@@ -15,6 +15,17 @@ function cleanText(value, maximum = 300) {
   return cleaned;
 }
 
+function exactIdentity(value, maximum = 300) {
+  if (typeof value !== "string" || !value || value.length > maximum) return null;
+  if (value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  return value;
+}
+
+function exactFingerprint(value) {
+  const identity = exactIdentity(value, 64);
+  return identity && /^[0-9a-f]{64}$/.test(identity) ? identity : null;
+}
+
 function cleanList(value, maximum) {
   if (!Array.isArray(value) || value.length > maximum) return null;
   const result = [];
@@ -28,16 +39,38 @@ function cleanList(value, maximum) {
 
 function normalizeStory(value) {
   if (!value || typeof value !== "object") return null;
-  const storyId = cleanText(value.story_id, 300);
+  const storyId = exactIdentity(value.story_id, 300);
+  const currentRevisionId = exactIdentity(value.current_revision_id, 300);
   const label = cleanText(value.label, 300);
   const relevanceReasons = cleanList(value.relevance_reasons, 3);
   const notices = cleanList(value.notices, 2);
-  if (!storyId || !label || !relevanceReasons || !notices) return null;
+  if (!storyId || !currentRevisionId || !label || !relevanceReasons || !notices) return null;
   return {
     storyId,
+    currentRevisionId,
     label,
     relevanceReasons,
     notices,
+  };
+}
+
+function normalizePreferenceBinding(value) {
+  if (!value || typeof value !== "object") return null;
+  const rankingStateId = exactIdentity(value.ranking_state_id, 300);
+  const rankingStateFingerprint = exactFingerprint(value.ranking_state_fingerprint);
+  const hiringContextProfileId = exactIdentity(value.hiring_context_profile_id, 300);
+  const hiringContextFingerprint = exactFingerprint(value.hiring_context_fingerprint);
+  if (
+    !rankingStateId
+    || !rankingStateFingerprint
+    || !hiringContextProfileId
+    || !hiringContextFingerprint
+  ) return null;
+  return {
+    rankingStateId,
+    rankingStateFingerprint,
+    hiringContextProfileId,
+    hiringContextFingerprint,
   };
 }
 
@@ -49,7 +82,7 @@ function normalizeStories(value) {
 
 function normalizeProject(value, expectedPosition) {
   if (!value || typeof value !== "object") return null;
-  const projectId = cleanText(value.project_id, 300);
+  const projectId = exactIdentity(value.project_id, 300);
   const displayName = cleanText(value.display_name, 300);
   const relevanceReasons = cleanList(value.relevance_reasons, 3);
   const strongestStories = normalizeStories(value.strongest_stories);
@@ -99,16 +132,20 @@ export function normalizeReviewResponse(value) {
       status: value.status,
       hiringContext,
       projects: [],
+      preferenceBinding: null,
       correctionsPersisted: false,
     };
   }
   if (value.projects.length === 0 || value.projects.length > 64) return null;
+  const preferenceBinding = normalizePreferenceBinding(value.preference_binding);
+  if (!preferenceBinding) return null;
   const projects = value.projects.map((project, index) => normalizeProject(project, index + 1));
   if (!projects.every(Boolean)) return null;
   return {
     status: value.status,
     hiringContext,
     projects,
+    preferenceBinding,
     correctionsPersisted: false,
   };
 }

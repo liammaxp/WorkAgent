@@ -9,6 +9,19 @@ import {
   reviewEntryVisible,
   shouldCloseReview,
 } from "./hiringContextRankingReview.js";
+import {
+  EMPHASIS_ACTION,
+  EMPHASIS_ACTIONS,
+  createPreferenceOverlay,
+  preferenceControlsVisible,
+  projectAction,
+  reconcilePreferenceOverlay,
+  resetAllPreferences,
+  setProjectPreference,
+  setStoryPreference,
+  storyAction,
+  summarizePreferences,
+} from "./resumeEmphasisPreferences.js";
 
 const COPY = {
   en: {
@@ -38,6 +51,23 @@ const COPY = {
     previewOnly: "Preview only. These edits change this review, not your saved job description or candidate experience.",
     apply: "Update preview",
     reset: "Reset preview",
+    preferenceSession: "These emphasis choices apply only to this review session.",
+    preferenceLabel: "Resume preference for",
+    defaultAction: "Default",
+    emphasizeMore: "Emphasize more",
+    emphasizeLess: "Emphasize less",
+    keep: "Keep",
+    exclude: "Exclude from this resume",
+    keepBoundary: "Keep retains an item in consideration. It does not guarantee final inclusion.",
+    projectExcluded: "Excluded for this resume. Restore the project to change Story preferences.",
+    summaryTitle: "Your emphasis choices",
+    emphasized: "emphasized",
+    lowered: "lowered",
+    kept: "kept",
+    excluded: "excluded",
+    resetAll: "Reset all emphasis choices",
+    contextReset: "Emphasis choices were reset because the role context changed.",
+    removedReset: "Choices for projects or Stories no longer in this review were removed.",
   },
   zh: {
     open: "查看定制重点",
@@ -66,30 +96,103 @@ const COPY = {
     previewOnly: "仅用于预览。这些修改只会更新本次评审，不会更改已保存的职位描述或候选人经历。",
     apply: "更新预览",
     reset: "重置预览",
+    preferenceSession: "这些重点选择仅适用于当前评审会话。",
+    preferenceLabel: "本份简历对此项的偏好：",
+    defaultAction: "默认",
+    emphasizeMore: "更多突出",
+    emphasizeLess: "减少突出",
+    keep: "保留考虑",
+    exclude: "从本份简历中排除",
+    keepBoundary: "“保留考虑”表示明确留在候选集合中，并不保证最终一定进入简历。",
+    projectExcluded: "已从本份简历中排除。恢复项目后才能修改其故事偏好。",
+    summaryTitle: "你的重点选择",
+    emphasized: "项更多突出",
+    lowered: "项减少突出",
+    kept: "项保留考虑",
+    excluded: "项已排除",
+    resetAll: "重置全部重点选择",
+    contextReset: "职位上下文已改变，原有重点选择已重置。",
+    removedReset: "已移除不再出现在本次评审中的项目或故事选择。",
   },
 };
 
-function StoryList({ stories, label, copy }) {
+function actionLabel(action, copy) {
+  return {
+    [EMPHASIS_ACTION.DEFAULT]: copy.defaultAction,
+    [EMPHASIS_ACTION.EMPHASIZE_MORE]: copy.emphasizeMore,
+    [EMPHASIS_ACTION.EMPHASIZE_LESS]: copy.emphasizeLess,
+    [EMPHASIS_ACTION.KEEP]: copy.keep,
+    [EMPHASIS_ACTION.EXCLUDE]: copy.exclude,
+  }[action];
+}
+
+function PreferenceControl({ id, itemLabel, value, disabled = false, onChange, copy }) {
+  const label = `${copy.preferenceLabel} ${itemLabel}`;
+  return (
+    <div className="ranking-review-preference-control">
+      <label htmlFor={id}>{label}</label>
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={label}
+      >
+        {EMPHASIS_ACTIONS.map((action) => (
+          <option value={action} key={action}>{actionLabel(action, copy)}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function StoryList({
+  stories,
+  label,
+  copy,
+  project,
+  groupKey,
+  preferenceEnabled,
+  overlay,
+  onStoryPreference,
+}) {
   if (!stories.length) return null;
+  const projectExcluded = projectAction(overlay, project.projectId) === EMPHASIS_ACTION.EXCLUDE;
   return (
     <div className="ranking-review-story-group">
       <h5>{label}</h5>
       <ol className="ranking-review-story-list">
-        {stories.map((story) => (
-          <li key={story.storyId}>
-            <div className="ranking-review-story-heading">{story.label}</div>
-            {story.relevanceReasons.length > 0 && (
-              <div className="ranking-review-traits" aria-label={copy.why}>
-                {story.relevanceReasons.map((reason) => (
-                  <span className="ranking-review-trait" key={reason}>{reason}</span>
-                ))}
-              </div>
-            )}
-            {story.notices.map((notice) => (
-              <p className="ranking-review-notice" key={notice}>{notice}</p>
-            ))}
-          </li>
-        ))}
+        {stories.map((story, index) => {
+          const action = storyAction(overlay, project.projectId, story.storyId);
+          return (
+            <li
+              key={story.storyId}
+              className={preferenceEnabled && action === EMPHASIS_ACTION.EXCLUDE ? "is-resume-excluded" : undefined}
+            >
+              <div className="ranking-review-story-heading">{story.label}</div>
+              {preferenceEnabled && (
+                <PreferenceControl
+                  id={`ranking-review-story-preference-${project.position}-${groupKey}-${index + 1}`}
+                  itemLabel={story.label}
+                  value={action}
+                  disabled={projectExcluded}
+                  onChange={(nextAction) => onStoryPreference(project.projectId, story.storyId, nextAction)}
+                  copy={copy}
+                />
+              )}
+              {story.relevanceReasons.length > 0 && (
+                <div className="ranking-review-traits" aria-label={copy.why}>
+                  {story.relevanceReasons.map((reason) => (
+                    <span className="ranking-review-trait" key={reason}>{reason}</span>
+                  ))}
+                </div>
+              )}
+              {story.notices.map((notice) => (
+                <p className="ranking-review-notice" key={notice}>{notice}</p>
+              ))}
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -121,29 +224,89 @@ function HiringContextSummary({ context, copy }) {
   );
 }
 
-function ProjectReview({ projects, copy }) {
+function PreferenceSummary({ overlay, copy, onResetAll }) {
+  const summary = summarizePreferences(overlay);
+  if (!summary.total) return null;
+  return (
+    <aside className="ranking-review-preference-summary" aria-labelledby="ranking-review-preference-summary-title">
+      <div>
+        <h3 id="ranking-review-preference-summary-title">{copy.summaryTitle}</h3>
+        <p aria-live="polite">
+          {summary.emphasized > 0 && <span>{summary.emphasized} {copy.emphasized}</span>}
+          {summary.lowered > 0 && <span>{summary.lowered} {copy.lowered}</span>}
+          {summary.kept > 0 && <span>{summary.kept} {copy.kept}</span>}
+          {summary.excluded > 0 && <span>{summary.excluded} {copy.excluded}</span>}
+        </p>
+      </div>
+      <button type="button" className="btn btn-secondary" onClick={onResetAll}>{copy.resetAll}</button>
+    </aside>
+  );
+}
+
+function ProjectReview({
+  projects,
+  copy,
+  preferenceEnabled,
+  overlay,
+  onProjectPreference,
+  onStoryPreference,
+}) {
   if (!projects.length) return null;
   return (
     <section className="ranking-review-projects" aria-labelledby="ranking-review-projects-title">
       <h3 id="ranking-review-projects-title">{copy.projectsTitle}</h3>
       <ol className="ranking-review-project-list">
-        {projects.map((project) => (
-          <li key={project.projectId}>
-            <article className="ranking-review-project">
-              <h4>{project.displayName}</h4>
+        {projects.map((project) => {
+          const action = projectAction(overlay, project.projectId);
+          const excluded = preferenceEnabled && action === EMPHASIS_ACTION.EXCLUDE;
+          return (
+            <li key={project.projectId}>
+              <article className={`ranking-review-project${excluded ? " is-resume-excluded" : ""}`}>
+              {preferenceEnabled ? (
+                <div className="ranking-review-project-heading">
+                  <h4>{project.displayName}</h4>
+                  <PreferenceControl
+                    id={`ranking-review-project-preference-${project.position}`}
+                    itemLabel={project.displayName}
+                    value={action}
+                    onChange={(nextAction) => onProjectPreference(project.projectId, nextAction)}
+                    copy={copy}
+                  />
+                </div>
+              ) : <h4>{project.displayName}</h4>}
+              {excluded && <p className="ranking-review-excluded-note">{copy.projectExcluded}</p>}
               {project.relevanceReasons.map((reason) => (
                 <p className="ranking-review-project-reason" key={reason}>{reason}</p>
               ))}
-              <StoryList stories={project.strongestStories} label={copy.strongest} copy={copy} />
+              <StoryList
+                stories={project.strongestStories}
+                label={copy.strongest}
+                copy={copy}
+                project={project}
+                groupKey="strongest"
+                preferenceEnabled={preferenceEnabled}
+                overlay={overlay}
+                onStoryPreference={onStoryPreference}
+              />
               {project.additionalStories.length > 0 && (
                 <details className="ranking-review-additional">
                   <summary>{copy.additional}</summary>
-                  <StoryList stories={project.additionalStories} label={copy.additional} copy={copy} />
+                  <StoryList
+                    stories={project.additionalStories}
+                    label={copy.additional}
+                    copy={copy}
+                    project={project}
+                    groupKey="additional"
+                    preferenceEnabled={preferenceEnabled}
+                    overlay={overlay}
+                    onStoryPreference={onStoryPreference}
+                  />
                 </details>
               )}
-            </article>
-          </li>
-        ))}
+              </article>
+            </li>
+          );
+        })}
       </ol>
     </section>
   );
@@ -158,6 +321,11 @@ export default function HiringContextRankingReview() {
   const [error, setError] = useState(false);
   const [review, setReview] = useState(null);
   const [draft, setDraft] = useState({ company: "", team: "", roleTitle: "" });
+  const [preferenceSession, setPreferenceSession] = useState({
+    overlay: null,
+    contextStale: false,
+    removed: false,
+  });
   const triggerRef = useRef(null);
   const headingRef = useRef(null);
   const requestRef = useRef({ sequence: 0, controller: null });
@@ -179,6 +347,17 @@ export default function HiringContextRankingReview() {
   }, [open]);
 
   useEffect(() => () => requestRef.current.controller?.abort(), []);
+
+  const preferenceEnabled = preferenceControlsVisible(availability);
+
+  useEffect(() => {
+    if (!preferenceEnabled) {
+      setPreferenceSession({ overlay: null, contextStale: false, removed: false });
+      return;
+    }
+    if (review?.status !== REVIEW_STATUS.READY) return;
+    setPreferenceSession((current) => reconcilePreferenceOverlay(current.overlay, review));
+  }, [preferenceEnabled, review]);
 
   const loadReview = useCallback(async (nextDraft = null) => {
     requestRef.current.controller?.abort();
@@ -222,6 +401,28 @@ export default function HiringContextRankingReview() {
     if (!shouldCloseReview(event.key)) return;
     event.preventDefault();
     closeReview();
+  };
+
+  const handleProjectPreference = (projectId, action) => {
+    setPreferenceSession((current) => {
+      const overlay = current.overlay || createPreferenceOverlay(review);
+      return {
+        overlay: setProjectPreference(overlay, review, projectId, action),
+        contextStale: false,
+        removed: false,
+      };
+    });
+  };
+
+  const handleStoryPreference = (projectId, storyId, action) => {
+    setPreferenceSession((current) => {
+      const overlay = current.overlay || createPreferenceOverlay(review);
+      return {
+        overlay: setStoryPreference(overlay, review, projectId, storyId, action),
+        contextStale: false,
+        removed: false,
+      };
+    });
   };
 
   if (!reviewEntryVisible(availability)) return null;
@@ -270,6 +471,30 @@ export default function HiringContextRankingReview() {
             <>
               <HiringContextSummary context={review.hiringContext} copy={copy} />
 
+              {preferenceEnabled && review.status === REVIEW_STATUS.READY && (
+                <>
+                  <section className="ranking-review-preference-intro" aria-label={copy.summaryTitle}>
+                    <p className="helper-text">{copy.preferenceSession}</p>
+                    <p className="helper-text">{copy.keepBoundary}</p>
+                    {preferenceSession.contextStale && (
+                      <p className="ranking-review-preference-notice" role="status">{copy.contextReset}</p>
+                    )}
+                    {preferenceSession.removed && (
+                      <p className="ranking-review-preference-notice" role="status">{copy.removedReset}</p>
+                    )}
+                  </section>
+                  <PreferenceSummary
+                    overlay={preferenceSession.overlay}
+                    copy={copy}
+                    onResetAll={() => setPreferenceSession({
+                      overlay: resetAllPreferences(preferenceSession.overlay),
+                      contextStale: false,
+                      removed: false,
+                    })}
+                  />
+                </>
+              )}
+
               <form
                 className="ranking-review-correction"
                 onSubmit={(event) => {
@@ -316,7 +541,16 @@ export default function HiringContextRankingReview() {
 
               {review.status === REVIEW_STATUS.EMPTY && <p className="empty-state" role="status">{copy.empty}</p>}
               {review.status === REVIEW_STATUS.UNAVAILABLE && <p className="empty-state" role="status">{copy.unavailable}</p>}
-              {review.status === REVIEW_STATUS.READY && <ProjectReview projects={review.projects} copy={copy} />}
+              {review.status === REVIEW_STATUS.READY && (
+                <ProjectReview
+                  projects={review.projects}
+                  copy={copy}
+                  preferenceEnabled={preferenceEnabled}
+                  overlay={preferenceSession.overlay}
+                  onProjectPreference={handleProjectPreference}
+                  onStoryPreference={handleStoryPreference}
+                />
+              )}
             </>
           )}
           {!loading && !error && review?.status === REVIEW_STATUS.ERROR && (

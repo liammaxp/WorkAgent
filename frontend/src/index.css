@@ -651,7 +651,9 @@ textarea {
 
 .ranking-review-context,
 .ranking-review-correction,
-.ranking-review-projects {
+.ranking-review-projects,
+.ranking-review-preference-intro,
+.ranking-review-preference-summary {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid var(--border);
@@ -722,6 +724,71 @@ textarea {
   font-size: 16px;
 }
 
+.ranking-review-project-heading,
+.ranking-review-preference-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.ranking-review-preference-control {
+  display: grid;
+  gap: 4px;
+  min-width: min(230px, 100%);
+}
+
+.ranking-review-preference-control label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ranking-review-preference-control select {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 30px 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.ranking-review-story-list .ranking-review-preference-control {
+  margin-top: 7px;
+}
+
+.ranking-review-project.is-resume-excluded,
+.ranking-review-story-list > li.is-resume-excluded {
+  opacity: 0.68;
+}
+
+.ranking-review-project.is-resume-excluded {
+  border-style: dashed;
+}
+
+.ranking-review-excluded-note,
+.ranking-review-preference-notice {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ranking-review-preference-summary h3,
+.ranking-review-preference-summary p {
+  margin: 0;
+}
+
+.ranking-review-preference-summary p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .ranking-review-project-reason {
   margin: 7px 0 0;
   color: var(--text-muted);
@@ -788,7 +855,7 @@ textarea {
   margin: 0 0 10px;
 }
 
-.ranking-review-panel :is(button, input, summary):focus-visible,
+.ranking-review-panel :is(button, input, select, summary):focus-visible,
 #hiring-context-ranking-review-title:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
   outline-offset: 2px;
@@ -801,6 +868,15 @@ textarea {
 
   .ranking-review-header {
     display: grid;
+  }
+
+  .ranking-review-project-heading,
+  .ranking-review-preference-summary {
+    display: grid;
+  }
+
+  .ranking-review-preference-control {
+    width: 100%;
   }
 
   .ranking-review-identity {

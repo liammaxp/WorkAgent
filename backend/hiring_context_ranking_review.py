@@ -1,6 +1,6 @@
 """Read-only product presentation for hiring-context ranking review.
 
-The service composes the accepted offline ranking chain and projects it into a
+The service projects the accepted shared ranking chain into a
 small UI contract.  Candidate evidence, raw Stories, ranking scores, policy
 identities, and persistence concerns deliberately remain outside this module.
 """
@@ -19,31 +19,27 @@ from backend.engineering_story_memory_service import (
     get_active_engineering_stories_for_project,
     inspect_authoritative_engineering_story_memory_readiness,
     load_authoritative_engineering_story_memory,
+    validate_authoritative_story_memory_generation,
 )
 from backend.engineering_story_relevance import (
-    StoryHiringRelevance,
     StoryRelevanceFeature,
-    rank_engineering_stories_for_hiring_context,
 )
 from backend.hiring_context_intelligence import build_hiring_context_profile
+from backend.hiring_context_ranking_service import (
+    HiringContextRankingState, build_configured_hiring_context_ranking_state,
+)
 from backend.hiring_context_models import (
     HiringContextConfidence,
     HiringContextProfile,
     HiringContextSignalKind,
     RoleFamily,
 )
-from backend.project_portfolio_ranking import rank_project_portfolio
 from backend.project_story_ranking import (
     ProjectHiringRelevance,
-    aggregate_project_story_relevance,
-)
-from backend.project_story_ranking_refresh import (
-    PROJECT_STORY_RELEVANCE_SNAPSHOT_POLICY_ID,
-    ProjectStoryRelevanceSnapshot,
+    ProjectStoryRelevanceInput,
 )
 from backend.project_story_ranking_state import (
     ProjectStoryRankingState,
-    build_project_story_ranking_state,
     derive_story_clarification_handoffs,
 )
 from backend.story_clarification_handoff import StoryClarificationReason
@@ -77,6 +73,7 @@ class HiringContextReviewSummary:
 @dataclass(frozen=True, slots=True)
 class StoryRankingReviewItem:
     story_id: str
+    current_revision_id: str
     label: str
     relevance_reasons: tuple[str, ...]
     notices: tuple[str, ...]
@@ -99,10 +96,24 @@ class ProjectRankingReviewItem:
 
 
 @dataclass(frozen=True, slots=True)
+class HiringContextRankingReviewBinding:
+    """Opaque identities used only to bind session preference state safely."""
+
+    ranking_state_id: str
+    ranking_state_fingerprint: str
+    hiring_context_profile_id: str
+    hiring_context_fingerprint: str
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class HiringContextRankingReview:
     status: HiringContextRankingReviewStatus
     hiring_context: HiringContextReviewSummary
     projects: tuple[ProjectRankingReviewItem, ...] = ()
+    preference_binding: HiringContextRankingReviewBinding | None = None
     corrections_persisted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -110,6 +121,11 @@ class HiringContextRankingReview:
             "status": self.status.value,
             "hiring_context": self.hiring_context.to_dict(),
             "projects": [item.to_dict() for item in self.projects],
+            "preference_binding": (
+                None
+                if self.preference_binding is None
+                else self.preference_binding.to_dict()
+            ),
             "corrections_persisted": self.corrections_persisted,
         }
 
@@ -345,7 +361,7 @@ def _project_display_names(project_memory: Mapping[str, Any] | None) -> dict[str
     return names
 
 
-def _story_label(story: StoryHiringRelevance, language: str) -> str:
+def _story_label(story: ProjectStoryRelevanceInput, language: str) -> str:
     labels = _feature_labels(story.semantic_features, language, maximum=2)
     if not labels:
         return "工程实践" if language == "zh" else "Engineering story"
@@ -369,12 +385,13 @@ def _project_reasons(
 
 
 def _story_item(
-    story: StoryHiringRelevance,
+    story: ProjectStoryRelevanceInput,
     language: str,
     handoff_reasons: Sequence[StoryClarificationReason],
 ) -> StoryRankingReviewItem:
     return StoryRankingReviewItem(
         story_id=story.canonical_story_id,
+        current_revision_id=story.current_revision_id,
         label=_story_label(story, language),
         relevance_reasons=_feature_labels(story.semantic_features, language),
         notices=tuple(
@@ -387,7 +404,7 @@ def _story_item(
 def present_hiring_context_ranking_review(
     *,
     hiring_context: HiringContextProfile,
-    ranking_state: ProjectStoryRankingState,
+    ranking_state: HiringContextRankingState,
     project_memory: Mapping[str, Any] | None,
     language: str = "en",
 ) -> HiringContextRankingReview:
@@ -409,7 +426,9 @@ def present_hiring_context_ranking_review(
             hiring_context=context,
         )
     display_names = _project_display_names(project_memory)
-    handoffs = derive_story_clarification_handoffs(ranking_state=ranking_state)
+    handoff_state = (ranking_state if isinstance(ranking_state, ProjectStoryRankingState)
+                     else ranking_state.ranking_state)
+    handoffs = derive_story_clarification_handoffs(ranking_state=handoff_state)
     notices_by_story = {
         (item.project_id, item.canonical_story_id): item.reasons
         for item in handoffs
@@ -452,6 +471,12 @@ def present_hiring_context_ranking_review(
         status=HiringContextRankingReviewStatus.READY,
         hiring_context=context,
         projects=tuple(projects),
+        preference_binding=HiringContextRankingReviewBinding(
+            ranking_state_id=ranking_state.state_id,
+            ranking_state_fingerprint=ranking_state.state_fingerprint,
+            hiring_context_profile_id=ranking_state.hiring_context_profile_id,
+            hiring_context_fingerprint=ranking_state.hiring_context_fingerprint,
+        ),
     )
 
 
@@ -475,6 +500,7 @@ def build_hiring_context_ranking_review(
     project_memory: Mapping[str, Any] | None = None,
     language: str = "en",
     story_memory_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> HiringContextRankingReview:
     """Read Story Memory, run accepted rankers, and return a fail-closed review."""
 
@@ -487,17 +513,13 @@ def build_hiring_context_ranking_review(
     )
     context = _context_summary(profile, selected_language)
     load_result = load_authoritative_engineering_story_memory(story_memory_path)
-    if load_result.status is StoryMemoryArtifactStatus.EMPTY:
-        return HiringContextRankingReview(
-            status=HiringContextRankingReviewStatus.EMPTY,
-            hiring_context=context,
-        )
     if load_result.status is StoryMemoryArtifactStatus.INTEGRITY_MISMATCH:
         return HiringContextRankingReview(
             status=HiringContextRankingReviewStatus.ERROR,
             hiring_context=context,
         )
-    if load_result.status is not StoryMemoryArtifactStatus.READY or load_result.memory is None:
+    if (load_result.status not in {StoryMemoryArtifactStatus.READY, StoryMemoryArtifactStatus.EMPTY}
+            or load_result.memory is None):
         return HiringContextRankingReview(
             status=HiringContextRankingReviewStatus.UNAVAILABLE,
             hiring_context=context,
@@ -507,6 +529,7 @@ def build_hiring_context_ranking_review(
             path=story_memory_path,
             compare_upstream=True,
         )
+        validate_authoritative_story_memory_generation(load_result.memory, readiness)
     except Exception:
         return HiringContextRankingReview(
             status=HiringContextRankingReviewStatus.ERROR,
@@ -517,45 +540,17 @@ def build_hiring_context_ranking_review(
             status=HiringContextRankingReviewStatus.UNAVAILABLE,
             hiring_context=context,
         )
+    if load_result.status is StoryMemoryArtifactStatus.EMPTY:
+        return HiringContextRankingReview(
+            status=HiringContextRankingReviewStatus.EMPTY,
+            hiring_context=context,
+        )
     try:
-        relevance_by_project: dict[str, tuple[StoryHiringRelevance, ...]] = {}
-        project_results: dict[str, ProjectHiringRelevance] = {}
-        for project_id, views in _active_story_views(load_result.memory).items():
-            ranked_stories = rank_engineering_stories_for_hiring_context(
-                hiring_context=profile,
-                story_views=views,
-            )
-            if not ranked_stories:
-                continue
-            relevance_by_project[project_id] = ranked_stories
-            project = aggregate_project_story_relevance(
-                project_id=project_id,
-                story_relevance=ranked_stories,
-            )
-            if project is not None:
-                project_results[project_id] = project
-        portfolio = rank_project_portfolio(projects=tuple(project_results.values()))
-        if portfolio is None:
-            state = build_project_story_ranking_state(
-                hiring_context=profile,
-                portfolio=None,
-                project_snapshots=(),
-            )
-        else:
-            snapshots = tuple(
-                ProjectStoryRelevanceSnapshot(
-                    snapshot_policy_id=PROJECT_STORY_RELEVANCE_SNAPSHOT_POLICY_ID,
-                    source_portfolio_id=portfolio.portfolio_id,
-                    project_relevance=project_results[ranking.project_id],
-                    story_relevance=relevance_by_project[ranking.project_id],
-                )
-                for ranking in portfolio.ranked_projects
-            )
-            state = build_project_story_ranking_state(
-                hiring_context=profile,
-                portfolio=portfolio,
-                project_snapshots=snapshots,
-            )
+        state = build_configured_hiring_context_ranking_state(
+            hiring_context=profile,
+            views_by_project=_active_story_views(load_result.memory),
+            environ=environ,
+        )
         return present_hiring_context_ranking_review(
             hiring_context=profile,
             ranking_state=state,
@@ -571,6 +566,7 @@ def build_hiring_context_ranking_review(
 
 __all__ = [
     "HiringContextRankingReview",
+    "HiringContextRankingReviewBinding",
     "HiringContextRankingReviewStatus",
     "HiringContextReviewSummary",
     "ProjectRankingReviewItem",

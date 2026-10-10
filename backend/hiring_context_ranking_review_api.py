@@ -17,6 +17,7 @@ from backend.hiring_context_ranking_review import (
 
 
 HIRING_CONTEXT_RANKING_REVIEW_FLAG = "USE_HIRING_CONTEXT_RANKING_REVIEW"
+RESUME_EMPHASIS_PREFERENCES_FLAG = "USE_RESUME_EMPHASIS_PREFERENCES"
 _ENABLED_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
 _DISABLED_FLAG_VALUES = frozenset({"", "0", "false", "no", "off"})
 
@@ -26,6 +27,21 @@ def is_hiring_context_ranking_review_enabled() -> bool:
 
     try:
         raw = os.getenv(HIRING_CONTEXT_RANKING_REVIEW_FLAG, "")
+    except Exception:
+        return False
+    value = raw.strip().casefold() if isinstance(raw, str) else ""
+    if value in _ENABLED_FLAG_VALUES:
+        return True
+    if value in _DISABLED_FLAG_VALUES:
+        return False
+    return False
+
+
+def is_resume_emphasis_preferences_enabled() -> bool:
+    """Resolve the independent preference-control rollout guard fail closed."""
+
+    try:
+        raw = os.getenv(RESUME_EMPHASIS_PREFERENCES_FLAG, "")
     except Exception:
         return False
     value = raw.strip().casefold() if isinstance(raw, str) else ""
@@ -82,6 +98,7 @@ def create_hiring_context_ranking_review_router(
         build_hiring_context_ranking_review
     ),
     feature_enabled: Callable[[], bool] = is_hiring_context_ranking_review_enabled,
+    preferences_enabled: Callable[[], bool] = is_resume_emphasis_preferences_enabled,
 ) -> APIRouter:
     """Create an isolated router around existing product-state readers."""
 
@@ -89,7 +106,13 @@ def create_hiring_context_ranking_review_router(
 
     @router.get("/api/hiring-context/review/availability")
     def hiring_context_review_availability() -> dict[str, bool]:
-        return {"available": bool(feature_enabled())}
+        review_available = bool(feature_enabled())
+        return {
+            "available": review_available,
+            "resume_emphasis_preferences_available": (
+                review_available and bool(preferences_enabled())
+            ),
+        }
 
     @router.post("/api/hiring-context/review")
     def hiring_context_review(body: HiringContextReviewRequest) -> dict[str, Any]:
@@ -152,7 +175,9 @@ def create_hiring_context_ranking_review_router(
 
 __all__ = [
     "HIRING_CONTEXT_RANKING_REVIEW_FLAG",
+    "RESUME_EMPHASIS_PREFERENCES_FLAG",
     "HiringContextReviewRequest",
     "create_hiring_context_ranking_review_router",
     "is_hiring_context_ranking_review_enabled",
+    "is_resume_emphasis_preferences_enabled",
 ]

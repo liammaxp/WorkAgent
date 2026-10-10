@@ -9,8 +9,11 @@ import pytest
 
 import backend.hiring_context_ranking_review as review_module
 from backend.engineering_story_memory_service import (
+    AuthoritativeStoryMemoryLoadResult,
+    EngineeringStoryMemoryReadiness,
     StoryMemoryArtifactStatus,
     StoryMemoryReadinessState,
+    build_authoritative_engineering_story_memory,
 )
 from backend.engineering_story_models import StoryOpportunityLevel, SufficiencyLevel
 from backend.engineering_story_relevance import rank_engineering_stories_for_hiring_context
@@ -23,6 +26,7 @@ from backend.project_story_ranking_refresh import (
 )
 from backend.project_story_ranking_state import build_project_story_ranking_state
 from tests.test_project_story_ranking_refresh import _view
+from tests.test_engineering_story_memory_service import _fact, _snapshot
 
 
 ALPHA = "review_alpha"
@@ -224,6 +228,37 @@ def test_story_order_preserves_complete_snapshot_order():
         ]
 
 
+def test_review_carries_opaque_preference_binding_for_current_ranking_generation():
+    profile, state = _state()
+    result = review_module.present_hiring_context_ranking_review(
+        hiring_context=profile,
+        ranking_state=state,
+        project_memory=None,
+    )
+    assert result.preference_binding is not None
+    assert result.preference_binding.ranking_state_id == state.state_id
+    assert result.preference_binding.ranking_state_fingerprint == state.state_fingerprint
+    assert result.preference_binding.hiring_context_profile_id == profile.profile_id
+    assert result.preference_binding.hiring_context_fingerprint == profile.fingerprint
+
+
+def test_review_carries_story_revision_only_for_preference_freshness():
+    profile, state = _state()
+    result = review_module.present_hiring_context_ranking_review(
+        hiring_context=profile,
+        ranking_state=state,
+        project_memory=None,
+    )
+    for project in result.projects:
+        snapshot = state.snapshot_for_project(project.project_id)
+        expected = {
+            item.canonical_story_id: item.current_revision_id
+            for item in snapshot.story_relevance
+        }
+        for story in project.strongest_stories + project.additional_stories:
+            assert story.current_revision_id == expected[story.story_id]
+
+
 def test_strongest_story_membership_comes_from_contributions():
     profile, state = _state()
     result = review_module.present_hiring_context_ranking_review(
@@ -300,9 +335,18 @@ def test_presentation_excludes_numeric_ranking_fields():
     assert not any("adjustment" in key for key in keys)
 
 
-def test_presentation_excludes_integrity_and_policy_fields():
+def test_presentation_excludes_policy_and_provenance_fields():
     keys = set(_all_keys(_review().to_dict()))
-    assert not any(token in key for key in keys for token in ("policy", "fingerprint", "revision", "provenance"))
+    assert not any(token in key for key in keys for token in ("policy", "provenance"))
+
+
+def test_preference_binding_fields_are_not_mixed_into_product_context_copy():
+    payload = _review().to_dict()
+    assert not any(
+        token in key
+        for key in payload["hiring_context"]
+        for token in ("fingerprint", "revision", "state_id")
+    )
 
 
 def test_presentation_excludes_raw_candidate_authority():
@@ -365,10 +409,17 @@ def test_chinese_copy_is_deterministic_and_product_safe():
     ],
 )
 def test_story_memory_nonready_states_are_product_safe(monkeypatch, status, expected):
+    memory = build_authoritative_engineering_story_memory(_snapshot()).memory
     monkeypatch.setattr(
         review_module,
         "load_authoritative_engineering_story_memory",
-        lambda _path: SimpleNamespace(status=status, memory=None),
+        lambda _path: SimpleNamespace(
+            status=status, memory=memory if status is StoryMemoryArtifactStatus.EMPTY else None),
+    )
+    monkeypatch.setattr(
+        review_module, "inspect_authoritative_engineering_story_memory_readiness",
+        lambda **_: EngineeringStoryMemoryReadiness(
+            StoryMemoryReadinessState.READY, logical_fingerprint=memory.logical_fingerprint),
     )
     result = review_module.build_hiring_context_ranking_review(
         company="Example",
@@ -381,23 +432,22 @@ def test_story_memory_nonready_states_are_product_safe(monkeypatch, status, expe
 
 
 def test_ranking_failure_returns_no_partial_projects(monkeypatch):
+    memory = build_authoritative_engineering_story_memory(_snapshot(_fact("review"))).memory
     monkeypatch.setattr(
         review_module,
         "load_authoritative_engineering_story_memory",
-        lambda _path: SimpleNamespace(
-            status=StoryMemoryArtifactStatus.READY,
-            memory=SimpleNamespace(histories=()),
-        ),
+        lambda _path: AuthoritativeStoryMemoryLoadResult(StoryMemoryArtifactStatus.READY, memory),
     )
     monkeypatch.setattr(review_module, "_active_story_views", lambda _memory: {ALPHA: _views()})
     monkeypatch.setattr(
         review_module,
         "inspect_authoritative_engineering_story_memory_readiness",
-        lambda **_kwargs: SimpleNamespace(state=StoryMemoryReadinessState.READY),
+        lambda **_kwargs: EngineeringStoryMemoryReadiness(
+            StoryMemoryReadinessState.READY, logical_fingerprint=memory.logical_fingerprint),
     )
     monkeypatch.setattr(
         review_module,
-        "rank_engineering_stories_for_hiring_context",
+        "build_configured_hiring_context_ranking_state",
         lambda **_kwargs: (_ for _ in ()).throw(ValueError("integrity")),
     )
     result = review_module.build_hiring_context_ranking_review(
@@ -420,22 +470,21 @@ def test_ranking_failure_returns_no_partial_projects(monkeypatch):
     ],
 )
 def test_nonready_lifecycle_state_does_not_rank_partial_memory(monkeypatch, state):
+    memory = build_authoritative_engineering_story_memory(_snapshot(_fact("review"))).memory
     monkeypatch.setattr(
         review_module,
         "load_authoritative_engineering_story_memory",
-        lambda _path: SimpleNamespace(
-            status=StoryMemoryArtifactStatus.READY,
-            memory=SimpleNamespace(histories=()),
-        ),
+        lambda _path: AuthoritativeStoryMemoryLoadResult(StoryMemoryArtifactStatus.READY, memory),
     )
     monkeypatch.setattr(
         review_module,
         "inspect_authoritative_engineering_story_memory_readiness",
-        lambda **_kwargs: SimpleNamespace(state=state),
+        lambda **_kwargs: EngineeringStoryMemoryReadiness(
+            state, logical_fingerprint=memory.logical_fingerprint),
     )
     monkeypatch.setattr(
         review_module,
-        "rank_engineering_stories_for_hiring_context",
+        "build_configured_hiring_context_ranking_state",
         lambda **_kwargs: pytest.fail("ranking must not run"),
     )
     result = review_module.build_hiring_context_ranking_review(

@@ -13,8 +13,10 @@ from fastapi.testclient import TestClient
 
 from backend.hiring_context_ranking_review_api import (
     HIRING_CONTEXT_RANKING_REVIEW_FLAG,
+    RESUME_EMPHASIS_PREFERENCES_FLAG,
     create_hiring_context_ranking_review_router,
     is_hiring_context_ranking_review_enabled,
+    is_resume_emphasis_preferences_enabled,
 )
 
 
@@ -31,11 +33,20 @@ def _payload():
             "confidence": "Moderate confidence",
         },
         "projects": [],
+        "preference_binding": None,
         "corrections_persisted": False,
     }
 
 
-def _client(*, enabled=True, prepare=None, read_job=None, normalize=None, read_projects=None):
+def _client(
+    *,
+    enabled=True,
+    preferences_enabled=False,
+    prepare=None,
+    read_job=None,
+    normalize=None,
+    read_projects=None,
+):
     app = FastAPI()
     app.include_router(create_hiring_context_ranking_review_router(
         read_job_description=read_job or (lambda: "Backend role JD"),
@@ -45,6 +56,7 @@ def _client(*, enabled=True, prepare=None, read_job=None, normalize=None, read_p
         read_project_memory=read_projects or (lambda: '{"projects": []}'),
         prepare_review=prepare or (lambda **_kwargs: SimpleNamespace(to_dict=_payload)),
         feature_enabled=lambda: enabled,
+        preferences_enabled=lambda: preferences_enabled,
     ))
     return TestClient(app)
 
@@ -52,6 +64,23 @@ def _client(*, enabled=True, prepare=None, read_job=None, normalize=None, read_p
 def test_feature_flag_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv(HIRING_CONTEXT_RANKING_REVIEW_FLAG, raising=False)
     assert is_hiring_context_ranking_review_enabled() is False
+
+
+def test_preference_feature_flag_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv(RESUME_EMPHASIS_PREFERENCES_FLAG, raising=False)
+    assert is_resume_emphasis_preferences_enabled() is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_preference_feature_flag_accepts_repository_truthy_values(monkeypatch, value):
+    monkeypatch.setenv(RESUME_EMPHASIS_PREFERENCES_FLAG, value)
+    assert is_resume_emphasis_preferences_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "NO", "off", "invalid"])
+def test_preference_feature_flag_malformed_values_fail_closed(monkeypatch, value):
+    monkeypatch.setenv(RESUME_EMPHASIS_PREFERENCES_FLAG, value)
+    assert is_resume_emphasis_preferences_enabled() is False
 
 
 @pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
@@ -73,13 +102,36 @@ def test_availability_reports_disabled_without_reading_product_state():
         read_job=lambda: calls.append("job") or "JD",
     ).get("/api/hiring-context/review/availability")
     assert response.status_code == 200
-    assert response.json() == {"available": False}
+    assert response.json() == {
+        "available": False,
+        "resume_emphasis_preferences_available": False,
+    }
     assert calls == []
 
 
 def test_availability_reports_enabled():
     response = _client(enabled=True).get("/api/hiring-context/review/availability")
-    assert response.json() == {"available": True}
+    assert response.json() == {
+        "available": True,
+        "resume_emphasis_preferences_available": False,
+    }
+
+
+def test_preference_controls_can_be_enabled_independently_of_review_entry():
+    response = _client(enabled=True, preferences_enabled=True).get(
+        "/api/hiring-context/review/availability"
+    )
+    assert response.json() == {
+        "available": True,
+        "resume_emphasis_preferences_available": True,
+    }
+
+
+def test_preference_controls_cannot_enable_a_disabled_review():
+    response = _client(enabled=False, preferences_enabled=True).get(
+        "/api/hiring-context/review/availability"
+    )
+    assert response.json()["resume_emphasis_preferences_available"] is False
 
 
 def test_disabled_post_is_hidden_and_does_not_call_readers():
